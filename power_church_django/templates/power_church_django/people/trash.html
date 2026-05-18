@@ -1,0 +1,67 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Administracao</p>
+      <h1>Lixeira segura</h1>
+      {% if trash %}
+        <p>Auditoria de fichas retiradas do cadastro operacional. Mostrando {{ trash.shown }} de {{ trash.total }} exclusao(oes).</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/">Voltar para pessoas</a>
+      <a class="button secondary" href="/audit/?modo=django&acao=excluir_ficha_lixeira_segura_django">Ver auditoria Django</a>
+      <button type="button" onclick="window.print()">Imprimir</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Exclusoes preservadas</h2>
+    <p class="muted">A ficha sai das telas operacionais e fica preservada para auditoria. Depois de auditada, o superusuario pode executar purga segura somente se nao houver contribuicoes, recibos ou lancamentos financeiros vinculados.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Pessoa</th>
+            <th>CPF</th>
+            <th>Status original</th>
+            <th>Operador</th>
+            <th>Motivo</th>
+            <th>Restaurado</th>
+            <th class="no-print">Purga final</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in trash.items %}
+            <tr>
+              <td>{{ item.criado_em }}</td>
+              <td>
+                <strong>{{ item.nome }}</strong>
+                <div class="muted small">ID original {{ item.person_id }}{% if item.codigo_original %} · Codigo {{ item.codigo_original }}{% endif %}</div>
+              </td>
+              <td>{{ item.cpf|default:"-" }}</td>
+              <td>{{ item.status_original|default:"-" }}</td>
+              <td>{{ item.operador|default:"-" }}</td>
+              <td>{{ item.motivo|default:"-" }}</td>
+              <td>{{ item.restaurado }}</td>
+              <td class="no-print">
+                {% if can_purge_people and item.can_purge %}
+                  <a class="badge danger" href="/people/trash/{{ item.id }}/purge/">Purgar</a>
+                {% elif item.purge_blockers %}
+                  <span class="badge warn">Bloqueada</span>
+                  <div class="muted small">{{ item.purge_blockers }}</div>
+                {% else %}
+                  <span class="muted small">Somente superusuario</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8">Nenhuma exclusao registrada.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

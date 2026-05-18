@@ -1,0 +1,120 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if rules_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">Destinacoes especiais</p>
+        <h1>Regras por centavos</h1>
+        <p>Esta tabela vale para PIX e extratos bancarios. Ao salvar uma etiqueta, o sistema sincroniza tambem o tipo de contribuicao, a conta de receita e a campanha correspondente.</p>
+      </div>
+      <a class="button secondary no-print" href="/imports/">Voltar para importacoes</a>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Regras cadastradas</span><strong>{{ rules_data.rules|length }}</strong></div>
+      <div class="card"><span class="label">Ativas</span><strong>{{ rules_data.active_count }}</strong></div>
+      <div class="card"><span class="label">Default</span><strong style="font-size:20px">Dizimo</strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <div class="section-head">
+          <div>
+            <h2>{% if rules_data.current %}Editar regra{% else %}Nova regra{% endif %}</h2>
+            <p>Use dois digitos para o centavo. Exemplo: valor terminado em 0,12 usa a regra 12.</p>
+          </div>
+          <span class="badge">operacional</span>
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="rule_id" value="{{ rules_data.current.id|default:0 }}">
+          <div class="form-grid">
+            <label>
+              Codigo de centavos
+              <input name="codigo_centavos" value="{{ rules_data.current.codigo|default:'' }}" placeholder="Ex.: 12" maxlength="2">
+            </label>
+            <label class="wide">
+              Nome da destinacao
+              <input name="nome_destinacao" value="{{ rules_data.current.nome|default:'' }}" placeholder="Ex.: Missoes, Musica, Acao Social">
+            </label>
+            <label>
+              Tipo de contribuicao
+              <select name="tipo_contribuicao_id">
+                <option value="">Criar/usar tipo proprio da destinacao</option>
+                {% for type in rules_data.types %}
+                  <option value="{{ type.id }}" {% if type.selected %}selected{% endif %}>{{ type.nome }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Status
+              <select name="ativo">
+                <option value="1" {% if not rules_data.current or rules_data.current.ativo %}selected{% endif %}>Ativa</option>
+                <option value="0" {% if rules_data.current and not rules_data.current.ativo %}selected{% endif %}>Inativa</option>
+              </select>
+            </label>
+          </div>
+          {% if rules_data.current %}
+            <p class="muted small">
+              Conta vinculada:
+              <strong>{{ rules_data.current.conta_codigo|default:"sera criada ao salvar" }} {{ rules_data.current.conta_nome }}</strong>
+              <br>
+              Campanha vinculada:
+              <strong>{{ rules_data.current.campanha_nome|default:"sera criada ao salvar" }}</strong>
+            </p>
+          {% endif %}
+          <p class="muted small">Ao salvar, a etiqueta vira tambem a conta de destinacao. Ex.: 07 · Musica cria/atualiza a conta CENT.07 e a campanha Musica.</p>
+          <div class="actions">
+            <button type="submit">Salvar regra</button>
+            <a class="button secondary" href="/imports/rules/">Limpar formulario</a>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="section-head">
+          <h2>Mapa atual</h2>
+          <span class="badge warn">{{ rules_data.rules|length }} regras</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Codigo</th>
+                <th>Tipo destino</th>
+                <th>Conta / campanha</th>
+                <th>Status</th>
+                <th>Acao</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for rule in rules_data.rules %}
+                <tr>
+                  <td><span class="badge">{{ rule.codigo }}</span><div class="muted small">{{ rule.nome }}</div></td>
+                  <td>{{ rule.tipo_nome }}</td>
+                  <td>
+                    {% if rule.conta_codigo or rule.conta_nome %}
+                      <strong>{{ rule.conta_codigo }}</strong> {{ rule.conta_nome }}
+                    {% else %}
+                      <span class="muted">Sem conta/campanha</span>
+                    {% endif %}
+                    {% if rule.campanha_nome %}
+                      <div class="muted small">Campanha: {{ rule.campanha_nome }}</div>
+                    {% endif %}
+                  </td>
+                  <td><span class="badge {% if rule.ativo %}ok{% else %}warn{% endif %}">{% if rule.ativo %}Ativa{% else %}Inativa{% endif %}</span></td>
+                  <td><a class="button secondary" href="/imports/rules/?edit_rule_id={{ rule.id }}">Editar</a></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhuma regra cadastrada.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Regras nao encontradas</h1></section>
+  {% endif %}
+{% endblock %}

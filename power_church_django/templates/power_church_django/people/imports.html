@@ -1,0 +1,119 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Secretaria</p>
+      <h1>Importacao de pessoas</h1>
+      <p>Importacao incremental: cria novas fichas, preenche campos vazios e manda conflitos para auditoria.</p>
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/">Pessoas</a>
+      <a class="button secondary" href="/imports/">Importacoes bancarias</a>
+    </div>
+  </section>
+
+  {% if dashboard %}
+    <section class="grid">
+      <div class="card">
+        <span class="label">Pessoas ativas</span>
+        <strong>{{ dashboard.total_people }}</strong>
+      </div>
+      <div class="card">
+        <span class="label">Lotes de pessoas</span>
+        <strong>{{ dashboard.total_lots }}</strong>
+        <span class="muted">mostrando {{ dashboard.shown }}</span>
+      </div>
+      <div class="card">
+        <span class="label">Pendencias abertas</span>
+        <strong>{{ dashboard.open_pendencies }}</strong>
+      </div>
+    </section>
+  {% endif %}
+
+  <section class="split">
+    <div class="panel">
+      <div class="section-head">
+        <h2>Subir planilha Excel</h2>
+        <span class="badge ok">incremental</span>
+      </div>
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="form-grid">
+          <label class="wide">
+            Planilha .xlsx
+            <input type="file" name="planilha_xlsx" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+          </label>
+          <label class="check-item wide">
+            <input type="checkbox" name="allow_duplicate_file" value="1">
+            <span>Permitir reimportar a mesma planilha</span>
+          </label>
+        </div>
+        <p class="muted small">Por seguranca, deixe a reimportacao desmarcada. O importador gera backup automatico antes de gravar.</p>
+        <div class="actions">
+          <button type="submit">Importar pessoas</button>
+        </div>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="section-head">
+        <h2>Politica de seguranca</h2>
+        <span class="badge">sem substituicao</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>Reconhecimento forte</th><td>CPF valido ou numero de membro.</td></tr>
+            <tr><th>Reconhecimento auxiliar</th><td>Nome completo com data de nascimento.</td></tr>
+            <tr><th>Ficha existente</th><td>Preenche campos vazios e adiciona contatos/historicos faltantes.</td></tr>
+            <tr><th>Conflitos</th><td>Ficam na auditoria de importacao para decisao do operador.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  {% if dashboard %}
+    <section class="panel">
+      <div class="section-head">
+        <h2>Lotes recentes de pessoas</h2>
+        <span class="badge">{{ dashboard.shown }}</span>
+      </div>
+      <p class="muted">Esta tela deixa visivel o que entrou por planilha antes desses dados serem usados para associar contribuicoes.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Lote</th>
+              <th>Criado em</th>
+              <th class="num">Linhas</th>
+              <th class="num">Importadas</th>
+              <th class="num">Ignoradas</th>
+              <th class="num">Pendencias</th>
+              <th>Abertas</th>
+              <th>Sem nome</th>
+              <th>Auditoria</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in dashboard.lots %}
+              <tr>
+                <td><strong>{{ lot.type_label }}</strong><div class="muted small">Lote #{{ lot.id }} · {{ lot.arquivo_nome }}</div></td>
+                <td>{{ lot.criado_em }}</td>
+                <td class="num">{{ lot.total_linhas }}</td>
+                <td class="num">{{ lot.linhas_importadas }}</td>
+                <td class="num">{{ lot.linhas_ignoradas }}</td>
+                <td class="num">{{ lot.linhas_com_erro }}</td>
+                <td><span class="badge {% if lot.pendencias_abertas %}danger{% else %}ok{% endif %}">{{ lot.pendencias_abertas }}</span></td>
+                <td><span class="badge {% if lot.pessoas_sem_nome %}danger{% else %}ok{% endif %}">{{ lot.pessoas_sem_nome }}</span></td>
+                <td><a class="button secondary" href="{{ lot.detail_url }}">Auditar lote</a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="9">Nenhum lote de pessoas importado ainda.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

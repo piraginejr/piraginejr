@@ -1,0 +1,46 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge danger">Confirmacao sensivel</p>
+      <h1>Excluir ficha</h1>
+      <p>Esta acao retira a pessoa do cadastro operacional e exige confirmacao do operador.</p>
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/{{ detail.person.id }}/">Cancelar</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <h2>{{ detail.person.nome }}</h2>
+        <p class="muted">{{ detail.person.codigo|default:"Sem numero" }} · CPF {{ detail.person.cpf|default:"nao informado" }}</p>
+      </div>
+      <span class="badge danger">senha obrigatoria</span>
+    </div>
+    <p class="alert">Use esta acao somente para erro operacional, cadastro de teste ou duplicidade real. O historico sera preservado para auditoria e recuperacao administrativa futura.</p>
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-grid">
+        <label class="wide">
+          Justificativa
+          <textarea name="reason" required placeholder="Explique por que esta ficha deve sair do cadastro operacional"></textarea>
+        </label>
+        <label>
+          Digite exatamente o nome da pessoa
+          <input name="confirmation" required placeholder="{{ detail.person.nome }}">
+        </label>
+        <label>
+          Sua senha
+          <input type="password" name="password" required autocomplete="current-password">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Confirmar exclusao</button>
+        <a class="button secondary" href="/people/{{ detail.person.id }}/">Cancelar</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

@@ -1,0 +1,148 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.kind_label }} · movimento #{{ detail.movement.id }}</p>
+        <h1>{{ detail.movement.nome_origem }}</h1>
+        <p>{{ detail.movement.banco }} · lote #{{ detail.movement.lote_id }} · {{ detail.movement.nome_arquivo }}</p>
+      </div>
+      <a class="button secondary no-print" href="{{ return_to|default:detail.lot_url }}">Voltar para o lote</a>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Valor</span><strong>{{ detail.movement.valor_fmt }}</strong></div>
+      <div class="card"><span class="label">Data</span><strong style="font-size: 20px">{{ detail.movement.data }}</strong></div>
+      <div class="card"><span class="label">Status revisao</span><strong style="font-size: 20px">{{ detail.movement.review_status }}</strong></div>
+      <div class="card"><span class="label">Destino</span><strong style="font-size: 20px">{{ detail.movement.tipo_sugerido }}</strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Dados do movimento</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><th>Pagina</th><td>{{ detail.movement.pagina|default:"-" }}</td></tr>
+              <tr><th>Ordem no lote</th><td>{{ detail.movement.ordem }}</td></tr>
+              <tr><th>Competencia</th><td>{{ detail.movement.competencia }}</td></tr>
+              <tr><th>Documento</th><td>{{ detail.movement.documento_tipo }} {{ detail.movement.documento }}</td></tr>
+              <tr><th>Centavos</th><td>{{ detail.movement.codigo_centavos|default:"-" }}</td></tr>
+              <tr><th>Contribuicao gerada</th><td>{{ detail.movement.contribution_id|default:"-" }} {{ detail.movement.contribution_status }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Associacao</h2>
+        <p><span class="badge">confiança</span> {{ detail.movement.confidence }} · score {{ detail.movement.match_score }}</p>
+        <p><strong>Sugerido:</strong> {{ detail.movement.suggested|default:"sem sugestao" }}</p>
+        <p><strong>Resolvido:</strong> {{ detail.movement.resolved|default:"sem vinculo resolvido" }}</p>
+        <p><strong>Notas:</strong> {{ detail.movement.review_notes|default:"-" }}</p>
+      </div>
+    </section>
+
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Auditoria operacional</h2>
+          <p>Confirme a pessoa, mantenha como contribuinte sem vinculo, ajuste a destinacao ou marque o movimento como ignorado operacional. A decisao usa o mesmo motor financeiro ja validado nos lotes anteriores.</p>
+        </div>
+      </div>
+
+      <form class="toolbar" method="get">
+        <input type="hidden" name="return_to" value="{{ return_to|default:detail.lot_url }}">
+        <label class="wide">
+          Buscar pessoa em todo o cadastro
+          <input name="lookup" value="{{ detail.lookup }}" placeholder="Nome, codigo, CPF, telefone ou email">
+        </label>
+        <button type="submit">Pesquisar pessoas</button>
+        <a class="button secondary" href="/imports/{{ detail.kind }}/movement/{{ detail.movement.id }}/?return_to={{ return_to|urlencode }}">Limpar busca</a>
+      </form>
+
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="movement_id" value="{{ detail.movement.id }}">
+        <input type="hidden" name="return_to" value="{{ return_to|default:detail.lot_url }}">
+
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead>
+              <tr>
+                <th>Usar</th>
+                <th>Pessoa</th>
+                <th>CPF</th>
+                <th>Status</th>
+                <th>Origem da opcao</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><input type="radio" name="resolved_person_id" value="0" {% if detail.movement.selected_person_id == 0 %}checked{% endif %}></td>
+                <td><strong>Sem vincular pessoa agora</strong><div class="muted small">Mantem o valor como contribuinte auxiliar para associacao futura.</div></td>
+                <td>-</td>
+                <td><span class="badge warn">NR</span></td>
+                <td>Controle manual</td>
+              </tr>
+              {% for person in detail.person_options %}
+                <tr>
+                  <td><input type="radio" name="resolved_person_id" value="{{ person.id }}" {% if person.checked %}checked{% endif %}></td>
+                  <td>
+                    <strong>{{ person.nome }}</strong>
+                    <div class="muted small">ID {{ person.id }}{% if person.codigo %} · {{ person.codigo }}{% endif %}</div>
+                  </td>
+                  <td>{{ person.cpf|default:"-" }}</td>
+                  <td>{{ person.status }}</td>
+                  <td><span class="badge">{{ person.source }}</span></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhuma pessoa sugerida ainda. Use a busca acima ou mantenha como contribuinte auxiliar.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="form-grid" style="margin-top:16px">
+          <label>
+            Tipo de contribuicao
+            <select name="resolved_tipo_contribuicao_id">
+              <option value="">Sistema decide pela regra atual</option>
+              {% for option in detail.type_options %}
+                <option value="{{ option.id }}" {% if option.selected %}selected{% endif %}>{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          {% if detail.kind == "pix" %}
+            <label>
+              Associar documento mascarado?
+              <select name="associate_masked_document">
+                <option value="1" {% if detail.movement.documento %}selected{% endif %}>Sim</option>
+                <option value="0">Nao</option>
+              </select>
+            </label>
+          {% endif %}
+          <label class="wide">
+            Observacoes da auditoria
+            <textarea name="review_notes">{{ detail.movement.review_notes }}</textarea>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="submit" name="action" value="approve">Confirmar movimento</button>
+          {% if detail.can_same_owner %}
+            <button class="button secondary" type="submit" name="action" value="same_owner">Mesma titularidade / origem interna</button>
+          {% endif %}
+          <button class="button secondary" type="submit" name="action" value="ignore">Ignorar movimento</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Texto bruto do banco</h2>
+      <pre style="white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace">{{ detail.movement.raw_text|default:"Sem texto bruto armazenado." }}</pre>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Movimento nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

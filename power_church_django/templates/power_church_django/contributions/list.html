@@ -1,0 +1,93 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Recebimentos</p>
+      <h1>Contribuicoes</h1>
+      {% if contributions %}
+        <p>Mostrando {{ contributions.shown }} de {{ contributions.total }} lancamentos, somando {{ contributions.total_value_fmt }} no filtro atual.</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button" href="/contributions/envelopes/">Envelopes digitalizados</a>
+      <a class="button" href="/contributions/manual/">Lancamento manual assistido</a>
+      <a class="button secondary" href="/people/">Escolher pessoa para lancar</a>
+      <a class="button" href="/reports/?competencia={{ competencia|urlencode }}&q={{ q|urlencode }}">Visualizar relatorio alfabetico</a>
+      <button type="button" onclick="window.print()">Imprimir lista filtrada</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="toolbar" method="get">
+      <label>
+        Pesquisar
+        <input name="q" value="{{ q }}" placeholder="Pessoa, contribuinte, CPF/CNPJ...">
+      </label>
+      <label>
+        Competencia
+        <select name="competencia">
+          <option value="">Todas</option>
+          {% for item in contributions.competencias %}
+            <option value="{{ item }}" {% if item == competencia %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option value="">Todos</option>
+          {% for option in contributions.status_options %}
+            <option value="{{ option.value }}" {% if option.value == status %}selected{% endif %}>{{ option.value|default:"regular" }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/contributions/">Limpar</a>
+      <a class="button secondary" href="/reports/?competencia={{ competencia|urlencode }}&q={{ q|urlencode }}">Relatorio por periodo</a>
+    </form>
+  </section>
+
+  {% if contributions %}
+    <section class="panel">
+      <div class="table-wrap">
+        <table class="fit-table contributions-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Competencia</th>
+              <th>Contribuinte</th>
+              <th>Rol</th>
+              <th>Tipo</th>
+              <th>Forma</th>
+              <th>Status</th>
+              <th class="num">Valor</th>
+              <th>Acao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in contributions.items %}
+              <tr>
+                <td>{{ item.data }}</td>
+                <td>{{ item.competencia }}</td>
+                <td>
+                  <a href="{{ item.detail_url }}"><strong>{{ item.nome }}</strong></a>
+                  {% if item.documento %}<div class="muted small">{{ item.documento }}</div>{% endif %}
+                  {% if item.group_kind == "documento" %}<div class="muted small">Somente documento/numero</div>{% endif %}
+                </td>
+                <td><span class="badge">{{ item.sigla }}</span></td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.forma }}</td>
+                <td><span class="badge {% if item.status == 'sem_associacao' %}warn{% elif item.status == 'ignorado' %}danger{% else %}ok{% endif %}">{{ item.status }}</span></td>
+                <td class="num">{{ item.valor_fmt }}</td>
+                <td><a class="button secondary" href="{{ item.detail_url }}">Ajustar</a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="9">Nenhuma contribuicao encontrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

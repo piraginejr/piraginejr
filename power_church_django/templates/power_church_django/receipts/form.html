@@ -1,0 +1,106 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ form_data.person.sigla }} · {{ form_data.person.status }}</p>
+        <h1>Gerar recibo individual</h1>
+        <p>{{ form_data.person.nome }} · {{ form_data.person.codigo|default:"sem codigo" }} · CPF {{ form_data.person.cpf|default:"nao informado" }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/people/{{ form_data.person.id }}/">Abrir ficha</a>
+        <a class="button secondary" href="/contributions/statements/{{ form_data.person.id }}/">Extrato</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Selecionaveis</span><strong>{{ form_data.items|length }}</strong></div>
+      <div class="card"><span class="label">Total disponivel</span><strong>{{ form_data.total_fmt }}</strong></div>
+      <div class="card"><span class="label">Pessoa</span><strong style="font-size:20px">{{ form_data.person.nome }}</strong></div>
+    </section>
+
+    <section class="panel no-print">
+      <h2>Filtrar contribuicoes disponiveis</h2>
+      <form class="toolbar" method="get">
+        <input type="hidden" name="person_id" value="{{ form_data.person.id }}">
+        <label>
+          De
+          <input type="date" name="date_start" value="{{ date_start }}">
+        </label>
+        <label>
+          Ate
+          <input type="date" name="date_end" value="{{ date_end }}">
+        </label>
+        <button type="submit">Atualizar lista</button>
+        <a class="button secondary" href="/receipts/new/?person_id={{ form_data.person.id }}">Limpar</a>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Contribuicoes selecionaveis</h2>
+          <p class="muted">O recibo sera gerado somente com as linhas marcadas. Contribuicoes que ja estao em recibo ativo nao aparecem aqui.</p>
+        </div>
+      </div>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="pessoa_id" value="{{ form_data.person.id }}">
+        <div class="form-grid no-print">
+          <label>
+            Data de emissao
+            <input type="date" name="data_emissao" value="{% now "Y-m-d" %}">
+          </label>
+          <label class="wide">
+            Observacoes do recibo
+            <textarea name="observacoes" placeholder="Opcional. Ex.: Recibo solicitado pelo contribuinte."></textarea>
+          </label>
+        </div>
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead>
+              <tr>
+                <th class="no-print">Selecionar</th>
+                <th>Data</th>
+                <th>Competencia</th>
+                <th>Tipo</th>
+                <th>Forma</th>
+                <th class="num">Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in form_data.items %}
+                <tr>
+                  <td class="no-print"><input type="checkbox" name="contribuicao_id" value="{{ item.id }}" checked></td>
+                  <td>{{ item.data }}</td>
+                  <td>{{ item.competencia|default:"-" }}</td>
+                  <td>{{ item.tipo }}</td>
+                  <td>{{ item.forma|default:"-" }}</td>
+                  <td class="num">{{ item.valor_fmt }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="6">Nao ha contribuicoes disponiveis para recibo nesta pessoa ou periodo.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="actions no-print">
+          <button type="submit" {% if not form_data.items %}disabled{% endif %}>Gerar recibo</button>
+          <a class="button secondary" href="/receipts/">Voltar para recibos</a>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="hero">
+      <div>
+        <p class="badge">Escolha uma pessoa</p>
+        <h1>Novo recibo</h1>
+        <p>O recibo individual precisa partir de uma ficha de pessoa para preservar o vinculo com as contribuicoes.</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button" href="/people/">Pesquisar pessoa</a>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

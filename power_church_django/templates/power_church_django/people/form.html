@@ -1,0 +1,342 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Cadastro</p>
+      {% if mode == "new" %}
+        <h1>Nova pessoa</h1>
+        <p>Cria uma ficha no cadastro e registra a operacao na auditoria.</p>
+      {% else %}
+        <h1>Editar ficha</h1>
+        <p>Atualiza dados cadastrais com trilha de auditoria e sincroniza a identidade financeira basica.</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="{% if person_id %}/people/{{ person_id }}/{% else %}/people/{% endif %}">Cancelar</a>
+    </div>
+  </section>
+
+  {% if form %}
+    <form method="post" enctype="multipart/form-data" data-person-field-validator data-validate-url="/people/validate-field/" data-person-id="{{ person_id|default:'' }}">
+      {% csrf_token %}
+      <section class="panel">
+        <div class="section-head">
+          <h2>Identificacao</h2>
+          <span class="badge">auditoria ativa</span>
+        </div>
+        <div class="form-grid">
+          <label>
+            Nome completo
+            <input name="nome" value="{{ form.nome }}" required>
+          </label>
+          <label>
+            Nome social (apelido como e conhecido)
+            <input name="nome_social" value="{{ form.nome_social }}">
+          </label>
+          <label>
+            Status
+            <select name="status">
+              {% for value, label in status_options %}
+                <option value="{{ value }}" {% if form.status == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Numero de membro
+            <input name="codigo_interno" value="{{ form.codigo_interno }}" placeholder="Gerado para membros se vazio">
+          </label>
+          <label class="check-item wide">
+            <input type="checkbox" name="allow_member_code_edit" value="1" {% if form.allow_member_code_edit == "1" %}checked{% endif %}>
+            <span>Permitir alterar ou gerar numero de membro nesta operacao</span>
+          </label>
+          <label>
+            CPF
+            <input name="cpf" value="{{ form.cpf }}" inputmode="numeric" placeholder="Somente numeros ou formato usual" data-validate-field="cpf" aria-describedby="cpf-feedback">
+            <span id="cpf-feedback" class="field-feedback" aria-live="polite"></span>
+          </label>
+          <label>
+            RG
+            <input name="rg" value="{{ form.rg }}">
+          </label>
+          <label>
+            Data de nascimento
+            <input type="date" name="data_nascimento" value="{{ form.data_nascimento }}">
+          </label>
+          <label>
+            Sexo
+            <select name="sexo">
+              {% for value, label in sex_options %}
+                <option value="{{ value }}" {% if form.sexo == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Estado civil
+            <select name="estado_civil">
+              {% for value, label in marital_status_options %}
+                <option value="{{ value }}" {% if form.estado_civil == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Foto da pessoa</h2>
+          <span class="badge">opcional</span>
+        </div>
+        <div class="form-grid">
+          <div>
+            {% if current_photo_url %}
+              <img class="person-photo form-person-photo" src="{{ current_photo_url }}" alt="Foto atual">
+              <p class="muted small">Enviar uma nova imagem substitui a foto atual.</p>
+            {% else %}
+              <span class="person-photo-placeholder form-person-photo">Foto</span>
+              <p class="muted small">A foto pode ser cadastrada agora ou depois na edicao da ficha.</p>
+            {% endif %}
+          </div>
+          <label class="wide">
+            Upload da foto
+            <input type="file" name="foto" accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif">
+            <span class="muted small">Formatos aceitos: JPG, PNG, WEBP, GIF, HEIC ou HEIF. Limite: 8 MB.</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Contatos</h2>
+          <span class="badge">principal</span>
+        </div>
+        <div class="form-grid">
+          <label>
+            E-mail
+            <input type="email" name="email_principal" value="{{ form.email_principal }}" data-validate-field="email_principal" aria-describedby="email-feedback">
+            <span id="email-feedback" class="field-feedback" aria-live="polite"></span>
+          </label>
+          <label>
+            Telefone
+            <input name="telefone_principal" value="{{ form.telefone_principal }}">
+          </label>
+          <label>
+            WhatsApp
+            <input name="whatsapp_principal" value="{{ form.whatsapp_principal }}">
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Endereco</h2>
+          <span class="badge">residencial</span>
+        </div>
+        <div class="form-grid">
+          <label>
+            CEP
+            <input name="cep" value="{{ form.cep }}" inputmode="numeric" data-cep-lookup aria-describedby="cep-feedback">
+            <span id="cep-feedback" class="field-feedback" aria-live="polite">Ao informar o CEP, o sistema tenta preencher logradouro, bairro, cidade e UF.</span>
+          </label>
+          <label>
+            Logradouro
+            <input name="logradouro" value="{{ form.logradouro }}">
+          </label>
+          <label>
+            Numero
+            <input name="numero" value="{{ form.numero }}">
+          </label>
+          <label>
+            Complemento
+            <input name="complemento" value="{{ form.complemento }}">
+          </label>
+          <label>
+            Bairro
+            <input name="bairro" value="{{ form.bairro }}">
+          </label>
+          <label>
+            Cidade
+            <input name="cidade" value="{{ form.cidade }}">
+          </label>
+          <label>
+            UF
+            <input name="uf" value="{{ form.uf }}" maxlength="2">
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Observacoes</h2>
+        <label class="wide">
+          Observacoes cadastrais
+          <textarea name="observacoes">{{ form.observacoes }}</textarea>
+        </label>
+        <div class="actions">
+          <button type="submit">{% if mode == "new" %}Criar ficha{% else %}Salvar alteracoes{% endif %}</button>
+          <a class="button secondary" href="{% if person_id %}/people/{{ person_id }}/{% else %}/people/{% endif %}">Cancelar</a>
+        </div>
+      </section>
+    </form>
+    <script>
+      (function () {
+        const form = document.querySelector("[data-person-field-validator]");
+        if (!form) return;
+        const validateUrl = form.dataset.validateUrl;
+        const personId = form.dataset.personId || "";
+        const checks = new Map();
+
+        function cpfIsValid(value) {
+          const cpf = String(value || "").replace(/\D/g, "");
+          if (!cpf) return true;
+          if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+          const digits = cpf.split("").map(Number);
+          let sum = 0;
+          for (let index = 0; index < 9; index += 1) sum += digits[index] * (10 - index);
+          let first = 11 - (sum % 11);
+          if (first >= 10) first = 0;
+          if (first !== digits[9]) return false;
+          sum = 0;
+          for (let index = 0; index < 10; index += 1) sum += digits[index] * (11 - index);
+          let second = 11 - (sum % 11);
+          if (second >= 10) second = 0;
+          return second === digits[10];
+        }
+
+        function emailLooksValid(value) {
+          const email = String(value || "").trim().toLowerCase();
+          if (!email) return true;
+          if (email.length > 254 || /\s/.test(email) || (email.match(/@/g) || []).length !== 1) return false;
+          const parts = email.split("@");
+          const labels = parts[1].split(".");
+          return Boolean(parts[0] && labels.length >= 2 && labels.every(Boolean) && labels[labels.length - 1].length >= 2);
+        }
+
+        function feedbackFor(input) {
+          const id = input.getAttribute("aria-describedby");
+          return id ? document.getElementById(id) : null;
+        }
+
+        function setState(input, ok, message) {
+          const feedback = feedbackFor(input);
+          input.classList.toggle("field-invalid", !ok);
+          input.classList.toggle("field-valid", ok && Boolean(String(input.value || "").trim()));
+          input.setAttribute("aria-invalid", ok ? "false" : "true");
+          checks.set(input.name, ok);
+          if (feedback) {
+            feedback.textContent = message || "";
+            feedback.classList.toggle("error", !ok);
+            feedback.classList.toggle("ok", ok && Boolean(message));
+          }
+        }
+
+        async function validateInput(input) {
+          const field = input.dataset.validateField;
+          const value = String(input.value || "").trim();
+          if (!value) {
+            setState(input, true, "");
+            return true;
+          }
+          if (field === "cpf" && !cpfIsValid(value)) {
+            setState(input, false, "CPF invalido. Corrija antes de continuar.");
+            return false;
+          }
+          if (field === "email_principal" && !emailLooksValid(value)) {
+            setState(input, false, "E-mail invalido. Corrija antes de continuar.");
+            return false;
+          }
+          try {
+            const params = new URLSearchParams({ field: field, value: value, person_id: personId });
+            const response = await fetch(validateUrl + "?" + params.toString(), { headers: { "X-Requested-With": "XMLHttpRequest" } });
+            const data = await response.json();
+            setState(input, Boolean(data.ok), data.message || "");
+            return Boolean(data.ok);
+          } catch (_error) {
+            setState(input, true, "");
+            return true;
+          }
+        }
+
+        form.querySelectorAll("[data-validate-field]").forEach(function (input) {
+          checks.set(input.name, true);
+          input.addEventListener("blur", function () { validateInput(input); });
+          input.addEventListener("input", function () {
+            if (!String(input.value || "").trim()) setState(input, true, "");
+          });
+        });
+
+        form.addEventListener("submit", function (event) {
+          const cpfInput = form.querySelector('[data-validate-field="cpf"]');
+          const emailInput = form.querySelector('[data-validate-field="email_principal"]');
+          if (cpfInput && !cpfIsValid(cpfInput.value)) {
+            setState(cpfInput, false, "CPF invalido. Corrija antes de continuar.");
+          }
+          if (emailInput && !emailLooksValid(emailInput.value)) {
+            setState(emailInput, false, "E-mail invalido. Corrija antes de continuar.");
+          }
+          const invalidInput = Array.from(form.querySelectorAll("[data-validate-field]")).find(function (input) {
+            return checks.get(input.name) === false;
+          });
+          if (invalidInput) {
+            event.preventDefault();
+            invalidInput.focus();
+          }
+        });
+
+        const cepInput = form.querySelector("[data-cep-lookup]");
+        const cepFeedback = document.getElementById("cep-feedback");
+        let lastCepLookup = "";
+
+        function setCepFeedback(message, kind) {
+          if (!cepFeedback) return;
+          cepFeedback.textContent = message || "";
+          cepFeedback.classList.toggle("error", kind === "error");
+          cepFeedback.classList.toggle("ok", kind === "ok");
+        }
+
+        function setAddressField(name, value) {
+          const input = form.querySelector('[name="' + name + '"]');
+          if (input && value) input.value = value;
+        }
+
+        async function lookupCep() {
+          if (!cepInput) return;
+          const cep = String(cepInput.value || "").replace(/\D/g, "");
+          if (!cep) {
+            setCepFeedback("Ao informar o CEP, o sistema tenta preencher logradouro, bairro, cidade e UF.", "");
+            return;
+          }
+          if (cep.length !== 8) {
+            setCepFeedback("CEP deve ter 8 digitos.", "error");
+            return;
+          }
+          if (cep === lastCepLookup) return;
+          lastCepLookup = cep;
+          setCepFeedback("Consultando CEP...", "");
+          try {
+            const response = await fetch("https://viacep.com.br/ws/" + cep + "/json/");
+            const data = await response.json();
+            if (data.erro) {
+              setCepFeedback("CEP nao encontrado. Preencha o endereco manualmente.", "error");
+              return;
+            }
+            setAddressField("logradouro", data.logradouro || "");
+            setAddressField("bairro", data.bairro || "");
+            setAddressField("cidade", data.localidade || "");
+            setAddressField("uf", data.uf || "");
+            setCepFeedback("Endereco carregado pelo CEP. Confira numero e complemento.", "ok");
+          } catch (_error) {
+            setCepFeedback("Nao foi possivel consultar o CEP agora. Preencha manualmente.", "error");
+          }
+        }
+
+        if (cepInput) {
+          cepInput.addEventListener("blur", lookupCep);
+          cepInput.addEventListener("input", function () {
+            const digits = String(cepInput.value || "").replace(/\D/g, "");
+            if (digits.length === 8) lookupCep();
+          });
+        }
+      }());
+    </script>
+  {% endif %}
+{% endblock %}

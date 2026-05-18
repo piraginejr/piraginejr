@@ -1,0 +1,151 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.kind_label }} · {{ detail.lot.banco }}</p>
+        <h1>Lote #{{ detail.lot.id }}</h1>
+        <p>{{ detail.lot.nome_arquivo }} · {{ detail.lot.periodo }}</p>
+      </div>
+      <a class="button secondary no-print" href="/imports/">Voltar para importacoes</a>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Movimentos</span><strong>{{ detail.lot.movimentos }}</strong></div>
+      <div class="card"><span class="label">Total do lote</span><strong>{{ detail.lot.total_fmt }}</strong></div>
+      <div class="card"><span class="label">Status</span><strong style="font-size: 20px">{{ detail.lot.status }}</strong></div>
+      <div class="card"><span class="label">Exibidos</span><strong>{{ detail.shown }}</strong></div>
+    </section>
+
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Processamento do lote</h2>
+          <p>Estas ações usam a mesma regra homologada do sistema anterior: reprocessar preserva decisões manuais, sincronizar importa o que ja esta pronto e encerrar move o restante para a central de contribuintes.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="status" value="{{ status }}">
+          <button type="submit" name="action" value="reprocess">Reprocessar lote</button>
+        </form>
+        {% if detail.kind == "pix" %}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="status" value="{{ status }}">
+            <button type="submit" name="action" value="import_ready">Sincronizar financeiro</button>
+          </form>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="status" value="{{ status }}">
+          <button class="button secondary" type="submit" name="action" value="close">Encerrar lote</button>
+        </form>
+        <a class="button" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/?status=pendencias">Auditar pendencias</a>
+        <a class="button secondary" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/?status=revisar_destinacao">Destinacoes especiais</a>
+        <a class="button secondary" href="/imports/rules/">Editar regras de centavos</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <form class="toolbar" method="get">
+        <label>
+          Status do movimento
+          <select name="status">
+            <option value="">Todos</option>
+            {% for option in detail.status_options %}
+              <option value="{{ option.value }}" {% if option.value == status %}selected{% endif %}>{{ option.value|default:"sem status" }} ({{ option.count }})</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Filtrar</button>
+        <a class="button secondary" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/">Limpar</a>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Movimentos do lote</h2>
+      <div class="table-wrap">
+        <table class="fit-table lot-movements-table">
+          <thead>
+            <tr>
+              <th>Ordem</th>
+              <th>Data</th>
+              <th>Origem</th>
+              <th>Associacao</th>
+              <th>Banco x pessoa</th>
+              <th>Status</th>
+              <th>Destino</th>
+              <th class="num">Valor</th>
+              <th class="no-print">Auditoria</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in detail.movements %}
+              <tr>
+                <td><a href="{{ item.detail_url }}">#{{ item.ordem }}</a><div class="muted small">ID {{ item.id }}</div></td>
+                <td>{{ item.data }}<div class="muted small">{{ item.competencia }}</div></td>
+                <td>{{ item.nome_origem }}<div class="muted small">{{ item.documento_tipo }} {{ item.documento_fmt|default:item.documento }}</div></td>
+                <td>
+                  {% if item.resolved_person %}
+                    <span class="badge ok">pessoa vinculada</span> {{ item.resolved_person }}
+                  {% elif item.suggested_person %}
+                    <span class="badge warn">pessoa sugerida</span> {{ item.suggested_person }}
+                  {% elif item.resolved_contributor %}
+                    <span class="badge warn">contribuinte auxiliar</span> {{ item.resolved_contributor }}
+                    <div class="muted small">sem pessoa vinculada</div>
+                  {% elif item.suggested_contributor %}
+                    <span class="badge warn">contribuinte auxiliar</span> {{ item.suggested_contributor }}
+                    <div class="muted small">sem pessoa vinculada</div>
+                  {% else %}
+                    <span class="badge warn">sem sugestao</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="muted small"><strong>Banco/Pix:</strong> {{ item.documento_fmt|default:item.documento|default:"-" }}</div>
+                  <div class="muted small"><strong>CPF cadastro:</strong> {{ item.candidate_document_fmt|default:"-" }}</div>
+                  {% if item.document_match %}
+                    <span class="badge {% if item.document_match == 'ok' %}ok{% else %}warn{% endif %}">{{ item.document_match_label }}</span>
+                  {% else %}
+                    <span class="badge warn">sem comparacao</span>
+                  {% endif %}
+                  {% if item.bank_document_invalid %}
+                    <span class="badge warn">CPF banco invalido</span>
+                  {% endif %}
+                  {% if item.candidate_document_invalid %}
+                    <span class="badge warn">CPF cadastro invalido</span>
+                  {% endif %}
+                </td>
+                <td><span class="badge">{{ item.review_status }}</span><div class="muted small">{{ item.confidence }} · {{ item.match_score }}</div></td>
+                <td>{{ item.tipo_sugerido }}<div class="muted small">centavos {{ item.codigo_centavos|default:"-" }}</div></td>
+                <td class="num">{{ item.valor_fmt }}</td>
+                <td class="no-print lot-audit-actions">
+                  {% if item.candidate_person_id and item.review_status != "revisar_destinacao" %}
+                    <form method="post">
+                      {% csrf_token %}
+                      <input type="hidden" name="status" value="{{ status }}">
+                      <input type="hidden" name="movement_id" value="{{ item.id }}">
+                      <input type="hidden" name="resolved_person_id" value="{{ item.candidate_person_id }}">
+                      <input type="hidden" name="review_notes" value="Confirmado diretamente na lista do lote.">
+                      {% if detail.kind == "pix" %}
+                        <input type="hidden" name="associate_masked_document" value="1">
+                      {% endif %}
+                      <button class="button compact-button" type="submit" name="action" value="approve_movement">Confirmar sugestao</button>
+                    </form>
+                  {% endif %}
+                  <a class="button secondary compact-button" href="{{ item.detail_url }}">Auditar / validar</a>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="9">Nenhum movimento encontrado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Lote nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

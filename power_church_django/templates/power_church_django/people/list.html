@@ -1,0 +1,77 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Cadastro</p>
+      <h1>Pessoas</h1>
+      {% if people %}
+        <p>Mostrando {{ people.shown }} de {{ people.total }} registros. A busca considera nome, codigo, CPF, e-mail e telefone.</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button" href="/people/new/">Nova pessoa</a>
+      <a class="button secondary" href="/people/families/">Familias domiciliares</a>
+      <a class="button secondary" href="/people/imports/">Importar pessoas</a>
+      {% if can_delete_people %}<a class="button secondary" href="/people/trash/">Lixeira segura</a>{% endif %}
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&format=xlsx">Exportar XLSX</a>
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&format=csv">Exportar CSV</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="toolbar" method="get">
+      <label>
+        Pesquisar
+        <input name="q" value="{{ q }}" placeholder="Nome, CPF, codigo...">
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option value="">Todos</option>
+          {% for option in people.status_options %}
+            <option value="{{ option.value }}" {% if option.value == status %}selected{% endif %}>{{ option.label }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/people/">Limpar</a>
+    </form>
+  </section>
+
+  {% if people %}
+    <section class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Sigla</th>
+              <th>Codigo</th>
+              <th>CPF</th>
+              <th>Status</th>
+              <th>Contato</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for person in people.items %}
+              <tr>
+                <td><a href="/people/{{ person.id }}/"><strong>{{ person.nome }}</strong></a></td>
+                <td><span class="badge">{{ person.sigla }}</span></td>
+                <td>{{ person.codigo }}</td>
+                <td>{{ person.cpf }}</td>
+                <td>{{ person.status }}</td>
+                <td>
+                  <div>{{ person.telefone }}</div>
+                  <div class="muted small">{{ person.email }}</div>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">Nenhuma pessoa encontrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

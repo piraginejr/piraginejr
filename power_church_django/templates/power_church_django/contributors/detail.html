@@ -1,0 +1,127 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.contributor.tipo }} · {{ detail.contributor.status }}</p>
+        <h1>{{ detail.contributor.nome }}</h1>
+        <p>{{ detail.contributor.documento_tipo|default:"documento" }} {{ detail.contributor.documento|default:"nao informado" }} · {{ detail.contributor.origem }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/contributors/">Voltar para contribuintes</a>
+        {% if detail.contributor.person_id %}
+          <a class="button" href="/people/{{ detail.contributor.person_id }}/">Abrir pessoa</a>
+        {% else %}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create_frequentador">
+            <button type="submit">Criar frequentador</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if not detail.contributor.person_id %}
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <h2>Associar a pessoa do cadastro</h2>
+            <p class="muted">Sugestoes calculadas por documento, nome e similaridade. Use esta area quando a central indicar que o contribuinte pode pertencer a alguem do rol.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pessoa sugerida</th><th>Status</th><th>Motivo</th><th class="no-print">Acao</th></tr></thead>
+            <tbody>
+              {% for person in detail.possible_people %}
+                <tr>
+                  <td><a href="/people/{{ person.id }}/">{{ person.nome }}</a><div class="muted small">{{ person.codigo_interno|default:"sem numero" }} · CPF {{ person.cpf|default:"nao informado" }}</div></td>
+                  <td><span class="badge">{{ person.sigla }}</span> {{ person.status_label }}</td>
+                  <td>{{ person.reason }}</td>
+                  <td class="no-print">
+                    <form method="post">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="link_person">
+                      <input type="hidden" name="person_id" value="{{ person.id }}">
+                      <button type="submit">Vincular a esta pessoa</button>
+                    </form>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="4">Nenhuma pessoa provavel encontrada. Use a busca geral de pessoas para conferir manualmente.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="grid">
+      <div class="card"><span class="label">Total contribuido</span><strong>{{ detail.total_contributions_fmt }}</strong></div>
+      <div class="card"><span class="label">Qualidade</span><strong style="font-size: 20px">{{ detail.contributor.qualidade|default:"-" }}</strong></div>
+      <div class="card"><span class="label">Criado em</span><strong style="font-size: 20px">{{ detail.contributor.criado_em|default:"-" }}</strong></div>
+      <div class="card"><span class="label">Pessoa vinculada</span><strong style="font-size: 20px">
+        {% if detail.contributor.person_id %}
+          <a href="/people/{{ detail.contributor.person_id }}/">{{ detail.contributor.pessoa_nome }}</a>
+        {% else %}
+          Sem vinculo
+        {% endif %}
+      </strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Identificadores</h2>
+        <div class="legend">
+          {% for item in detail.identifiers %}
+            <span class="badge">{{ item.tipo }} · {{ item.valor }}</span>
+          {% empty %}
+            <span class="muted">Sem identificadores adicionais.</span>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Resumo por competencia</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Competencia</th><th class="num">Remessas</th><th class="num">Total</th></tr></thead>
+            <tbody>
+              {% for item in detail.summary %}
+                <tr><td>{{ item.competencia }}</td><td class="num">{{ item.remessas }}</td><td class="num">{{ item.total_fmt }}</td></tr>
+              {% empty %}
+                <tr><td colspan="3">Sem contribuicoes.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Contribuicoes vinculadas a esta identidade financeira</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Data</th><th>Competencia</th><th>Tipo</th><th>Forma</th><th>Pessoa</th><th>Status</th><th class="num">Valor</th></tr></thead>
+          <tbody>
+            {% for item in detail.contributions %}
+              <tr>
+                <td>{{ item.data }}</td>
+                <td>{{ item.competencia }}</td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.forma }}</td>
+                <td>{{ item.origem|default:"Sem pessoa" }}</td>
+                <td><span class="badge">{{ item.status }}</span></td>
+                <td class="num">{{ item.valor_fmt }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="7">Sem contribuicoes vinculadas.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Contribuinte nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

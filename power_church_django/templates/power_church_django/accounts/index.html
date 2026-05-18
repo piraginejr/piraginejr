@@ -1,0 +1,137 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Django Auth</p>
+      <h1>Usuarios e privilegios</h1>
+      <p>Administracao do sistema: crie usuarios, defina perfis de acesso e acompanhe os grupos de privilegios. Este painel usa o banco Django separado.</p>
+    </div>
+    <div class="legend no-print">
+      <a class="button secondary" href="#criar-usuario">Criar usuario</a>
+      <a class="button secondary" href="/admin/">Abrir admin Django</a>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><span class="label">Usuarios</span><strong>{{ access.user_count }}</strong></div>
+    <div class="card"><span class="label">Grupos</span><strong>{{ access.group_count }}</strong></div>
+    <div class="card"><span class="label">Permissoes Power Church</span><strong>{{ access.permission_count }}</strong></div>
+    <div class="card"><span class="label">Instalacao</span><strong style="font-size: 20px">{% if access.installed %}Completa{% else %}Pendente{% endif %}</strong></div>
+  </section>
+
+  {% if not access.installed %}
+    <section class="panel">
+      <h2>Permissoes pendentes</h2>
+      <p class="alert">Rode <code>power_church_django/.venv/bin/python power_church_django/manage.py setup_access_profiles</code> para instalar os grupos padrao.</p>
+      <div class="legend">
+        {% for permission in access.missing_permissions %}
+          <span class="badge warn">{{ permission }}</span>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Grupos padrao</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Grupo</th><th class="num">Permissoes</th><th>Codigos</th></tr></thead>
+        <tbody>
+          {% for group in access.groups %}
+            <tr>
+              <td><strong>{{ group.name }}</strong></td>
+              <td class="num">{{ group.count }}</td>
+              <td>
+                {% for permission in group.permissions %}
+                  <span class="badge">{{ permission }}</span>
+                {% empty %}
+                  <span class="muted">Sem permissao Power Church.</span>
+                {% endfor %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="3">Nenhum grupo criado ainda.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="split">
+    <div class="panel">
+      <h2>Usuarios</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Usuario</th><th>Ativo</th><th>Staff</th><th>Grupos</th></tr></thead>
+          <tbody>
+            {% for user in access.users %}
+              <tr>
+                <td>{{ user.username }}<div class="muted small">{{ user.email }}</div></td>
+                <td>{% if user.is_active %}Sim{% else %}Nao{% endif %}</td>
+                <td>{% if user.is_staff %}Sim{% else %}Nao{% endif %}</td>
+                <td>
+                  {% for group in user.groups.all %}
+                    <span class="badge">{{ group.name }}</span>
+                  {% empty %}
+                    <span class="muted">Sem grupo.</span>
+                  {% endfor %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4">Nenhum usuario criado ainda.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" id="criar-usuario">
+      <h2>{% if access.has_superuser %}Criar usuario{% else %}Criar primeiro administrador{% endif %}</h2>
+      {% if access.has_superuser and not request.user.is_superuser %}
+        <p class="alert">Ja existe um administrador. Para criar usuarios, entre com um superusuario e volte a esta tela.</p>
+        <a class="button secondary" href="/accounts/login/">Entrar como administrador</a>
+      {% else %}
+        <p>{% if access.has_superuser %}Crie o usuario e selecione o grupo de privilegios adequado.{% else %}Como ainda nao existe administrador, este primeiro usuario sera superusuario do sistema.{% endif %}</p>
+        <form method="post" class="toolbar">
+          {% csrf_token %}
+          <label>
+            Usuario
+            <input name="username" autocomplete="username" placeholder="admin">
+          </label>
+          <label>
+            E-mail
+            <input name="email" type="email" autocomplete="email" placeholder="admin@igreja.org">
+          </label>
+          <label>
+            Senha
+            <input name="password" type="password" autocomplete="new-password" minlength="8">
+          </label>
+          <label>
+            Confirmar senha
+            <input name="password_confirm" type="password" autocomplete="new-password" minlength="8">
+          </label>
+          {% if access.has_superuser %}
+            <label>
+              Grupo de privilegios
+              <select name="group">
+                <option value="">Sem grupo</option>
+                {% for group in access.groups %}
+                  <option value="{{ group.name }}">{{ group.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Superusuario
+              <select name="is_superuser">
+                <option value="0">Nao</option>
+                <option value="1">Sim</option>
+              </select>
+            </label>
+          {% endif %}
+          <button type="submit">{% if access.has_superuser %}Criar usuario{% else %}Criar primeiro administrador{% endif %}</button>
+        </form>
+        <p class="muted">Depois o usuario entra por <code>/accounts/login/</code>. Administradores tambem podem acessar <code>/admin/</code>.</p>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,39 @@
+services:
+  power-church-django:
+    build:
+      context: .
+      dockerfile: Dockerfile.django
+    container_name: power-church-django
+    ports:
+      - "8001:8000"
+    environment:
+      POWER_CHURCH_DJANGO_SECRET_KEY: change-me-before-production
+      POWER_CHURCH_DJANGO_DEBUG: "false"
+      POWER_CHURCH_DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1"
+      POWER_CHURCH_POSTGRES_DB: power_church
+      POWER_CHURCH_POSTGRES_USER: power_church
+      POWER_CHURCH_POSTGRES_PASSWORD: power_church_dev
+      POWER_CHURCH_POSTGRES_HOST: postgres
+      POWER_CHURCH_POSTGRES_PORT: "5432"
+      POWER_CHURCH_LEGACY_DB_PATH: /app/data/power_church_membros_importado.db
+      POWER_CHURCH_PDF_PROVIDER: pymupdf
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: power-church-postgres
+    environment:
+      POSTGRES_DB: power_church
+      POSTGRES_USER: power_church
+      POSTGRES_PASSWORD: power_church_dev
+    volumes:
+      - power_church_postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  power_church_postgres:
+

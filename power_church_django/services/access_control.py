@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from django.contrib.auth.models import Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
+
+
+ACCESS_APP_LABEL = "power_church"
+ACCESS_MODEL = "moduleaccess"
+
+
+@dataclass(frozen=True)
+class ModulePermission:
+    codename: str
+    name: str
+    module: str
+
+
+MODULE_PERMISSIONS = [
+    ModulePermission("view_dashboard", "Pode ver dashboard", "Dashboard"),
+    ModulePermission("view_people", "Pode ver pessoas", "Secretaria"),
+    ModulePermission("manage_people", "Pode gerir pessoas", "Secretaria"),
+    ModulePermission("delete_people", "Pode enviar pessoas para lixeira segura", "Secretaria"),
+    ModulePermission("view_contributors", "Pode ver contribuintes auxiliares", "Contribuintes"),
+    ModulePermission("manage_contributors", "Pode gerir contribuintes auxiliares", "Contribuintes"),
+    ModulePermission("view_contributions", "Pode ver contribuicoes", "Contribuicoes"),
+    ModulePermission("manage_contributions", "Pode gerir contribuicoes", "Contribuicoes"),
+    ModulePermission("view_imports", "Pode ver importacoes bancarias", "Importacoes"),
+    ModulePermission("manage_imports", "Pode importar e reprocessar lotes", "Importacoes"),
+    ModulePermission("operate_bank_review", "Pode operar auditoria bancaria", "Importacoes"),
+    ModulePermission("view_reports", "Pode ver relatorios", "Relatorios"),
+    ModulePermission("view_audit", "Pode ver auditoria", "Auditoria"),
+    ModulePermission("manage_accounts", "Pode gerir usuarios e privilegios", "Administracao"),
+]
+
+
+DEFAULT_GROUPS = {
+    "Administrador do Sistema": [permission.codename for permission in MODULE_PERMISSIONS],
+    "Gestor de Secretaria": [
+        "view_dashboard",
+        "view_people",
+        "manage_people",
+        "delete_people",
+        "view_contributors",
+        "view_reports",
+        "view_audit",
+    ],
+    "Operador de Recebimentos": [
+        "view_dashboard",
+        "view_contributors",
+        "manage_contributors",
+        "view_contributions",
+        "manage_contributions",
+        "view_imports",
+        "manage_imports",
+        "operate_bank_review",
+        "view_reports",
+    ],
+    "Auditor": [
+        "view_dashboard",
+        "view_people",
+        "view_contributors",
+        "view_contributions",
+        "view_imports",
+        "view_reports",
+        "view_audit",
+    ],
+    "Consulta": [
+        "view_dashboard",
+        "view_people",
+        "view_contributors",
+        "view_contributions",
+        "view_reports",
+    ],
+}
+
+
+def access_content_type() -> ContentType:
+    content_type, _created = ContentType.objects.get_or_create(app_label=ACCESS_APP_LABEL, model=ACCESS_MODEL)
+    return content_type
+
+
+def ensure_access_control() -> dict[str, int]:
+    content_type = access_content_type()
+    permission_by_code: dict[str, Permission] = {}
+    created_permissions = 0
+    updated_permissions = 0
+    for module_permission in MODULE_PERMISSIONS:
+        permission, created = Permission.objects.get_or_create(
+            content_type=content_type,
+            codename=module_permission.codename,
+            defaults={"name": module_permission.name},
+        )
+        if created:
+            created_permissions += 1
+        elif permission.name != module_permission.name:
+            permission.name = module_permission.name
+            permission.save(update_fields=["name"])
+            updated_permissions += 1
+        permission_by_code[module_permission.codename] = permission
+
+    created_groups = 0
+    for group_name, codenames in DEFAULT_GROUPS.items():
+        group, created = Group.objects.get_or_create(name=group_name)
+        if created:
+            created_groups += 1
+        group.permissions.set(permission_by_code[codename] for codename in codenames)
+
+    return {
+        "created_permissions": created_permissions,
+        "updated_permissions": updated_permissions,
+        "created_groups": created_groups,
+        "total_permissions": len(MODULE_PERMISSIONS),
+        "total_groups": len(DEFAULT_GROUPS),
+    }
+
+
+def create_or_update_admin(username: str, email: str = "", password: str = "") -> User:
+    user, created = User.objects.get_or_create(username=username)
+    user.email = email or user.email
+    user.is_staff = True
+    user.is_superuser = True
+    user.is_active = True
+    if password:
+        user.set_password(password)
+    elif created:
+        user.set_unusable_password()
+    user.save()
+    admin_group = Group.objects.filter(name="Administrador do Sistema").first()
+    if admin_group:
+        user.groups.add(admin_group)
+    return user
+
+
+def access_control_snapshot() -> dict[str, Any]:
+    content_type = ContentType.objects.filter(app_label=ACCESS_APP_LABEL, model=ACCESS_MODEL).first()
+    installed_permissions: set[str] = set()
+    if content_type:
+        installed_permissions = set(
+            Permission.objects.filter(content_type=content_type).values_list("codename", flat=True)
+        )
+    expected_permissions = {permission.codename for permission in MODULE_PERMISSIONS}
+    groups = []
+    for group in Group.objects.order_by("name").prefetch_related("permissions"):
+        group_permissions = [
+            permission.codename
+            for permission in group.permissions.filter(content_type=content_type).order_by("codename")
+        ] if content_type else []
+        groups.append({"name": group.name, "permissions": group_permissions, "count": len(group_permissions)})
+    return {
+        "installed": not (expected_permissions - installed_permissions),
+        "missing_permissions": sorted(expected_permissions - installed_permissions),
+        "permissions": MODULE_PERMISSIONS,
+        "groups": groups,
+        "users": User.objects.order_by("username").prefetch_related("groups"),
+        "user_count": User.objects.count(),
+        "has_superuser": User.objects.filter(is_superuser=True).exists(),
+        "group_count": Group.objects.count(),
+        "permission_count": len(installed_permissions),
+    }

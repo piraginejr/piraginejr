@@ -1,0 +1,29 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Acesso</p>
+      <h1>Entrar</h1>
+      <p>Login local do Django. Nesta etapa ele prepara a camada de seguranca que depois sera aplicada aos modulos migrados.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form method="post" class="toolbar">
+      {% csrf_token %}
+      <label>
+        Usuario
+        {{ form.username }}
+      </label>
+      <label>
+        Senha
+        {{ form.password }}
+      </label>
+      <button type="submit">Entrar</button>
+    </form>
+    {% if form.errors %}
+      <p class="alert">Usuario ou senha invalidos.</p>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -1,0 +1,107 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Transicao segura</p>
+      <h1>Dashboard operacional</h1>
+      <p>Primeira tela Django lendo o banco atual em modo somente leitura. Ela ainda nao substitui o prototipo, mas ja mostra os dados reais.</p>
+    </div>
+    <div class="actions no-print">
+      <a class="button" href="/contributions/envelopes/new/">Subir envelope</a>
+      <a class="button secondary" href="/reports/">Abrir relatorios</a>
+    </div>
+  </section>
+
+  {% if summary %}
+    <section class="grid">
+      <a class="card" href="/people/">
+        <span class="label">Pessoas ativas</span>
+        <strong>{{ summary.people_total }}</strong>
+        <span class="muted">{{ summary.active_members }} membros ativos</span>
+      </a>
+      <a class="card" href="/contributions/">
+        <span class="label">Contribuicoes</span>
+        <strong>{{ summary.contributions_count }}</strong>
+        <span class="muted">{{ summary.contributions_total_fmt }}</span>
+      </a>
+      <a class="card" href="/contributions/envelopes/">
+        <span class="label">Subir envelopes</span>
+        <strong>{{ summary.envelope_count }}</strong>
+        <span class="muted">imagem ou PDF do envelope</span>
+      </a>
+      <a class="card" href="/imports/">
+        <span class="label">Lotes bancarios</span>
+        <strong>{{ summary.total_lots }}</strong>
+        <span class="muted">{{ summary.statement_lots }} extratos e {{ summary.pix_lots }} PIX</span>
+      </a>
+      <a class="card" href="/contributions/?status=sem_associacao">
+        <span class="label">Sem associacao</span>
+        <strong>{{ summary.unlinked_contributions }}</strong>
+        <span class="muted">contribuicoes ativas</span>
+      </a>
+      <a class="card" href="/imports/">
+        <span class="label">Revisoes bancarias</span>
+        <strong>{{ summary.pending_bank_reviews }}</strong>
+        <span class="muted">movimentos pendentes</span>
+      </a>
+      <a class="card" href="/contributors/">
+        <span class="label">Contribuintes auxiliares</span>
+        <strong>{{ summary.contributors_total }}</strong>
+        <span class="muted">base auxiliar ativa</span>
+      </a>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Competencias recentes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Competencia</th>
+                <th class="num">Remessas</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for month in summary.months %}
+                <tr>
+                  <td><a href="/reports/?competencia={{ month.competencia|urlencode }}">{{ month.competencia }}</a></td>
+                  <td class="num">{{ month.count }}</td>
+                  <td class="num">{{ month.total_fmt }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Status das pessoas</h2>
+        {% for item in summary.people_statuses %}
+          <p><span class="badge">{{ item.count }}</span> {{ item.status }}</p>
+        {% endfor %}
+        <div class="legend small">
+          <span class="badge">SA membro ativo</span>
+          <span class="badge">SI inativo</span>
+          <span class="badge">NF frequentador</span>
+          <span class="badge">NV visitante</span>
+          <span class="badge">NM arquivo morto</span>
+          <span class="badge">NR sem vinculo</span>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>Layouts bancarios ja reconhecidos pelo nucleo</h2>
+    <div class="grid">
+      {% for code, label in layouts.items %}
+        <div class="card">
+          <span class="label">{{ code }}</span>
+          <strong style="font-size: 20px">{{ label }}</strong>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}

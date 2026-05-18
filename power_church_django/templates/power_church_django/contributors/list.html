@@ -1,0 +1,273 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Central estrategica</p>
+      <h1>Contribuintes auxiliares</h1>
+      {% if contributors %}
+        <p>Mostrando {{ contributors.shown }} de {{ contributors.total }} identidades filtradas. A base ativa tem {{ contributors.summary.total }} contribuintes auxiliares.</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <button type="button" onclick="window.print()">Imprimir lista</button>
+      <a class="button secondary" href="/reports/">Relatorios</a>
+    </div>
+  </section>
+
+  {% if contributors %}
+    <section class="grid">
+      <a class="card" href="/contributors/?section=contributors">
+        <span class="label">Contribuintes ativos</span>
+        <strong>{{ contributors.summary.total }}</strong>
+        <span class="muted">tabela principal</span>
+      </a>
+      <a class="card" href="/contributors/?tag=vinculado&section=contributors">
+        <span class="label">Vinculados a pessoas</span>
+        <strong>{{ contributors.summary.linked }}</strong>
+        <span class="muted">ja associados ao rol</span>
+      </a>
+      <a class="card" href="/contributors/?mode=pendentes&section=contributors">
+        <span class="label">Fila pendente</span>
+        <strong>{{ contributors.summary.pending_contributors }}</strong>
+        <span class="muted">com pendencias operacionais</span>
+      </a>
+      <a class="card" href="/contributors/?mode=nao_lancados&section=contributors">
+        <span class="label">PIX em saneamento</span>
+        <strong>{{ contributors.summary.pending_unlaunched }}</strong>
+        <span class="muted">movimentos pendentes</span>
+      </a>
+      <a class="card" href="/contributors/?mode=sem_pessoa&section=contributors">
+        <span class="label">Contribuicoes sem pessoa</span>
+        <strong>{{ contributors.summary.pending_without_person }}</strong>
+        <span class="muted">NR rastreavel</span>
+      </a>
+      <a class="card" href="/contributors/?mode=recorrentes&tag=integracao&section=contributors">
+        <span class="label">Sugestao de integracao</span>
+        <strong>{{ contributors.summary.recurring_unlinked }}</strong>
+        <span class="muted">recorrentes fora do cadastro</span>
+      </a>
+      <a class="card" href="/contributors/?mode=recorrentes&tag=integracao&section=family_links">
+        <span class="label">Associacoes sugeridas</span>
+        <strong>{{ contributors.summary.family_links }}</strong>
+        <span class="muted">familias cadastradas</span>
+      </a>
+      <a class="card" href="/contributors/?mode=recorrentes&tag=familia_sugerida&section=family_groups">
+        <span class="label">Blocos familiares</span>
+        <strong>{{ contributors.summary.family_groups }}</strong>
+        <span class="muted">sobrenomes agrupados</span>
+      </a>
+      <a class="card" href="/contributors/?tag=pf&section=contributors">
+        <span class="label">Pessoa fisica</span>
+        <strong>{{ contributors.summary.pf }}</strong>
+        <span class="muted">somente PF</span>
+      </a>
+      <a class="card" href="/contributors/?tag=pj&section=contributors">
+        <span class="label">Pessoa juridica / externo</span>
+        <strong>{{ contributors.summary.pj }}</strong>
+        <span class="muted">somente PJ</span>
+      </a>
+    </section>
+  {% endif %}
+
+  <section class="panel no-print">
+    <div class="section-head">
+      <div>
+        <h2>Marcadores estrategicos</h2>
+        <p class="muted">Combine tags para abrir relatorios em sequencia sem reprocessar tudo manualmente.</p>
+      </div>
+    </div>
+    <form class="toolbar" method="get">
+      <input type="hidden" name="section" value="combined">
+      <label class="wide">
+        Busca
+        <input name="q" value="{{ q }}" placeholder="Nome, documento ou pessoa vinculada">
+      </label>
+      <div class="wide">
+        <div class="compact-marker-grid">
+          {% for option in contributors.tag_options %}
+            <label class="compact-check">
+              <input type="checkbox" name="tag" value="{{ option.value }}" {% if option.selected %}checked{% endif %}>
+              <span>{{ option.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <button type="submit">Abrir selecao</button>
+      <a class="button secondary" href="/contributors/">Limpar</a>
+    </form>
+  </section>
+
+  <section class="panel no-print">
+    <h2>Filtro rapido</h2>
+    <form class="toolbar" method="get">
+      <input type="hidden" name="section" value="contributors">
+      <label>
+        Pesquisar
+        <input name="q" value="{{ q }}" placeholder="Nome, documento ou pessoa vinculada">
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option value="">Todos</option>
+          {% for option in contributors.status_options %}
+            <option value="{{ option.value }}" {% if option.value == status %}selected{% endif %}>{{ option.value|default:"sem status" }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Tipo
+        <select name="tipo">
+          <option value="">Todos</option>
+          {% for option in contributors.type_options %}
+            <option value="{{ option.value }}" {% if option.value == tipo %}selected{% endif %}>{{ option.value|default:"sem tipo" }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/contributors/">Limpar</a>
+    </form>
+  </section>
+
+  {% if contributors.section == "family_links" or contributors.section == "combined" %}
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Contribuintes recorrentes ligados a familias ja cadastradas</h2>
+          <p class="muted">Sobrenomes sugerem relacao familiar. O operador decide se vincula, cria frequentador ou apenas usa como pista.</p>
+        </div>
+        <span class="badge warn">{{ contributors.family_links|length }}</span>
+      </div>
+      {% for block in contributors.family_links %}
+        <div class="panel" style="box-shadow:none">
+          <div class="section-head">
+            <div>
+              <h3><a href="/contributors/{{ block.contributor.id }}/">{{ block.contributor.nome }}</a></h3>
+              <p class="muted">{{ block.contributor.documento|default:"sem documento" }} · {{ block.contributor.total_contribuido_fmt }} · {{ block.contributor.recorrencia_competencias }} competencia(s)</p>
+            </div>
+            <form class="no-print" method="post" action="/contributors/{{ block.contributor.id }}/">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_frequentador">
+              <button class="button secondary" type="submit">Criar frequentador</button>
+            </form>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Pessoa do cadastro</th><th>Familia</th><th>Status</th><th class="no-print">Acao</th></tr></thead>
+              <tbody>
+                {% for person in block.matches %}
+                  <tr>
+                    <td><a href="/people/{{ person.id }}/">{{ person.nome }}</a><div class="muted small">{{ person.codigo_interno|default:"sem numero" }} · CPF {{ person.cpf|default:"nao informado" }}</div></td>
+                    <td><span class="badge">{{ person.relation }}</span></td>
+                    <td><span class="badge">{{ person.sigla }}</span> {{ person.status_label }}</td>
+                    <td class="no-print">
+                      <form method="post" action="/contributors/{{ block.contributor.id }}/">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="link_person">
+                        <input type="hidden" name="person_id" value="{{ person.id }}">
+                        <button type="submit">Vincular a esta pessoa</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% empty %}
+        <p class="muted">Nenhuma associacao familiar sugerida com os filtros atuais.</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% if contributors.section == "family_groups" or contributors.section == "combined" %}
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Blocos familiares sugeridos</h2>
+          <p class="muted">Agrupamento por sobrenomes para descobrir familias que contribuem por uma unica pessoa com renda.</p>
+        </div>
+        <span class="badge">{{ contributors.family_groups|length }}</span>
+      </div>
+      {% for group in contributors.family_groups %}
+        <div class="panel" style="box-shadow:none">
+          <h3>{{ group.label }} <span class="badge">{{ group.scope }}</span></h3>
+          <div class="grid">
+            {% for member in group.members %}
+              <div class="card">
+                <span class="label">{{ member.tipo_label }} · {{ member.recorrencia_competencias }} competencia(s)</span>
+                <strong style="font-size:18px"><a href="/contributors/{{ member.id }}/">{{ member.nome }}</a></strong>
+                <p class="muted">{{ member.documento|default:"sem documento" }} · {{ member.total_contribuido_fmt }}</p>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% empty %}
+        <p class="muted">Nenhum bloco familiar sugerido com os filtros atuais.</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% if not contributors.section or contributors.section == "contributors" or contributors.section == "combined" %}
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Tabela principal de contribuintes</h2>
+          <p class="muted">Esta lista respeita filtros, busca e tags. Em filtros operacionais, o limite sobe para evitar o antigo corte visual de 120 registros.</p>
+        </div>
+        <span class="badge">{{ contributors.shown }} exibidos</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Contribuinte</th>
+              <th>Tipo</th>
+              <th>Documento</th>
+              <th>Pessoa vinculada</th>
+              <th>Fila operacional</th>
+              <th class="num">Lanc.</th>
+              <th class="num">Total</th>
+              <th>Ultimo receb.</th>
+              <th class="no-print">Acao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in contributors.items %}
+              <tr>
+                <td>
+                  <a href="/contributors/{{ item.id }}/"><strong>{{ item.nome }}</strong></a>
+                  <div class="muted small">{{ item.origem }} · {{ item.qualidade }}</div>
+                  {% if item.familia_nuclear %}<div class="muted small">Nucleo: {{ item.familia_nuclear }}</div>{% endif %}
+                </td>
+                <td><span class="badge {% if item.tipo == 'pj' %}warn{% endif %}">{{ item.tipo_label }}</span></td>
+                <td>{{ item.documento|default:"Nao informado" }}<div class="muted small">{{ item.documento_tipo }}</div></td>
+                <td>
+                  {% if item.pessoa_nome %}
+                    <span class="badge">{{ item.pessoa_sigla }}</span> <a href="/people/{{ item.pessoa_id }}/">{{ item.pessoa_nome }}</a>
+                  {% else %}
+                    <span class="badge warn">NR</span> sem vinculo
+                  {% endif %}
+                </td>
+                <td>
+                  {% if item.sugestao_integracao %}<span class="badge danger">Sugerir integracao</span>{% endif %}
+                  {% if item.recorrencia_semanal %}<span class="badge warn">{{ item.recorrencia_semanas }} semana(s)</span>{% endif %}
+                  {% if item.recorrencia_multicompetencia %}<span class="badge">{{ item.recorrencia_competencias }} competencia(s)</span>{% endif %}
+                  {% if item.pix_pendentes %}<span class="badge warn">{{ item.pix_pendentes }} PIX saneamento</span>{% endif %}
+                  {% if item.contribuicoes_sem_pessoa %}<span class="badge danger">{{ item.contribuicoes_sem_pessoa }} sem pessoa</span>{% endif %}
+                  {% if not item.sugestao_integracao and not item.pix_pendentes and not item.contribuicoes_sem_pessoa %}<span class="badge ok">Fila limpa</span>{% endif %}
+                </td>
+                <td class="num">{{ item.contribuicoes_qtd }}</td>
+                <td class="num">{{ item.total_contribuido_fmt }}</td>
+                <td>{{ item.ultima_contribuicao_fmt|default:"-" }}</td>
+                <td class="no-print"><a class="badge" href="/contributors/{{ item.id }}/">Associar / revisar</a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="9">Nenhum contribuinte auxiliar encontrado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

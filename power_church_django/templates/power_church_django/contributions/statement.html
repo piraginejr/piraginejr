@@ -1,0 +1,123 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if statement %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ statement.person.sigla }} · {{ statement.person.status }}</p>
+        <h1>Extrato de contribuicoes</h1>
+        <p>{{ statement.person.nome }} · {{ statement.person.codigo|default:"sem codigo" }} · CPF {{ statement.person.cpf|default:"nao informado" }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/people/{{ statement.person.id }}/">Abrir ficha</a>
+        <a class="button secondary" href="/receipts/new/?person_id={{ statement.person.id }}">Gerar recibo</a>
+        <button type="button" onclick="window.print()">Imprimir extrato</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Total geral</span><strong>{{ statement.summary.total_fmt }}</strong></div>
+      <div class="card"><span class="label">Lancamentos</span><strong>{{ statement.summary.lancamentos }}</strong></div>
+      <div class="card"><span class="label">Competencias</span><strong>{{ statement.summary.competencias }}</strong></div>
+      <div class="card"><span class="label">Pessoa</span><strong style="font-size:20px">{{ statement.person.nome }}</strong></div>
+    </section>
+
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Filtros do extrato</h2>
+          <p class="muted">Use ano, competencia, datas ou tipo de contribuicao para conferir um periodo especifico.</p>
+        </div>
+      </div>
+      <form class="toolbar" method="get">
+        <label>
+          Ano
+          <select name="year">
+            <option value="">Todos</option>
+            {% for item in statement.years %}
+              <option value="{{ item }}" {% if item == statement.filters.year %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Competencia
+          <select name="competencia">
+            <option value="">Todas</option>
+            {% for item in statement.competencias %}
+              <option value="{{ item }}" {% if item == statement.filters.competencia %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          De
+          <input type="date" name="date_start" value="{{ statement.filters.date_start }}">
+        </label>
+        <label>
+          Ate
+          <input type="date" name="date_end" value="{{ statement.filters.date_end }}">
+        </label>
+        <button type="submit">Aplicar filtros</button>
+        <a class="button secondary" href="/contributions/statements/{{ statement.person.id }}/">Limpar</a>
+        <div class="wide">
+          <div class="legend">
+            {% for option in statement.type_options %}
+              <label class="check-item">
+                <input type="checkbox" name="tipo_id" value="{{ option.id }}" {% if option.selected %}checked{% endif %}>
+                {{ option.nome }}
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Extrato analitico</h2>
+          <p class="muted">Cada linha preserva a origem da contribuicao e os subtotais por competencia.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Competencia</th>
+              <th>Tipo</th>
+              <th>Forma</th>
+              <th>Observacoes</th>
+              <th class="num">Valor</th>
+              <th class="no-print">Acao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in statement.entries %}
+              {% if entry.kind == "subtotal" %}
+                <tr>
+                  <td colspan="5"><strong>Subtotal {{ entry.competencia|default:"Sem competencia" }}</strong></td>
+                  <td class="num"><strong>{{ entry.subtotal_fmt }}</strong></td>
+                  <td class="no-print"></td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td>{{ entry.data }}</td>
+                  <td>{{ entry.competencia|default:"-" }}</td>
+                  <td>{{ entry.tipo }}</td>
+                  <td>{{ entry.forma|default:"-" }}</td>
+                  <td>{{ entry.observacoes|default:"-" }}</td>
+                  <td class="num">{{ entry.valor_fmt }}</td>
+                  <td class="no-print"><a class="badge" href="{{ entry.detail_url }}">Ajustar</a></td>
+                </tr>
+              {% endif %}
+            {% empty %}
+              <tr><td colspan="7">Nenhuma contribuicao encontrada para os filtros informados.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Extrato nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

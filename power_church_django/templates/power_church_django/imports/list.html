@@ -1,0 +1,101 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Bancos</p>
+      <h1>Importacoes bancarias</h1>
+      {% if lots %}
+        <p>Mostrando {{ lots.shown }} de {{ lots.total }} lotes, sempre do mais recente para o mais antigo.</p>
+      {% endif %}
+    </div>
+    <a class="button secondary no-print" href="/imports/rules/">Regras de centavos</a>
+  </section>
+
+  <section class="panel">
+    <h2>Importar extrato bancario</h2>
+    <p class="muted">Use esta entrada para novos lotes Bradesco, Sicoob Recebimentos e Santander. Bancos novos devem nascer no Django com parser portavel, sem criar novas dependencias no prototipo antigo.</p>
+    <form class="toolbar" method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <label>
+        Tipo
+        <select name="import_kind">
+          <option value="statement">Extrato bancario</option>
+          <option value="pix_sicoob">Sicoob PIX historico</option>
+        </select>
+      </label>
+      <label>
+        Layout do extrato
+        <select name="layout_code">
+          {% for layout in statement_layouts %}
+            <option value="{{ layout.code }}" {% if layout.code == "SICOOB_CONTA_CORRENTE" %}selected{% endif %}>{{ layout.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Motor de leitura PDF
+        <select name="pdf_provider_mode">
+          {% for mode in pdf_provider_modes %}
+            <option value="{{ mode.value }}" {% if mode.value == "compare_pymupdf" %}selected{% endif %}>{{ mode.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        PDF
+        <input type="file" name="extrato_pdf" accept="application/pdf">
+      </label>
+      <button type="submit">Criar lote</button>
+    </form>
+    <p class="muted small">Chave segura: use "Comparar Swift x PyMuPDF antes de gravar" quando estiver homologando a leitura portavel. Se houver divergencia, o lote nao e gravado.</p>
+    <p class="muted small">Para extratos novos, prefira Sicoob Extrato Completo em vez do PDF PIX isolado ou do relatorio apenas de recebimentos, para evitar lacunas de TED, transferencia e outras remessas.</p>
+  </section>
+
+  {% if lots %}
+    <section class="panel">
+      <div class="table-wrap">
+        <table class="fit-table imports-table">
+          <thead>
+            <tr>
+              <th>Lote</th>
+              <th>Origem</th>
+              <th>Arquivo e periodo</th>
+              <th class="num">Financeiro</th>
+              <th>Fila</th>
+              <th class="no-print">Acao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lot in lots.items %}
+              <tr>
+                <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/"><strong>#{{ lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
+                <td>
+                  <span class="badge">{{ lot.tipo }}</span>
+                  <div><strong>{{ lot.banco }}</strong></div>
+                  <div class="muted small">{{ lot.layout }}</div>
+                </td>
+                <td>
+                  <strong>{{ lot.nome_arquivo }}</strong>
+                  <div class="muted small">{{ lot.periodo }}</div>
+                </td>
+                <td class="num">
+                  <strong>{{ lot.total_fmt }}</strong>
+                  <div class="muted small">{{ lot.movimentos }} movimento(s)</div>
+                </td>
+                <td>
+                  <span class="badge {% if lot.pendentes %}warn{% else %}ok{% endif %}">{{ lot.pendentes }} pendentes</span>
+                  <span class="badge">{{ lot.ignorados }} ignorados</span>
+                  <div style="margin-top:6px">
+                    <span class="badge {% if lot.status == 'encerrado' or lot.status == 'concluido' %}ok{% elif lot.status == 'parcial' %}warn{% endif %}">Status do lote: {{ lot.status|default:"sem status"|capfirst }}</span>
+                  </div>
+                </td>
+                <td class="no-print"><a class="button secondary compact-button" href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/">Abrir lote</a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">Nenhum lote encontrado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,10 @@
+prefix=/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env
+exec_prefix=/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env
+libdir=/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib
+includedir=/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/include
+
+Name: libturbojpeg
+Description: A SIMD-accelerated JPEG codec that provides the TurboJPEG API
+Version: 3.1.4.1
+Libs: -L${libdir} -lturbojpeg
+Cflags: -I${includedir}

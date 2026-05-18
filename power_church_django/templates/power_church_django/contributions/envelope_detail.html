@@ -1,0 +1,190 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.competencia }} · {{ detail.status }}</p>
+        <h1>Envelope #{{ detail.id }}</h1>
+        <p>{{ detail.lote_nome }} · {{ detail.data }} · total {{ detail.total_fmt }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button" href="/contributions/envelopes/new/">Novo envelope</a>
+        {% if detail.edit_url %}<a class="button" href="{{ detail.edit_url }}">Editar envelope</a>{% endif %}
+        {% if detail.lote_url %}<a class="button secondary" href="{{ detail.lote_url }}">Abrir lote</a>{% endif %}
+        <a class="button secondary" href="/contributions/envelopes/">Voltar para envelopes</a>
+      </div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Imagem arquivada</h2>
+        {% if detail.has_image %}
+          {% if detail.is_image %}
+            <div class="envelope-preview-frame" data-envelope-preview-frame>
+              <img class="envelope-preview-image" src="{{ detail.image_url }}" alt="Envelope #{{ detail.id }}" data-envelope-zoom-image>
+            </div>
+            <p class="small muted">Passe o mouse sobre a imagem para usar a lupa. Clique em abrir arquivo original para ver em tela cheia.</p>
+            <a class="button secondary" href="{{ detail.image_url }}" target="_blank" rel="noopener">Abrir arquivo original</a>
+          {% else %}
+            <p>Arquivo PDF ou imagem nao visualizavel diretamente nesta tela.</p>
+            <a class="button" href="{{ detail.image_url }}" target="_blank" rel="noopener">Abrir arquivo original</a>
+          {% endif %}
+          <p class="small muted">Arquivo original: {{ detail.nome_arquivo_original }}</p>
+          <p class="small muted">Hash: {{ detail.imagem_hash }}</p>
+          <p class="small muted">Pasta do lote: {{ detail.caminho_pasta }}</p>
+        {% else %}
+          <p class="muted">Este envelope ainda nao possui imagem vinculada.</p>
+        {% endif %}
+      </div>
+
+      <aside class="panel">
+        <h2>Dados lidos</h2>
+        <p><strong>Nome informado:</strong> {{ detail.nome_informado|default:"-" }}</p>
+        <p><strong>Telefone:</strong> {{ detail.telefone_informado|default:"-" }}</p>
+        <p><strong>Endereco:</strong> {{ detail.endereco_informado|default:"-" }}</p>
+        <p><strong>Forma:</strong> {{ detail.forma }}</p>
+        <p><strong>Origem:</strong> {{ detail.origem_operacional|default:"-" }}</p>
+        {% if detail.pessoa_nome %}
+          <p><strong>Pessoa:</strong> <a href="{{ detail.pessoa_url }}">{{ detail.pessoa_nome }}</a>{% if detail.pessoa_cpf %} · CPF {{ detail.pessoa_cpf }}{% endif %}</p>
+        {% endif %}
+        {% if detail.contribuinte_nome %}
+          <p><strong>Contribuinte auxiliar:</strong> <a href="{{ detail.contribuinte_url }}">{{ detail.contribuinte_nome }}</a>{% if detail.documento_principal %} · {{ detail.documento_principal }}{% endif %}</p>
+        {% endif %}
+        <p><strong>Observacoes:</strong> {{ detail.observacoes|default:"-" }}</p>
+        <p><strong>Justificativa:</strong> {{ detail.justificativa|default:"-" }}</p>
+      </aside>
+    </section>
+
+    <section class="panel">
+      <h2>Rastreabilidade financeira</h2>
+      <p class="muted">Dados opcionais para futura conciliacao com cheques, cartoes, comprovantes ou depositos no financeiro.</p>
+      <div class="summary-grid">
+        <div><span class="label">Forma identificada</span><strong>{{ detail.traceability.forma_identificada|default:"-" }}</strong></div>
+        <div><span class="label">Banco / operadora</span><strong>{{ detail.traceability.banco_operadora|default:"-" }}</strong></div>
+        <div><span class="label">Numero do cheque</span><strong>{{ detail.traceability.numero_cheque|default:"-" }}</strong></div>
+        <div><span class="label">Operacao / autorizacao</span><strong>{{ detail.traceability.numero_operacao|default:"-" }}</strong></div>
+        <div><span class="label">NSU / TID</span><strong>{{ detail.traceability.nsu_tid|default:"-" }}</strong></div>
+        <div><span class="label">Final do cartao</span><strong>{{ detail.traceability.ultimos_digitos_cartao|default:"-" }}</strong></div>
+        <div><span class="label">Data da operacao</span><strong>{{ detail.traceability.data_operacao|default:"-" }}</strong></div>
+        <div><span class="label">Valor da operacao</span><strong>{{ detail.traceability.valor_operacao_fmt|default:"-" }}</strong></div>
+        <div><span class="label">Status</span><strong>{{ detail.traceability.status_conciliacao|default:"pendente" }}</strong></div>
+      </div>
+      {% if detail.traceability.observacoes %}
+        <p><strong>Observacao de conciliacao:</strong> {{ detail.traceability.observacoes }}</p>
+      {% endif %}
+    </section>
+
+    {% if detail.profile_updates %}
+      <section class="panel">
+        <h2>Pendencias cadastrais sugeridas</h2>
+        <p class="muted">O envelope trouxe telefone ou endereco diferente da ficha. Nada foi alterado automaticamente; use o numero da ficha para conferir antes de atualizar o cadastro.</p>
+        <div class="table-wrap">
+          <table class="fit-table">
+            <thead>
+              <tr>
+                <th>Pessoa</th>
+                <th>Campo</th>
+                <th>Na ficha</th>
+                <th>No envelope</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for update in detail.profile_updates %}
+                <tr>
+                  <td>
+                    <a href="{{ update.pessoa_url }}">{{ update.pessoa_nome }}</a>
+                    {% if update.codigo %}<div class="small muted">Ficha {{ update.codigo }}</div>{% endif %}
+                    {% if update.cpf %}<div class="small muted">CPF {{ update.cpf }}</div>{% endif %}
+                  </td>
+                  <td>{{ update.campo }}</td>
+                  <td>{{ update.valor_cadastro|default:"-" }}</td>
+                  <td>{{ update.valor_envelope }}</td>
+                  <td><span class="badge">{{ update.status }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="panel">
+      <h2>Linhas lancadas</h2>
+      <p class="muted">Total informado {{ detail.total_fmt }} · soma das linhas {{ detail.total_linhas_fmt }}.</p>
+      <div class="table-wrap">
+        <table class="fit-table">
+          <thead>
+            <tr>
+              <th>Contribuinte</th>
+              <th>Rol</th>
+              <th>Tipo</th>
+              <th>Campanha</th>
+              <th>Observacoes</th>
+              <th class="num">Valor</th>
+              <th>Contribuicao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in detail.items %}
+              <tr>
+                <td>{{ item.nome }}</td>
+                <td><span class="badge">{{ item.sigla }}</span></td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.campanha|default:"-" }}</td>
+                <td>{{ item.observacoes|default:"-" }}</td>
+                <td class="num">{{ item.valor_fmt }}</td>
+                <td>
+                  {% if item.contribution_url %}
+                    <a class="button secondary" href="{{ item.contribution_url }}">#{{ item.contribution_id }}</a>
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="7">Nenhuma linha registrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <script>
+      (function () {
+        document.querySelectorAll("[data-envelope-preview-frame]").forEach(function (frame) {
+          const image = frame.querySelector("[data-envelope-zoom-image]");
+          if (!image) return;
+          const lens = document.createElement("div");
+          lens.className = "envelope-zoom-lens";
+          frame.appendChild(lens);
+          const zoom = 2.35;
+          function update(event) {
+            if (!image.complete || !image.naturalWidth || !image.naturalHeight) return;
+            const frameRect = frame.getBoundingClientRect();
+            const imageRect = image.getBoundingClientRect();
+            const x = Math.min(Math.max(event.clientX - imageRect.left, 0), imageRect.width);
+            const y = Math.min(Math.max(event.clientY - imageRect.top, 0), imageRect.height);
+            const lensSize = lens.offsetWidth || 210;
+            const left = Math.min(Math.max(event.clientX - frameRect.left + 18, 0), Math.max(frameRect.width - lensSize, 0));
+            const top = Math.min(Math.max(event.clientY - frameRect.top + 18, 0), Math.max(frameRect.height - lensSize, 0));
+            lens.style.left = left + "px";
+            lens.style.top = top + "px";
+            lens.style.backgroundImage = "url('" + image.currentSrc + "')";
+            lens.style.backgroundSize = (imageRect.width * zoom) + "px " + (imageRect.height * zoom) + "px";
+            lens.style.backgroundPosition = (-x * zoom + lensSize / 2) + "px " + (-y * zoom + lensSize / 2) + "px";
+          }
+          image.addEventListener("mouseenter", function () {
+            frame.classList.add("zooming");
+          });
+          image.addEventListener("mousemove", update);
+          image.addEventListener("mouseleave", function () {
+            frame.classList.remove("zooming");
+          });
+        });
+      })();
+    </script>
+  {% else %}
+    <section class="panel"><h1>Envelope nao encontrado.</h1></section>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,278 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Saneamento</p>
+      <h1>Auditoria do cadastro</h1>
+      <p>Pendencias de importacao e alertas do cadastro. A rastreabilidade tecnica continua disponivel, mas separada para nao confundir o operador.</p>
+    </div>
+    <div class="legend no-print">
+      <a class="button secondary" href="/audit/">Auditoria do cadastro</a>
+      <a class="button secondary" href="/audit/?modo=tecnica">Eventos tecnicos</a>
+      <a class="button secondary" href="/audit/?modo=django">Eventos Django</a>
+    </div>
+  </section>
+
+  {% if mode == "django" %}
+    {% if django_audit %}
+      <section class="grid">
+        <div class="card"><span class="label">Eventos Django</span><strong>{{ django_audit.total }}</strong></div>
+        <div class="card"><span class="label">Pagina</span><strong>{{ django_audit.page }}/{{ django_audit.total_pages }}</strong></div>
+        <div class="card"><span class="label">Exibidos</span><strong>{{ django_audit.shown }}</strong></div>
+      </section>
+
+      <section class="panel">
+        <h2>Rastreabilidade Django</h2>
+        <p class="muted">Eventos gerados pelas telas Django e espelhos das escritas controladas no banco legado. A auditoria legada continua sendo a fonte primaria do historico antigo.</p>
+        <form class="toolbar" method="get">
+          <input type="hidden" name="modo" value="django">
+          <label>
+            Acao
+            <select name="acao">
+              <option value="">Todas</option>
+              {% for item in django_audit.actions %}
+                <option value="{{ item }}" {% if item == acao %}selected{% endif %}>{{ item }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Tabela
+            <select name="tabela">
+              <option value="">Todas</option>
+              {% for item in django_audit.tables %}
+                <option value="{{ item }}" {% if item == tabela %}selected{% endif %}>{{ item }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Por pagina
+            <select name="page_size">
+              <option value="120" {% if django_audit.page_size == 120 %}selected{% endif %}>120</option>
+              <option value="300" {% if django_audit.page_size == 300 %}selected{% endif %}>300</option>
+              <option value="500" {% if django_audit.page_size == 500 %}selected{% endif %}>500</option>
+              <option value="1000" {% if django_audit.page_size == 1000 %}selected{% endif %}>1000</option>
+            </select>
+          </label>
+          <button type="submit">Filtrar</button>
+          <a class="button secondary" href="/audit/?modo=django">Limpar</a>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="legend no-print">
+          {% if django_audit.has_previous %}<a class="button secondary" href="/audit/?{{ django_audit.previous_query }}">Pagina anterior</a>{% endif %}
+          {% if django_audit.has_next %}<a class="button secondary" href="/audit/?{{ django_audit.next_query }}">Proxima pagina</a>{% endif %}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Data</th><th>Operador</th><th>Acao</th><th>Tabela</th><th>Registro</th><th>Origem</th><th>Resumo</th></tr></thead>
+            <tbody>
+              {% for item in django_audit.items %}
+                <tr>
+                  <td>{{ item.criado_em }}</td>
+                  <td>{{ item.actor }}</td>
+                  <td>{{ item.acao }}</td>
+                  <td>{{ item.tabela }}</td>
+                  <td>{{ item.registro_id }}</td>
+                  <td><span class="badge">{{ item.origem }}</span></td>
+                  <td>{{ item.resumo }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="7">Nenhum evento Django encontrado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% elif mode == "tecnica" %}
+    {% if technical %}
+      <section class="grid">
+        <div class="card"><span class="label">Eventos tecnicos</span><strong>{{ technical.total }}</strong></div>
+        <div class="card"><span class="label">Pagina</span><strong>{{ technical.page }}/{{ technical.total_pages }}</strong></div>
+        <div class="card"><span class="label">Exibidos</span><strong>{{ technical.shown }}</strong></div>
+      </section>
+
+      <section class="panel">
+        <h2>Rastreabilidade tecnica</h2>
+        <p class="muted">Esta lista e enorme porque registra alteracoes internas e historico financeiro. Use filtro por acao ou tabela quando precisar investigar um caso especifico.</p>
+        <form class="toolbar" method="get">
+          <input type="hidden" name="modo" value="tecnica">
+          <label>
+            Acao
+            <select name="acao">
+              <option value="">Todas</option>
+              {% for item in technical.actions %}
+                <option value="{{ item }}" {% if item == acao %}selected{% endif %}>{{ item }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Tabela
+            <select name="tabela">
+              <option value="">Todas</option>
+              {% for item in technical.tables %}
+                <option value="{{ item }}" {% if item == tabela %}selected{% endif %}>{{ item }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Por pagina
+            <select name="page_size">
+              <option value="120" {% if technical.page_size == 120 %}selected{% endif %}>120</option>
+              <option value="300" {% if technical.page_size == 300 %}selected{% endif %}>300</option>
+              <option value="500" {% if technical.page_size == 500 %}selected{% endif %}>500</option>
+              <option value="1000" {% if technical.page_size == 1000 %}selected{% endif %}>1000</option>
+            </select>
+          </label>
+          <button type="submit">Filtrar</button>
+          <a class="button secondary" href="/audit/?modo=tecnica">Limpar</a>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="legend no-print">
+          {% if technical.has_previous %}<a class="button secondary" href="/audit/?{{ technical.previous_query }}">Pagina anterior</a>{% endif %}
+          {% if technical.has_next %}<a class="button secondary" href="/audit/?{{ technical.next_query }}">Proxima pagina</a>{% endif %}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Data</th><th>Acao</th><th>Tabela</th><th>Registro</th><th>Usuario</th></tr></thead>
+            <tbody>
+              {% for item in technical.items %}
+                <tr>
+                  <td>{{ item.criado_em }}</td>
+                  <td>{{ item.acao }}</td>
+                  <td>{{ item.tabela }}</td>
+                  <td>{{ item.registro_id }}</td>
+                  <td>{{ item.usuario_id }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhum evento tecnico encontrado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% else %}
+    {% if audit %}
+      <section class="grid">
+        <div class="card"><span class="label">Pendencias operacionais</span><strong>{{ audit.total }}</strong></div>
+        <div class="card"><span class="label">Fichas afetadas</span><strong>{{ audit.people|length }}</strong></div>
+        <div class="card"><span class="label">Eventos tecnicos separados</span><strong>{{ audit.technical_count }}</strong></div>
+        <div class="card"><span class="label">Pagina</span><strong>{{ audit.page }}/{{ audit.total_pages }}</strong></div>
+      </section>
+
+      <section class="panel">
+        <form class="toolbar" method="get">
+          <label>
+            Tipo
+            <input name="tipo" value="{{ tipo }}" placeholder="ex: cpf_invalido">
+          </label>
+          <label>
+            Severidade
+            <select name="severidade">
+              <option value="">Todas</option>
+              <option value="aviso" {% if severidade == "aviso" %}selected{% endif %}>Aviso</option>
+              <option value="info" {% if severidade == "info" %}selected{% endif %}>Info</option>
+            </select>
+          </label>
+          <label>
+            Por pagina
+            <select name="page_size">
+              <option value="200" {% if audit.page_size == 200 %}selected{% endif %}>200</option>
+              <option value="500" {% if audit.page_size == 500 %}selected{% endif %}>500</option>
+              <option value="1000" {% if audit.page_size == 1000 %}selected{% endif %}>1000</option>
+            </select>
+          </label>
+          <button type="submit">Filtrar</button>
+          <a class="button secondary" href="/audit/">Limpar</a>
+        </form>
+      </section>
+
+      <section class="split">
+        <div class="panel">
+          <h2>Resumo por tipo</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Tipo</th><th>Severidade</th><th class="num">Qtd</th></tr></thead>
+              <tbody>
+                {% for row in audit.summary %}
+                  <tr>
+                    <td><a href="/audit/?tipo={{ row.tipo|urlencode }}&severidade={{ row.severidade|urlencode }}">{{ row.tipo }}</a></td>
+                    <td><span class="badge {% if row.severidade == 'aviso' %}danger{% else %}ok{% endif %}">{{ row.severidade }}</span></td>
+                    <td class="num">{{ row.quantidade }}</td>
+                  </tr>
+                {% empty %}
+                  <tr><td colspan="3">Sem pendencias abertas.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Como usar com o cliente</h2>
+          <p class="muted">Os avisos merecem revisao objetiva. Alguns itens podem ser baixados manualmente no prototipo atual; outros desaparecem quando a ficha for corrigida.</p>
+          <p class="muted">No Django, esta etapa ainda e leitura segura. A baixa/correcao editavel entra depois de protegermos as rotas com privilegios.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>{{ audit.people|length }} ficha(s) com ajuste ou revisao</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pessoa</th><th class="num">Pend.</th><th>Nivel</th><th>Tipos</th><th>Acao</th></tr></thead>
+            <tbody>
+              {% for row in audit.people %}
+                <tr>
+                  <td><a href="/people/{{ row.pessoa_id }}/"><strong>{{ row.nome }}</strong></a><div class="muted small">ID-{{ row.pessoa_id|stringformat:"06d" }} · {{ row.codigo_interno|default:"sem numero" }} · {{ row.status }}</div></td>
+                  <td class="num"><span class="badge {% if row.avisos %}danger{% else %}ok{% endif %}">{{ row.total }}</span></td>
+                  <td><span class="badge danger">{{ row.avisos }} aviso(s)</span> <span class="badge">{{ row.infos }} info</span></td>
+                  <td>{{ row.tipos }}</td>
+                  <td><a class="button secondary" href="/people/{{ row.pessoa_id }}/">Abrir ficha</a></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhuma ficha pendente encontrada.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>{{ audit.shown }} de {{ audit.total }} pendencia(s) exibida(s)</h2>
+        <div class="legend no-print">
+          {% if audit.has_previous %}<a class="button secondary" href="/audit/?{{ audit.previous_query }}">Pagina anterior</a>{% endif %}
+          {% if audit.has_next %}<a class="button secondary" href="/audit/?{{ audit.next_query }}">Proxima pagina</a>{% endif %}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Sev.</th><th>Tipo</th><th>Pessoa</th><th>Descricao / Acao sugerida</th><th>Origem</th></tr></thead>
+            <tbody>
+              {% for row in audit.items %}
+                <tr>
+                  <td><span class="badge {% if row.severidade == 'aviso' %}danger{% else %}ok{% endif %}">{{ row.severidade }}</span></td>
+                  <td>{{ row.tipo }}</td>
+                  <td>
+                    {% if row.pessoa_id %}
+                      <a href="/people/{{ row.pessoa_id }}/">{{ row.nome }}</a>
+                      <div class="muted small">{{ row.system_id }} · {{ row.codigo|default:"sem numero" }} · {{ row.status }} · linha {{ row.numero_linha }}</div>
+                    {% else %}
+                      Sem pessoa vinculada
+                    {% endif %}
+                  </td>
+                  <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div></td>
+                  <td><span class="badge">{{ row.origem }}</span></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhuma pendencia encontrada.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% endif %}
+{% endblock %}

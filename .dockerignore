@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/*.db
+data/**/*.db
+data/homologacao/
+data/backups/
+data/pix_uploads/
+data/statement_uploads/
+data/people_uploads/
+reports/
+

@@ -1,0 +1,84 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Recibos emitidos</p>
+      <h1>Recibos</h1>
+      <p>Consulta dos recibos gerados a partir das contribuicoes ja registradas e auditadas.</p>
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/">Escolher pessoa</a>
+      <button type="button" onclick="window.print()">Imprimir lista</button>
+    </div>
+  </section>
+
+  {% if receipts %}
+    <section class="grid">
+      <div class="card"><span class="label">Recibos</span><strong>{{ receipts.summary.quantidade }}</strong></div>
+      <div class="card"><span class="label">Total emitido</span><strong>{{ receipts.summary.total_fmt }}</strong></div>
+      <div class="card"><span class="label">Pessoas</span><strong>{{ receipts.summary.pessoas }}</strong></div>
+      <div class="card"><span class="label">Ultima emissao</span><strong style="font-size:20px">{{ receipts.summary.ultima_data|default:"-" }}</strong></div>
+    </section>
+  {% endif %}
+
+  <section class="panel no-print">
+    <h2>Pesquisar recibos</h2>
+    <form class="toolbar" method="get">
+      <label>
+        Pessoa, CPF, codigo ou numero
+        <input name="q" value="{{ q }}" placeholder="Ex.: Maria, 123.456, REC-202605">
+      </label>
+      <label>
+        De
+        <input type="date" name="date_start" value="{{ date_start }}">
+      </label>
+      <label>
+        Ate
+        <input type="date" name="date_end" value="{{ date_end }}">
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/receipts/">Limpar</a>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <h2>Lista de recibos</h2>
+      <span class="badge">{{ receipts.items|length|default:0 }} exibidos</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Numero</th>
+            <th>Emissao</th>
+            <th>Pessoa</th>
+            <th>Periodo</th>
+            <th>Status</th>
+            <th class="num">Valor</th>
+            <th class="no-print">Acao</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for receipt in receipts.items %}
+            <tr>
+              <td><strong>{{ receipt.numero }}</strong></td>
+              <td>{{ receipt.data }}</td>
+              <td>
+                <a href="/people/{{ receipt.person_id }}/">{{ receipt.person_name }}</a>
+                <div class="muted small">{{ receipt.person_code|default:"sem codigo" }} · CPF {{ receipt.person_cpf|default:"nao informado" }}</div>
+              </td>
+              <td>{{ receipt.periodo }}</td>
+              <td><span class="badge">{{ receipt.status }}</span></td>
+              <td class="num">{{ receipt.valor_fmt }}</td>
+              <td class="no-print"><a class="badge" href="{{ receipt.detail_url }}">Abrir</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7">Nenhum recibo encontrado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

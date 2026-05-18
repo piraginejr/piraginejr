@@ -1,0 +1,59 @@
+{
+    "arch": "arm64",
+    "build": "heed7d32_0",
+    "build_number": 0,
+    "build_string": "heed7d32_0",
+    "channel": "conda-forge",
+    "constrains": [
+        "icu <0.0a0"
+    ],
+    "depends": [
+        "__osx >=11.0",
+        "libiconv >=1.18,<2.0a0",
+        "liblzma >=5.8.3,<6.0a0",
+        "libxml2-16 2.15.3 h6967ea9_0",
+        "libzlib >=1.3.2,<2.0a0"
+    ],
+    "extracted_package_dir": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libxml2-2.15.3-heed7d32_0",
+    "files": [
+        "bin/xmlcatalog",
+        "bin/xmllint"
+    ],
+    "fn": "libxml2-2.15.3-heed7d32_0.conda",
+    "license": "MIT",
+    "license_family": "MIT",
+    "link": {
+        "source": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libxml2-2.15.3-heed7d32_0",
+        "type": 1
+    },
+    "md5": "0c1fdc80534d8f25fd74722aba81f044",
+    "name": "libxml2",
+    "package_tarball_full_path": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libxml2-2.15.3-heed7d32_0.tar.bz2",
+    "paths_data": {
+        "paths": [
+            {
+                "_path": "bin/xmlcatalog",
+                "path_type": "hardlink",
+                "sha256": "3a7cb48c0d68194795f8dc3d6a1ac5e0833b65a1c0c63c322191da2ce7a45773",
+                "sha256_in_prefix": "ec8f6488a24855d475f656a3c66cdb1f8a77d3cdb9d75a50e006b7f479923c2a",
+                "size_in_bytes": 53728
+            },
+            {
+                "_path": "bin/xmllint",
+                "path_type": "hardlink",
+                "sha256": "db81be8a732cf179403e6c4a740f72772f5890de9cb3451b5e9f5525ea9f5c19",
+                "sha256_in_prefix": "6bcf62677b580a4c0780811687d7282a191549bbec6672a7f0079d1fc9fe3c00",
+                "size_in_bytes": 116512
+            }
+        ],
+        "paths_version": 1
+    },
+    "platform": "osx",
+    "requested_spec": "",
+    "sha256": "4d9c117b2dd222cf891710d5f6a570ebb275479979843a1477ac54ed50907b40",
+    "size": 41663,
+    "subdir": "osx-arm64",
+    "timestamp": 1776377341,
+    "url": "https://conda.anaconda.org/conda-forge/osx-arm64/libxml2-2.15.3-heed7d32_0.conda",
+    "version": "2.15.3"
+}

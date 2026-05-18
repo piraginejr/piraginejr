@@ -1,0 +1,5 @@
+# Dependencias Python para o alvo portavel Linux/nuvem.
+# O prototipo atual usa quase tudo da biblioteca padrao, mas o servidor
+# deve trazer PyMuPDF para substituir Swift/PDFKit na extracao de PDFs.
+
+PyMuPDF>=1.24,<2

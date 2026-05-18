@@ -1,0 +1,16 @@
+services:
+  power-church:
+    build: .
+    container_name: power-church
+    ports:
+      - "8000:8000"
+    environment:
+      POWER_CHURCH_ENV: server
+      POWER_CHURCH_HOST: 0.0.0.0
+      POWER_CHURCH_PORT: 8000
+      POWER_CHURCH_DB_PATH: /app/data/power_church_membros_importado.db
+      POWER_CHURCH_PDF_PROVIDER: pymupdf
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+

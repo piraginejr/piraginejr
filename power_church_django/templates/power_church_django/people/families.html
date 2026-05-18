@@ -1,0 +1,119 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Cadastro estrategico</p>
+      <h1>Familias domiciliares</h1>
+      {% if families %}
+        <p>Mostrando {{ families.summary.shown_groups }} grupo(s). Alta confianca: {{ families.summary.automatic_groups }} familia(s) domiciliar(es), {{ families.summary.automatic_people }} pessoa(s). Auditoria: {{ families.summary.hypothesis_groups }} hipotese(s), {{ families.summary.hypothesis_people }} pessoa(s).</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/">Voltar para pessoas</a>
+      <button type="button" onclick="window.print()">Imprimir lista</button>
+    </div>
+  </section>
+
+  <section class="grid">
+    <a class="card" href="/people/families/?mode=automaticos{% if cep %}&cep={{ cep }}{% endif %}">
+      <span class="label">Familias domiciliares</span>
+      <strong>{{ families.summary.automatic_groups }}</strong>
+      <div class="muted small">{{ families.summary.automatic_people }} pessoa(s)</div>
+    </a>
+    <a class="card" href="/people/families/?mode=hipoteses{% if cep %}&cep={{ cep }}{% endif %}">
+      <span class="label">Hipoteses para auditoria</span>
+      <strong>{{ families.summary.hypothesis_groups }}</strong>
+      <div class="muted small">{{ families.summary.hypothesis_people }} pessoa(s)</div>
+    </a>
+    <div class="card">
+      <span class="label">Membros ativos na lista</span>
+      <strong>{{ families.summary.shown_status.sa }}</strong>
+      <div class="muted small">{{ families.summary.shown_status.outros }} em outras modalidades</div>
+    </div>
+  </section>
+
+  <section class="panel no-print">
+    <form class="toolbar" method="get">
+      <label>
+        Filtrar CEP
+        <input name="cep" value="{{ cep }}" placeholder="Ex.: 24220">
+      </label>
+      <label>
+        Tipo de lista
+        <select name="mode">
+          <option value="all" {% if mode == "all" %}selected{% endif %}>Todos</option>
+          <option value="automaticos" {% if mode == "automaticos" %}selected{% endif %}>Alta confianca</option>
+          <option value="hipoteses" {% if mode == "hipoteses" %}selected{% endif %}>Hipoteses / auditoria</option>
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/people/families/">Limpar</a>
+    </form>
+  </section>
+
+  {% if families.groups %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="cep" value="{{ cep }}">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <section class="panel no-print">
+        <div class="section-head">
+          <div>
+            <h2>Aplicacao em lote</h2>
+            <p class="muted">Marque varias hipoteses para criar familias domiciliares ou retirar falsas sugestoes da fila em uma unica operacao auditada.</p>
+          </div>
+          <div class="actions">
+            <button type="submit" name="bulk_action" value="create">Criar familias selecionadas</button>
+            <button type="submit" name="bulk_action" value="suppress">Ignorar sugestoes selecionadas</button>
+          </div>
+        </div>
+      </section>
+
+      {% for group in families.groups %}
+        <section class="family-card">
+          <div class="split">
+            <div>
+              <label class="check-item no-print">
+                <input type="checkbox" name="person_ids" value="{{ group.person_ids }}">
+                <span>Selecionar este grupo</span>
+              </label>
+              <h2>{{ group.label }}</h2>
+              <p>{{ group.address }}<br><span class="muted">{{ group.reason }}</span></p>
+              <div class="legend">
+                <span class="badge {% if group.confidence == 'Alta confianca' %}ok{% else %}warn{% endif %}">{{ group.confidence }}</span>
+                <span class="badge">Pendentes {{ group.missing_relationships }}</span>
+                <span class="badge">SA {{ group.status_summary.sa }}</span>
+                <span class="badge">Outros {{ group.status_summary.outros }}</span>
+                <span class="badge">Total {{ group.status_summary.total }}</span>
+                <span class="badge">CEP {{ group.cep }}</span>
+              </div>
+            </div>
+            <div class="actions no-print">
+              <button type="submit" name="single_person_ids" value="{{ group.person_ids }}">Criar familia domiciliar deste grupo</button>
+              <button type="submit" name="single_suppress_person_ids" value="{{ group.person_ids }}">Ignorar sugestao deste grupo</button>
+            </div>
+          </div>
+          <div class="person-strip">
+            {% for person in group.people %}
+              <a class="person-card" href="/people/{{ person.id }}/">
+                {% if person.photo_url %}
+                  <img class="person-photo" src="{{ person.photo_url }}" alt="Foto de {{ person.nome }}">
+                {% else %}
+                  <span class="person-photo-placeholder">{{ person.sigla }}</span>
+                {% endif %}
+                <span>
+                  <strong>{{ person.nome }}</strong>
+                  <span class="muted small">{{ person.sigla }} · {{ person.status }} · {{ person.codigo|default:"sem codigo" }}</span>
+                  <span class="muted small">{{ person.complemento|default:"sem complemento" }}</span>
+                </span>
+              </a>
+            {% endfor %}
+          </div>
+        </section>
+      {% endfor %}
+    </form>
+  {% else %}
+    <section class="panel"><h2>Nenhuma familia domiciliar encontrada</h2><p>Altere os filtros ou confira se as pessoas possuem endereco cadastrado.</p></section>
+  {% endif %}
+{% endblock %}

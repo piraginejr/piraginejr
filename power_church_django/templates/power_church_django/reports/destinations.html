@@ -1,0 +1,193 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Relatorio financeiro</p>
+      <h1>Contribuicoes por destino</h1>
+      <p>Conferencia separada de Dizimo, missoes, acao social e campanhas, respeitando a destinacao registrada em cada remessa.</p>
+    </div>
+    <div class="actions no-print">
+      <button onclick="window.print()">Imprimir</button>
+      <a class="button primary" href="/reports/contributions-destinations.pdf{% if report_query_string %}?{{ report_query_string }}&inline=1{% else %}?inline=1{% endif %}" target="_blank" rel="noopener">Abrir PDF p/ imprimir</a>
+      <a class="button secondary" href="/reports/contributions-destinations.pdf{% if report_query_string %}?{{ report_query_string }}{% endif %}">Baixar PDF</a>
+      <a class="button secondary" href="/reports/">Relatorio por periodo</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="toolbar" method="get">
+      <label>
+        Competencia
+        <select name="competencia">
+          <option value="">Todas</option>
+          {% for item in report.competencias %}
+            <option value="{{ item }}" {% if item == competencia %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Data inicial
+        <input type="date" name="date_start" value="{{ date_start }}">
+      </label>
+      <label>
+        Data final
+        <input type="date" name="date_end" value="{{ date_end }}">
+      </label>
+      <label>
+        Destino financeiro
+        <select name="destination">
+          <option value="">Todos os destinos</option>
+          {% for item in report.destination_options %}
+            <option value="{{ item.key }}" {% if item.key == report.selected_destination %}selected{% endif %}>{{ item.kind_label }}: {{ item.label }} · {{ item.total_fmt }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Pessoa, contribuinte, CPF ou destino
+        <input name="q" value="{{ q }}" placeholder="Nome, documento, ID, tipo ou campanha">
+      </label>
+      <button type="submit">Gerar</button>
+      <a class="button secondary" href="/reports/destinations/">Limpar</a>
+    </form>
+  </section>
+
+  {% if report %}
+    <section class="panel report-summary-panel">
+      <div class="report-summary-strip">
+        <div class="summary-pill"><span class="label">Total geral</span><strong>{{ report.summary.total_fmt }}</strong></div>
+        <div class="summary-pill"><span class="label">Destinos</span><strong>{{ report.summary.destinos }}</strong></div>
+        <div class="summary-pill"><span class="label">Contribuintes</span><strong>{{ report.summary.contribuintes }}</strong></div>
+        <div class="summary-pill"><span class="label">Remessas</span><strong>{{ report.summary.remessas }}</strong></div>
+        <div class="summary-pill"><span class="label">Fora do rol</span><strong>{{ report.summary.nr }}</strong></div>
+      </div>
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Resumo por destino</h2>
+      <div class="legend">
+        <span class="badge">SA membro ativo: {{ report.summary.sa }}</span>
+        <span class="badge">SI inativo: {{ report.summary.si }}</span>
+        <span class="badge">NF frequentador: {{ report.summary.nf }}</span>
+        <span class="badge">NV visitante: {{ report.summary.nv }}</span>
+        <span class="badge">NM arquivo morto: {{ report.summary.nm }}</span>
+        <span class="badge">NR sem vinculo: {{ report.summary.nr }}</span>
+      </div>
+      {% if report.selected_destination_label %}
+        <p class="muted small">Filtro ativo: {{ report.selected_destination_label }}</p>
+      {% endif %}
+      {% if report.truncated %}
+        <p class="alert">A lista foi limitada para proteger a tela. Use competencia, datas ou destino para fechar o periodo.</p>
+      {% endif %}
+      <div class="table-wrap report-table-wrap">
+        <table class="fit-table report-table report-destination-summary">
+          <thead>
+            <tr>
+              <th>Destino</th>
+              <th>Tipo</th>
+              <th class="num">Contribuintes</th>
+              <th class="num">Remessas</th>
+              <th class="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in report.destinations %}
+              <tr>
+                <td><strong>{{ item.label }}</strong></td>
+                <td><span class="badge">{{ item.kind_label }}</span></td>
+                <td class="num">{{ item.contribuintes }}</td>
+                <td class="num">{{ item.remessas }}</td>
+                <td class="num"><strong>{{ item.total_fmt }}</strong></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5">Nenhuma contribuicao encontrada para o filtro informado.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% for destination in report.destinations %}
+      <section class="panel report-panel">
+        <div class="section-head">
+          <div>
+            <p class="badge">{{ destination.kind_label }}</p>
+            <h2>{{ destination.label }}</h2>
+            <p class="muted small">{{ destination.contribuintes }} contribuinte(s), {{ destination.remessas }} remessa(s), total {{ destination.total_fmt }}.</p>
+          </div>
+        </div>
+
+        <h3>Contribuintes com nome</h3>
+        <div class="table-wrap report-table-wrap">
+          <table class="fit-table report-table report-destination-detail">
+            <thead>
+              <tr>
+                <th>Contribuinte</th>
+                <th>Rol</th>
+                <th>Remessas</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in destination.named_items %}
+                <tr>
+                  <td>
+                    {{ item.nome }}
+                    {% if item.documento or item.nome_original %}
+                      <br><span class="muted small">{{ item.documento }}{% if item.nome_original and item.nome_original != item.nome %} · origem: {{ item.nome_original }}{% endif %}</span>
+                    {% endif %}
+                  </td>
+                  <td><span class="badge">{{ item.sigla }}</span></td>
+                  <td class="remittance-cell">
+                    {% for remessa in item.remessas %}
+                      <a class="remittance-chip" href="{{ remessa.detail_url }}">{{ remessa.data }} · {{ remessa.valor_fmt }}</a>
+                    {% endfor %}
+                  </td>
+                  <td class="num"><strong>{{ item.total_fmt }}</strong></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="4">Nenhuma contribuicao com nome neste destino.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if destination.document_items %}
+          <h3 style="margin-top: 20px;">Somente documento/numero</h3>
+          <p class="muted small">Contribuicoes preservadas no relatorio, mas separadas para nao distorcer a leitura nominal.</p>
+          <div class="table-wrap report-table-wrap">
+            <table class="fit-table report-table report-destination-detail">
+              <thead>
+                <tr>
+                  <th>Documento</th>
+                  <th>Rol</th>
+                  <th>Remessas</th>
+                  <th class="num">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in destination.document_items %}
+                  <tr>
+                    <td>
+                      {{ item.nome }}
+                      {% if item.nome_original and item.nome_original != item.nome %}
+                        <br><span class="muted small">origem: {{ item.nome_original }}</span>
+                      {% endif %}
+                    </td>
+                    <td><span class="badge">{{ item.sigla }}</span></td>
+                    <td class="remittance-cell">
+                      {% for remessa in item.remessas %}
+                        <a class="remittance-chip" href="{{ remessa.detail_url }}">{{ remessa.data }} · {{ remessa.valor_fmt }}</a>
+                      {% endfor %}
+                    </td>
+                    <td class="num"><strong>{{ item.total_fmt }}</strong></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+      </section>
+    {% endfor %}
+  {% endif %}
+{% endblock %}

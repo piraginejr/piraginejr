@@ -1,0 +1,438 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">{% if form_data.is_editing %}Correcao auditada{% elif form_data.pending_envelope %}{{ form_data.pending_envelope.status_label }}{% else %}Envelope manual{% endif %}</p>
+        <h1>{% if form_data.is_editing %}Editar envelope lancado{% elif form_data.pending_envelope %}Digitar envelope do lote{% else %}Registrar envelope{% endif %}</h1>
+        <p>{% if form_data.is_editing %}A versao anterior sera preservada na auditoria e as contribuicoes ativas serao recriadas com os dados corrigidos.{% elif form_data.pending_envelope %}Confira a imagem arquivada, ajuste a data escrita no envelope e salve para lancar a contribuicao financeira.{% else %}A imagem fica arquivada por competencia e lote. O sistema so lanca as contribuicoes quando o total do envelope fecha com a soma das linhas.{% endif %}</p>
+      </div>
+      <div class="actions no-print">
+        {% if form_data.pending_envelope %}
+          <a class="button secondary" href="{{ form_data.pending_envelope.lot_url }}">Voltar para o lote</a>
+        {% else %}
+          <a class="button secondary" href="/contributions/envelopes/">Voltar para envelopes</a>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel">
+      <form method="post" enctype="multipart/form-data" {% if form_data.form_action %}action="{{ form_data.form_action }}"{% endif %}>
+        {% csrf_token %}
+        <input type="hidden" name="line_count" value="10">
+        {% if form_data.pending_envelope %}
+          <input type="hidden" name="lote_id" value="{{ form_data.pending_envelope.lote_id }}">
+        {% endif %}
+        <datalist id="envelope-people-options">
+          {% for person in form_data.people_options %}
+            <option value="Pessoa #{{ person.id }} · {{ person.nome }} · {{ person.sigla }}{% if person.codigo %} · Ficha {{ person.codigo }}{% endif %}{% if person.cpf %} · CPF {{ person.cpf }}{% endif %}"></option>
+          {% endfor %}
+        </datalist>
+        <datalist id="envelope-contributor-options">
+          {% for contributor in form_data.contributor_options %}
+            <option value="Contribuinte #{{ contributor.id }} · {{ contributor.nome }}{% if contributor.documento %} · {{ contributor.documento }}{% endif %}"></option>
+          {% endfor %}
+        </datalist>
+        <datalist id="envelope-participant-options">
+          {% for option in form_data.participant_options %}
+            <option value="{{ option.value }}">{{ option.label }}</option>
+          {% endfor %}
+        </datalist>
+        <div class="envelope-entry-grid">
+          <aside class="envelope-preview-panel">
+            <span class="label">Auditoria documental</span>
+            <h2>Previa para digitacao</h2>
+            <p class="small muted">Selecione a imagem ou PDF do envelope. A previa aparece aqui para o operador digitar olhando o documento original.</p>
+            <div class="envelope-preview-frame" data-envelope-preview-frame>
+              {% if form_data.pending_envelope and form_data.pending_envelope.image_url %}
+                {% if form_data.pending_envelope.is_image %}
+                  <img class="envelope-preview-image" src="{{ form_data.pending_envelope.image_url }}" alt="Envelope {{ form_data.pending_envelope.id }}" data-envelope-zoom-image>
+                {% else %}
+                  <iframe class="envelope-preview-pdf" src="{{ form_data.pending_envelope.image_url }}" title="Envelope {{ form_data.pending_envelope.id }}"></iframe>
+                {% endif %}
+              {% else %}
+                <div class="envelope-preview-placeholder" data-envelope-preview-placeholder>
+                  Aguardando selecao do arquivo do envelope.
+                </div>
+                <img class="envelope-preview-image" data-envelope-preview-image data-envelope-zoom-image alt="Previa do envelope selecionado" hidden>
+                <iframe class="envelope-preview-pdf" data-envelope-preview-pdf title="Previa do PDF do envelope" hidden></iframe>
+              {% endif %}
+            </div>
+            {% if form_data.pending_envelope %}
+              <p class="small muted">Arquivo: {{ form_data.pending_envelope.arquivo|default:"Envelope arquivado" }}</p>
+              {% if form_data.pending_envelope.image_url %}<a class="button secondary" href="{{ form_data.pending_envelope.image_url }}" target="_blank" rel="noopener">Abrir imagem em nova aba</a>{% endif %}
+            {% else %}
+              <p class="small muted" data-envelope-preview-name>Nenhum arquivo selecionado.</p>
+              <a class="button secondary" data-envelope-preview-open href="#" target="_blank" rel="noopener" hidden>Abrir previa em nova aba</a>
+            {% endif %}
+            <p class="small muted">A pasta sera criada em <b>data/envelope_uploads</b>, separada por competencia e lote. O hash do arquivo fica gravado para auditoria.</p>
+            <p class="small muted">Dica: passe o mouse sobre a imagem para usar a lupa de leitura manuscrita.</p>
+          </aside>
+
+          <div>
+            <h2>Dados indispensaveis</h2>
+            <p class="small muted">Esta primeira ficha concentra o que o operador precisa para salvar rapido. Conciliacao financeira fica recolhida logo abaixo.</p>
+            <div class="form-grid">
+              <label>
+                Data do recebimento
+                <input type="date" name="data_recebimento" value="{{ form_data.today }}" required>
+              </label>
+              <label>
+                Mes de competencia
+                <input type="month" name="competencia_mes" value="{{ form_data.default_competencia_mes }}" required {% if form_data.pending_envelope %}readonly{% endif %}>
+              </label>
+              <label>
+                Nome do lote
+                <input name="nome_lote" value="{{ form_data.default_lot_name }}" placeholder="Ex.: Envelopes Janeiro 26" {% if form_data.pending_envelope %}readonly{% endif %}>
+              </label>
+              <label>
+                Total do envelope
+                <input name="valor_total" value="{{ form_data.default_total }}" required placeholder="Ex.: 454,00">
+              </label>
+              <label>
+                Pessoa principal, se identificada
+                <input name="pessoa_ref" list="envelope-people-options" value="{{ form_data.selected_person_ref }}" placeholder="Digite nome, CPF ou ID">
+                <span class="small muted">As sugestoes mostram tambem o numero da ficha/codigo interno para diferenciar pessoas parecidas.</span>
+              </label>
+              <label>
+                Contribuinte auxiliar principal
+                <input name="contribuinte_ref" list="envelope-contributor-options" value="{{ form_data.selected_contributor_ref }}" placeholder="Digite nome, documento ou ID">
+              </label>
+              <label>
+                Nome lido no envelope
+                <input name="nome_informado" value="{{ form_data.default_nome_informado }}" placeholder="Opcional, se for diferente do cadastro">
+                <span class="small muted">Se a pessoa principal ja foi encontrada, nao precisa repetir o nome aqui.</span>
+              </label>
+              <label>
+                Telefone lido
+                <input name="telefone_informado" value="{{ form_data.default_telefone_informado }}" placeholder="Opcional">
+              </label>
+              <label class="wide">
+                Endereco lido
+                <input name="endereco_informado" value="{{ form_data.default_endereco_informado }}" placeholder="Rua, numero, bairro, cidade, CEP...">
+              </label>
+              <label>
+                Tipo principal do envelope
+                <select name="tipo_contribuicao_id_padrao" required>
+                  {% for option in form_data.type_options %}
+                    <option value="{{ option.id }}" {% if option.id == form_data.default_type_id or not form_data.default_type_id and option.codigo == "DIZIMO" %}selected{% endif %}>{{ option.nome }}</option>
+                  {% endfor %}
+                </select>
+                <span class="small muted">Use o rateio abaixo so quando houver mais de uma pessoa ou destino.</span>
+              </label>
+              <label>
+                Campanha / destinacao principal
+                <select name="campanha_id_padrao">
+                  <option value="">Sem campanha</option>
+                  {% for option in form_data.campaign_options %}
+                    <option value="{{ option.id }}" {% if option.id == form_data.default_campaign_id %}selected{% endif %}>{{ option.nome }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Forma de recebimento
+                <select name="forma_recebimento_id">
+                  <option value="">Nao informada</option>
+                  {% for option in form_data.receiving_options %}
+                    <option value="{{ option.id }}" {% if option.id == form_data.default_form_id %}selected{% endif %}>{{ option.nome }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Status operacional
+                <select name="status_operacional">
+                  {% for option in form_data.status_options %}
+                    <option value="{{ option.value }}" {% if option.value == form_data.default_status %}selected{% endif %}>{{ option.label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              {% if not form_data.pending_envelope %}
+                <label class="wide envelope-upload-label" data-envelope-upload-label>
+                  Imagem ou PDF do envelope
+                  <span class="envelope-upload-callout">Clique aqui para escolher a imagem/PDF do envelope ou arraste o arquivo para esta area</span>
+                  <input type="file" name="imagem_envelope" accept=".jpg,.jpeg,.png,.pdf,.webp,.tif,.tiff,image/*,application/pdf" data-envelope-file-input>
+                  <span class="small muted">Usa o mesmo mecanismo de upload da importacao de pessoas. Depois de escolher, a previa aparece no painel ao lado.</span>
+                </label>
+                <label class="wide">
+                  Caminho local do arquivo, se o seletor nao abrir
+                  <input name="imagem_envelope_path" placeholder="/Users/piraginejr/.../image0222.jpg">
+                  <span class="small muted">Opcional. Use apenas se o botao de escolher arquivo do navegador nao abrir.</span>
+                </label>
+              {% endif %}
+              <label class="wide">
+                Origem operacional
+                <input name="origem_operacional" value="{{ form_data.default_origin }}" placeholder="Ex.: caixa janeiro, envelope digitalizado lote 01">
+              </label>
+              <label class="wide">
+                Observacoes gerais
+                <textarea name="observacoes" placeholder="Observacoes que valem para o envelope inteiro.">{{ form_data.default_observacoes }}</textarea>
+              </label>
+              <label class="wide">
+                Justificativa obrigatoria
+                <textarea name="justificativa" required>{{ form_data.default_justification }}</textarea>
+              </label>
+            </div>
+            <div class="actions compact-actions">
+              <button type="submit">{% if form_data.is_editing %}Salvar correcao auditada{% elif form_data.pending_envelope %}Salvar agora e ir para o proximo{% else %}Salvar agora e lancar{% endif %}</button>
+            </div>
+
+            <details class="wide optional-panel">
+              <summary>Rastreabilidade financeira opcional</summary>
+              <p class="small muted">Use quando o envelope trouxer numero de cheque, comprovante de cartao, autorizacao, NSU/TID ou dado que ajude a conciliar com extratos futuros.</p>
+              <div class="form-grid">
+                <label>
+                  Forma identificada
+                  <select name="rastreio_forma_identificada">
+                    {% for option in form_data.traceability_form_options %}
+                      <option value="{{ option.value }}" {% if option.value == form_data.traceability.forma_identificada %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>
+                  Banco / operadora
+                  <input name="rastreio_banco_operadora" value="{{ form_data.traceability.banco_operadora }}" placeholder="Ex.: Bradesco, Sicoob, Cielo, Rede">
+                </label>
+                <label>
+                  Numero do cheque
+                  <input name="rastreio_numero_cheque" value="{{ form_data.traceability.numero_cheque }}" placeholder="Se houver">
+                </label>
+                <label>
+                  Operacao / autorizacao
+                  <input name="rastreio_numero_operacao" value="{{ form_data.traceability.numero_operacao }}" placeholder="Numero do comprovante/cartao">
+                </label>
+                <label>
+                  NSU / TID
+                  <input name="rastreio_nsu_tid" value="{{ form_data.traceability.nsu_tid }}" placeholder="Se constar no comprovante">
+                </label>
+                <label>
+                  Final do cartao
+                  <input name="rastreio_ultimos_digitos_cartao" value="{{ form_data.traceability.ultimos_digitos_cartao }}" placeholder="Ultimos digitos">
+                </label>
+                <label>
+                  Data da operacao
+                  <input type="date" name="rastreio_data_operacao" value="{{ form_data.traceability.data_operacao }}">
+                </label>
+                <label>
+                  Valor da operacao
+                  <input name="rastreio_valor_operacao" value="{{ form_data.traceability.valor_operacao }}" placeholder="Ex.: 454,00">
+                </label>
+                <label>
+                  Status de conciliacao
+                  <select name="rastreio_status_conciliacao">
+                    {% for option in form_data.traceability_status_options %}
+                      <option value="{{ option.value }}" {% if option.value == form_data.traceability.status_conciliacao %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label class="wide">
+                  Observacao de conciliacao
+                  <input name="rastreio_observacoes" value="{{ form_data.traceability.observacoes }}" placeholder="Ex.: comprovante anexado ao envelope, aguardando extrato da operadora">
+                </label>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <h2>Rateio em cartoes por pessoa, contribuinte e destinacao</h2>
+        <p class="muted">Se o envelope tiver uma unica pessoa e uma unica destinacao, deixe os cartoes em branco: o sistema lancara o total para a pessoa/contribuinte principal usando o tipo principal. Para dividir, informe um cartao por pessoa, contribuinte ou destino.</p>
+        <div class="envelope-rateio-grid">
+          {% for line in form_data.line_defaults %}
+            <article class="envelope-rateio-card">
+              <div class="rateio-card-head">
+                <span class="badge">Linha {{ line.index }}</span>
+                {% if line.value %}<strong>{{ line.value }}</strong>{% endif %}
+              </div>
+              <div class="form-grid mini-grid">
+                <label class="wide">
+                  Pessoa, contribuinte ou novo nome
+                  <input name="linha_participante_ref_{{ line.index }}" list="envelope-participant-options" value="{{ line.participant_ref }}" placeholder="Digite nome, CPF/CNPJ, ficha ou novo nome">
+                  <span class="small muted">Se escolher uma sugestao, o sistema identifica se e pessoa ou contribuinte auxiliar. Se nao existir, cria como contribuinte auxiliar.</span>
+                </label>
+                <label>
+                  Documento opcional
+                  <input name="linha_documento_{{ line.index }}" value="{{ line.document }}" placeholder="CPF/CNPJ se houver">
+                </label>
+                <label>
+                  Valor da linha
+                  <input name="linha_valor_{{ line.index }}" value="{{ line.value }}" placeholder="0,00">
+                </label>
+                <label>
+                  Tipo
+                  <select name="linha_tipo_contribuicao_id_{{ line.index }}">
+                    <option value="">Usar tipo principal</option>
+                    {% for option in form_data.type_options %}
+                      <option value="{{ option.id }}" {% if option.id == line.type_id %}selected{% endif %}>{{ option.nome }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>
+                  Campanha / destinacao
+                  <select name="linha_campanha_id_{{ line.index }}">
+                    <option value="">Sem campanha</option>
+                    {% for option in form_data.campaign_options %}
+                      <option value="{{ option.id }}" {% if option.id == line.campaign_id %}selected{% endif %}>{{ option.nome }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label class="wide">
+                  Observacao da linha
+                  <input name="linha_observacoes_{{ line.index }}" value="{{ line.observations }}" placeholder="Ex.: missões, filho, terreno, cartao...">
+                </label>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+        <div class="actions">
+          <button type="submit">{% if form_data.is_editing %}Salvar correcao auditada{% elif form_data.pending_envelope %}Salvar envelope e ir para o proximo{% else %}Salvar envelope e lancar contribuicoes{% endif %}</button>
+        </div>
+      </form>
+      {% if form_data.pending_envelope and form_data.pending_envelope.ignore_url %}
+        <form class="actions no-print" method="post" action="{{ form_data.pending_envelope.ignore_url }}">
+          {% csrf_token %}
+          <input type="hidden" name="lote_id" value="{{ form_data.pending_envelope.lote_id }}">
+          <label class="wide">
+            Justificativa para ignorar este envelope
+            <input name="justificativa_ignorar" placeholder="Ex.: imagem repetida, envelope em branco, documento ilegivel.">
+          </label>
+          <button class="button secondary" type="submit">Ignorar envelope</button>
+        </form>
+      {% endif %}
+    </section>
+    <script>
+      (function () {
+        function enableEnvelopeMagnifier() {
+          document.querySelectorAll("[data-envelope-preview-frame]").forEach(function (frame) {
+            const image = frame.querySelector("[data-envelope-zoom-image]");
+            if (!image || image.hidden || image.dataset.zoomReady === "1") return;
+            image.dataset.zoomReady = "1";
+            const lens = document.createElement("div");
+            lens.className = "envelope-zoom-lens";
+            frame.appendChild(lens);
+            const zoom = 2.35;
+            function update(event) {
+              if (!image.complete || !image.naturalWidth || !image.naturalHeight) return;
+              const frameRect = frame.getBoundingClientRect();
+              const imageRect = image.getBoundingClientRect();
+              const x = Math.min(Math.max(event.clientX - imageRect.left, 0), imageRect.width);
+              const y = Math.min(Math.max(event.clientY - imageRect.top, 0), imageRect.height);
+              const lensSize = lens.offsetWidth || 210;
+              const left = Math.min(Math.max(event.clientX - frameRect.left + 18, 0), Math.max(frameRect.width - lensSize, 0));
+              const top = Math.min(Math.max(event.clientY - frameRect.top + 18, 0), Math.max(frameRect.height - lensSize, 0));
+              lens.style.left = left + "px";
+              lens.style.top = top + "px";
+              lens.style.backgroundImage = "url('" + image.currentSrc + "')";
+              lens.style.backgroundSize = (imageRect.width * zoom) + "px " + (imageRect.height * zoom) + "px";
+              lens.style.backgroundPosition = (-x * zoom + lensSize / 2) + "px " + (-y * zoom + lensSize / 2) + "px";
+            }
+            image.addEventListener("mouseenter", function () {
+              frame.classList.add("zooming");
+            });
+            image.addEventListener("mousemove", update);
+            image.addEventListener("mouseleave", function () {
+              frame.classList.remove("zooming");
+            });
+          });
+        }
+        enableEnvelopeMagnifier();
+
+        const input = document.querySelector("[data-envelope-file-input]");
+        const uploadLabel = document.querySelector("[data-envelope-upload-label]");
+        const placeholder = document.querySelector("[data-envelope-preview-placeholder]");
+        const image = document.querySelector("[data-envelope-preview-image]");
+        const pdf = document.querySelector("[data-envelope-preview-pdf]");
+        const name = document.querySelector("[data-envelope-preview-name]");
+        const open = document.querySelector("[data-envelope-preview-open]");
+        let objectUrl = "";
+        function resetPreview() {
+          if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = "";
+          }
+          if (image) {
+            image.hidden = true;
+            image.removeAttribute("src");
+          }
+          if (pdf) {
+            pdf.hidden = true;
+            pdf.removeAttribute("src");
+          }
+          if (placeholder) {
+            placeholder.hidden = false;
+            placeholder.textContent = "Aguardando selecao do arquivo do envelope.";
+          }
+          if (name) name.textContent = "Nenhum arquivo selecionado.";
+          if (open) {
+            open.hidden = true;
+            open.removeAttribute("href");
+          }
+        }
+        if (!input) return;
+        if (uploadLabel) {
+          ["dragenter", "dragover"].forEach(function (eventName) {
+            uploadLabel.addEventListener(eventName, function (event) {
+              event.preventDefault();
+              uploadLabel.classList.add("dragover");
+            });
+          });
+          ["dragleave", "drop"].forEach(function (eventName) {
+            uploadLabel.addEventListener(eventName, function (event) {
+              event.preventDefault();
+              uploadLabel.classList.remove("dragover");
+            });
+          });
+          uploadLabel.addEventListener("drop", function (event) {
+            const files = event.dataTransfer && event.dataTransfer.files;
+            if (!files || !files.length) return;
+            try {
+              input.files = files;
+            } catch (error) {
+              return;
+            }
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        }
+        input.addEventListener("change", function () {
+          resetPreview();
+          const file = input.files && input.files[0];
+          if (!file) return;
+          const fileName = file.name || "envelope";
+          const lowerName = fileName.toLowerCase();
+          objectUrl = URL.createObjectURL(file);
+          if (name) name.textContent = fileName;
+          if (open) {
+            open.href = objectUrl;
+            open.hidden = false;
+          }
+          if (file.type === "application/pdf" || lowerName.endsWith(".pdf")) {
+            if (placeholder) placeholder.hidden = true;
+            if (pdf) {
+              pdf.src = objectUrl;
+              pdf.hidden = false;
+            }
+            return;
+          }
+          if (file.type.startsWith("image/") || /\.(jpe?g|png|webp|tiff?)$/.test(lowerName)) {
+            if (placeholder) placeholder.hidden = true;
+            if (image) {
+              image.src = objectUrl;
+              image.hidden = false;
+              image.dataset.zoomReady = "";
+              image.addEventListener("load", enableEnvelopeMagnifier, { once: true });
+            }
+            return;
+          }
+          if (placeholder) {
+            placeholder.hidden = false;
+            placeholder.textContent = "Arquivo selecionado. Se a previa nao aparecer, use o botao de abrir em nova aba.";
+          }
+        });
+        window.addEventListener("beforeunload", function () {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+        });
+      })();
+    </script>
+  {% else %}
+    <section class="panel"><h1>Nao foi possivel abrir o cadastro de envelope.</h1></section>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    POWER_CHURCH_DJANGO_DEBUG=false \
+    POWER_CHURCH_DJANGO_ALLOWED_HOSTS=*
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        sqlite3 \
+        tesseract-ocr \
+        tesseract-ocr-por \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/requirements/base.txt /tmp/base.txt
+COPY deploy/requirements/django.txt /tmp/django.txt
+RUN pip install --no-cache-dir -r /tmp/django.txt
+
+COPY . /app
+RUN mkdir -p /app/data /app/data/homologacao /app/data/pix_uploads /app/data/statement_uploads /app/data/people_uploads /app/data/envelope_uploads
+
+WORKDIR /app/power_church_django
+EXPOSE 8000
+
+CMD ["gunicorn", "power_church_site.wsgi:application", "--bind", "0.0.0.0:8000"]

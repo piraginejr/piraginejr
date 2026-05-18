@@ -1,0 +1,99 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ form_data.person.sigla }} · {{ form_data.person.status }}</p>
+        <h1>Nova contribuicao</h1>
+        <p>{{ form_data.person.nome }} · CPF {{ form_data.person.cpf|default:"nao informado" }} · ja contribuido {{ form_data.person.total_fmt }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button" href="/contributions/envelopes/new/?person_id={{ form_data.person.id }}">Subir envelope com imagem</a>
+        <a class="button secondary" href="/people/{{ form_data.person.id }}/">Voltar para ficha</a>
+      </div>
+    </section>
+
+    <section class="panel no-print">
+      <h2>Se for envelope digitalizado</h2>
+      <p>Esta tela abaixo registra uma contribuicao simples, sem imagem. Para lancar olhando o envelope, arquivar a imagem e ratear varias destinacoes, use o fluxo proprio de envelopes.</p>
+      <div class="actions">
+        <a class="button" href="/contributions/envelopes/new/?person_id={{ form_data.person.id }}">Abrir tela de envelope com imagem</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Lancamento manual com auditoria</h2>
+      <p>Use para contribuicoes identificadas fora dos lotes bancarios ou para registros conferidos manualmente. A justificativa fica gravada na auditoria.</p>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="pessoa_id" value="{{ form_data.person.id }}">
+        <div class="form-grid">
+          <label>
+            Data do recebimento
+            <input type="date" name="data_recebimento" required>
+          </label>
+          <label>
+            Valor
+            <input name="valor" required placeholder="Ex.: 150,00">
+          </label>
+          <label>
+            Tipo de contribuicao
+            <select name="tipo_contribuicao_id" required>
+              <option value="">Selecione</option>
+              {% for option in form_data.type_options %}
+                <option value="{{ option.id }}">{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Campanha / destinacao especifica
+            <select name="campanha_id">
+              <option value="">Sem campanha</option>
+              {% for option in form_data.campaign_options %}
+                <option value="{{ option.id }}">{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Forma de recebimento
+            <select name="forma_recebimento_id">
+              <option value="">Nao informada</option>
+              {% for option in form_data.receiving_options %}
+                <option value="{{ option.id }}">{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Status operacional
+            <select name="status_operacional">
+              {% for option in form_data.status_options %}
+                <option value="{{ option.value }}" {% if option.value == "regular" %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide">
+            Observacoes
+            <textarea name="observacoes"></textarea>
+          </label>
+          <label class="wide">
+            Justificativa obrigatoria
+            <textarea name="justificativa" required placeholder="Ex.: Lancamento manual conferido pelo envelope/tesouraria."></textarea>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Salvar contribuicao</button>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="hero">
+      <div>
+        <p class="badge">Lancamento manual</p>
+        <h1>Escolha uma pessoa</h1>
+        <p>Para registrar uma contribuicao manual, abra primeiro a ficha da pessoa e use o botao Lancar contribuicao.</p>
+      </div>
+      <a class="button" href="/people/">Ir para pessoas</a>
+    </section>
+  {% endif %}
+{% endblock %}

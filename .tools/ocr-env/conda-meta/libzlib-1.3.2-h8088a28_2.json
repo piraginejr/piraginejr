@@ -1,0 +1,54 @@
+{
+    "arch": "arm64",
+    "build": "h8088a28_2",
+    "build_number": 2,
+    "build_string": "h8088a28_2",
+    "channel": "conda-forge",
+    "constrains": [
+        "zlib 1.3.2 *_2"
+    ],
+    "depends": [
+        "__osx >=11.0"
+    ],
+    "extracted_package_dir": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2",
+    "files": [
+        "lib/libz.1.3.2.dylib",
+        "lib/libz.1.dylib"
+    ],
+    "fn": "libzlib-1.3.2-h8088a28_2.conda",
+    "license": "Zlib",
+    "license_family": "Other",
+    "link": {
+        "source": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2",
+        "type": 1
+    },
+    "md5": "bc5a5721b6439f2f62a84f2548136082",
+    "name": "libzlib",
+    "package_tarball_full_path": "/Users/piraginejr/.local/share/mamba/pkgs/https/conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.tar.bz2",
+    "paths_data": {
+        "paths": [
+            {
+                "_path": "lib/libz.1.3.2.dylib",
+                "path_type": "hardlink",
+                "sha256": "5aedf4488edbe21dd7c46f3aa47dc4f47e2e5bc42c153482650388f89e414e87",
+                "sha256_in_prefix": "5aedf4488edbe21dd7c46f3aa47dc4f47e2e5bc42c153482650388f89e414e87",
+                "size_in_bytes": 124304
+            },
+            {
+                "_path": "lib/libz.1.dylib",
+                "path_type": "softlink",
+                "sha256_in_prefix": "5aedf4488edbe21dd7c46f3aa47dc4f47e2e5bc42c153482650388f89e414e87",
+                "size_in_bytes": 124304
+            }
+        ],
+        "paths_version": 1
+    },
+    "platform": "osx",
+    "requested_spec": "",
+    "sha256": "361415a698514b19a852f5d1123c5da746d4642139904156ddfca7c922d23a05",
+    "size": 47759,
+    "subdir": "osx-arm64",
+    "timestamp": 1774072956,
+    "url": "https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda",
+    "version": "1.3.2"
+}

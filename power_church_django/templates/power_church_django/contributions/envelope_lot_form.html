@@ -1,0 +1,87 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">Lote de envelopes</p>
+        <h1>Criar lote de envelopes</h1>
+        <p>O lote organiza as imagens e preenche os padroes. Nenhuma contribuicao financeira sera criada ate o operador digitar cada envelope.</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/contributions/envelopes/">Voltar para envelopes</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="form-grid">
+          <label>
+            Nome do lote
+            <input name="nome_lote" required placeholder="Ex.: Envelopes Janeiro 26">
+          </label>
+          <label>
+            Mes de competencia
+            <input type="month" name="competencia_mes" value="{{ form_data.default_competencia_mes }}" required>
+          </label>
+          <label>
+            Data padrao sugerida
+            <input type="date" name="data_padrao_recebimento" value="{{ form_data.default_data_recebimento }}" required>
+            <span class="small muted">Apenas preenche inicialmente cada envelope; a data final sera editada envelope por envelope.</span>
+          </label>
+          <label>
+            Origem operacional
+            <input name="origem_operacional" value="{{ form_data.default_origin }}" required>
+          </label>
+          <label>
+            Tipo principal
+            <select name="tipo_contribuicao_id_padrao" required>
+              {% for option in form_data.type_options %}
+                <option value="{{ option.id }}" {% if option.id == form_data.default_type_id %}selected{% endif %}>{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Campanha / destinacao principal
+            <select name="campanha_id_padrao">
+              <option value="">Sem campanha</option>
+              {% for option in form_data.campaign_options %}
+                <option value="{{ option.id }}" {% if option.id == form_data.default_campaign_id %}selected{% endif %}>{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Forma de recebimento
+            <select name="forma_recebimento_id">
+              <option value="">Nao informada</option>
+              {% for option in form_data.receiving_options %}
+                <option value="{{ option.id }}" {% if option.id == form_data.default_form_id %}selected{% endif %}>{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide envelope-upload-label">
+            Upload multiplo de imagens/PDFs
+            <span class="envelope-upload-callout">Escolha todos os envelopes digitalizados do lote</span>
+            <input type="file" name="imagens_envelope" multiple accept=".jpg,.jpeg,.png,.pdf,.webp,.tif,.tiff,image/*,application/pdf">
+            <span class="small muted">O sistema ordena pelo nome do arquivo para seguir a sequencia do scanner. Limite local configurado: ate 5000 arquivos por lote.</span>
+          </label>
+          <label class="wide">
+            Pasta local no Mac, se preferir
+            <input name="pasta_origem" placeholder="/Users/piraginejr/.../ENVELOPES JANEIRO 26">
+            <span class="small muted">Aceita caminho normal, caminho com espacos escapados e links file:// copiados do Finder. Na nuvem, o caminho principal sera sempre o upload multiplo.</span>
+          </label>
+          <label class="wide">
+            Observacoes do lote
+            <textarea name="observacoes" placeholder="Ex.: caixa janeiro, envelopes digitalizados em lote 01."></textarea>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Criar lote de envelopes</button>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Nao foi possivel abrir a criacao do lote.</h1></section>
+  {% endif %}
+{% endblock %}

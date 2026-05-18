@@ -1,0 +1,131 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">Recebimentos</p>
+        <h1>Lancamento manual assistido</h1>
+        <p>Use para envelopes, comprovantes de cartao, e-mails ou remessas informadas fora do extrato bancario. A soma das linhas precisa fechar com o total informado.</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/contributions/">Voltar para contribuicoes</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Origem e conferencia</h2>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="line_count" value="8">
+        <div class="form-grid">
+          <label>
+            Data do recebimento
+            <input type="date" name="data_recebimento" value="{{ form_data.today }}" required>
+          </label>
+          <label>
+            Total do comprovante/envelope
+            <input name="valor_total" required placeholder="Ex.: 1000,00">
+          </label>
+          <label>
+            Forma de recebimento
+            <select name="forma_recebimento_id">
+              <option value="">Nao informada</option>
+              {% for option in form_data.receiving_options %}
+                <option value="{{ option.id }}">{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Status operacional
+            <select name="status_operacional">
+              {% for option in form_data.status_options %}
+                <option value="{{ option.value }}" {% if option.value == "regular" %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide">
+            Origem operacional
+            <input name="origem_operacional" placeholder="Ex.: envelope caixa 07/05, comprovante cartao, e-mail do contribuinte">
+          </label>
+          <label class="wide">
+            Observacoes gerais
+            <textarea name="observacoes" placeholder="Observacoes que valem para todas as linhas."></textarea>
+          </label>
+          <label class="wide">
+            Justificativa obrigatoria
+            <textarea name="justificativa" required placeholder="Ex.: Lancamento manual conferido por envelope/comprovante informado ao operador."></textarea>
+          </label>
+        </div>
+
+        <h2>Rateio por pessoa, contribuinte e destinacao</h2>
+        <p class="muted">Preencha uma linha para cada pessoa/destinacao. Se a pessoa nao estiver no rol, use contribuinte auxiliar ou informe um novo nome.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Linha</th>
+                <th>Pessoa do rol</th>
+                <th>Contribuinte auxiliar</th>
+                <th>Novo contribuinte</th>
+                <th>Documento</th>
+                <th>Tipo</th>
+                <th>Campanha</th>
+                <th class="num">Valor</th>
+                <th>Obs.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for index in form_data.line_range %}
+                <tr>
+                  <td>{{ index }}</td>
+                  <td>
+                    <select name="linha_pessoa_id_{{ index }}">
+                      <option value="">-</option>
+                      {% for person in form_data.people_options %}
+                        <option value="{{ person.id }}">{{ person.nome }} · {{ person.sigla }}{% if person.cpf %} · {{ person.cpf }}{% endif %}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="linha_contribuinte_id_{{ index }}">
+                      <option value="">-</option>
+                      {% for contributor in form_data.contributor_options %}
+                        <option value="{{ contributor.id }}">{{ contributor.nome }}{% if contributor.documento %} · {{ contributor.documento }}{% endif %}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td><input name="linha_contribuinte_nome_{{ index }}" placeholder="Nome se nao estiver na lista"></td>
+                  <td><input name="linha_documento_{{ index }}" placeholder="CPF/CNPJ opcional"></td>
+                  <td>
+                    <select name="linha_tipo_contribuicao_id_{{ index }}">
+                      <option value="">Selecione</option>
+                      {% for option in form_data.type_options %}
+                        <option value="{{ option.id }}">{{ option.nome }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="linha_campanha_id_{{ index }}">
+                      <option value="">Sem campanha</option>
+                      {% for option in form_data.campaign_options %}
+                        <option value="{{ option.id }}">{{ option.nome }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td><input name="linha_valor_{{ index }}" placeholder="0,00"></td>
+                  <td><input name="linha_observacoes_{{ index }}" placeholder="Ex.: dizimo do filho"></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button type="submit">Salvar rateio manual</button>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Nao foi possivel abrir o lancamento manual.</h1></section>
+  {% endif %}
+{% endblock %}

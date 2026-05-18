@@ -1,0 +1,88 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if lot %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ lot.competencia }} · {{ lot.status_label }}</p>
+        <h1>{{ lot.nome }}</h1>
+        <p>{{ lot.counts.total }} imagem(ns) · {{ lot.counts.pendentes }} pendente(s) · {{ lot.counts.lancados }} lancada(s) · total lancado {{ lot.total_lancado_fmt }}</p>
+      </div>
+      <div class="actions no-print">
+        {% if lot.next_pending_url %}
+          <a class="button" href="{{ lot.next_pending_url }}">Digitar proximo envelope</a>
+        {% endif %}
+        <a class="button secondary" href="/contributions/envelopes/">Voltar para envelopes</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="grid">
+        <div class="card"><span class="label">Total de imagens</span><strong>{{ lot.counts.total }}</strong></div>
+        <div class="card"><span class="label">Aguardando digitacao</span><strong>{{ lot.counts.pendentes }}</strong></div>
+        <div class="card"><span class="label">Lancadas</span><strong>{{ lot.counts.lancados }}</strong></div>
+        <div class="card"><span class="label">Ignoradas</span><strong>{{ lot.counts.ignorados }}</strong></div>
+        <div class="card"><span class="label">Duplicadas</span><strong>{{ lot.counts.duplicados }}</strong></div>
+        <div class="card"><span class="label">Total lancado</span><strong>{{ lot.total_lancado_fmt }}</strong></div>
+      </div>
+      <p class="muted">Data padrao sugerida: {{ lot.data_padrao }} · Origem: {{ lot.origem_operacional }}</p>
+      {% if lot.caminho_pasta %}
+        <p class="small muted">Pasta do lote: {{ lot.caminho_pasta }}</p>
+      {% endif %}
+      {% if lot.observacoes %}
+        <p class="small muted">Observacoes: {{ lot.observacoes }}</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Fila de digitacao</h2>
+      <div class="table-wrap">
+        <table class="fit-table">
+          <thead>
+            <tr>
+              <th>Ordem</th>
+              <th>Arquivo</th>
+              <th>Data</th>
+              <th>Envelope</th>
+              <th>Forma</th>
+              <th>Status</th>
+              <th class="num">Total</th>
+              <th>Acao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in lot.items %}
+              <tr>
+                <td>#{{ item.ordem }}</td>
+                <td>
+                  {% if item.image_url %}
+                    <a href="{{ item.image_url }}" target="_blank" rel="noopener">{{ item.arquivo|default:"Abrir imagem" }}</a>
+                  {% else %}
+                    {{ item.arquivo|default:"-" }}
+                  {% endif %}
+                  {% if item.observacoes %}<div class="small muted">{{ item.observacoes }}</div>{% endif %}
+                </td>
+                <td>{{ item.data|default:"-" }}</td>
+                <td>{{ item.nome }}</td>
+                <td>{{ item.forma }}</td>
+                <td><span class="badge">{{ item.status_label }}</span></td>
+                <td class="num">{{ item.total_fmt }}</td>
+                <td>
+                  {% if item.launch_url %}
+                    <a class="button" href="{{ item.launch_url }}">Digitar</a>
+                  {% else %}
+                    <a class="button secondary" href="{{ item.detail_url }}">Abrir</a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="8">Nenhum envelope neste lote.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Lote de envelopes nao encontrado.</h1></section>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,69 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.receipt.status }} · {{ detail.receipt.numero }}</p>
+        <h1>Recibo de contribuicoes</h1>
+        <p>{{ detail.receipt.person_name }} · CPF {{ detail.receipt.person_cpf|default:"nao informado" }} · {{ detail.receipt.data }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/receipts/">Voltar para recibos</a>
+        <a class="button secondary" href="/people/{{ detail.receipt.person_id }}/">Abrir ficha</a>
+        <button type="button" onclick="window.print()">Imprimir recibo</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Valor total</span><strong>{{ detail.receipt.valor_fmt }}</strong></div>
+      <div class="card"><span class="label">Emissao</span><strong style="font-size:20px">{{ detail.receipt.data }}</strong></div>
+      <div class="card"><span class="label">Periodo</span><strong style="font-size:20px">{{ detail.receipt.periodo_inicio }} a {{ detail.receipt.periodo_fim }}</strong></div>
+      <div class="card"><span class="label">Organizacao</span><strong style="font-size:20px">{{ detail.receipt.organizacao }}</strong></div>
+    </section>
+
+    <section class="panel">
+      <h2>Declaracao</h2>
+      <p>Recebemos de <strong>{{ detail.receipt.person_name }}</strong> as contribuicoes abaixo relacionadas, no valor total de <strong>{{ detail.receipt.valor_fmt }}</strong>.</p>
+      {% if detail.receipt.observacoes %}
+        <p><strong>Observacoes:</strong> {{ detail.receipt.observacoes }}</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Contribuicoes do recibo</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Competencia</th>
+              <th>Tipo</th>
+              <th>Forma</th>
+              <th>Observacoes</th>
+              <th class="num">Valor</th>
+              <th class="no-print">Origem</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in detail.items %}
+              <tr>
+                <td>{{ item.data }}</td>
+                <td>{{ item.competencia|default:"-" }}</td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.forma|default:"-" }}</td>
+                <td>{{ item.observacoes|default:"-" }}</td>
+                <td class="num">{{ item.valor_fmt }}</td>
+                <td class="no-print"><a class="badge" href="/contributions/{{ item.contribution_id }}/">Contribuicao #{{ item.contribution_id }}</a></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="7">Recibo sem itens vinculados.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Recibo nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

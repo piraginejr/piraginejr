@@ -1,0 +1,51 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge danger">Purga final</p>
+      <h1>Purga segura</h1>
+      <p>Esta acao apaga fisicamente a ficha que ja esta na lixeira. Ela e bloqueada se houver contribuicao, recibo ou lancamento financeiro vinculado.</p>
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/people/trash/">Cancelar</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <h2>{{ item.nome }}</h2>
+        <p class="muted">ID original {{ item.person_id }}{% if item.codigo_original %} · Codigo {{ item.codigo_original }}{% endif %} · CPF {{ item.cpf|default:"nao informado" }}</p>
+      </div>
+      <span class="badge danger">superusuario</span>
+    </div>
+
+    {% if item.purge_blockers %}
+      <p class="alert">Purga bloqueada: {{ item.purge_blockers }}. Mantenha a ficha na lixeira segura ou trate os vinculos antes de tentar novamente.</p>
+    {% else %}
+      <p class="alert">Use somente depois de auditar a lixeira. A ficha, contatos, enderecos, perfis, vinculos familiares e fotos serao removidos; ficara apenas um tombstone tecnico sem snapshot completo.</p>
+      <form method="post">
+        {% csrf_token %}
+        <div class="form-grid">
+          <label class="wide">
+            Justificativa da purga final
+            <textarea name="reason" required placeholder="Explique por que a ficha pode ser apagada definitivamente"></textarea>
+          </label>
+          <label>
+            Digite exatamente o nome exibido
+            <input name="confirmation" required placeholder="{{ item.nome }}">
+          </label>
+          <label>
+            Sua senha
+            <input type="password" name="password" required autocomplete="current-password">
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Confirmar purga segura</button>
+          <a class="button secondary" href="/people/trash/">Cancelar</a>
+        </div>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

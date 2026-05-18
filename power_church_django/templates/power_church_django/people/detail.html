@@ -1,0 +1,395 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      {% if detail.person.photo_url %}
+        <img class="person-photo person-photo-large" src="{{ detail.person.photo_url }}" alt="Foto de {{ detail.person.nome }}">
+      {% else %}
+        <span class="person-photo-placeholder person-photo-large">{{ detail.person.sigla }}</span>
+      {% endif %}
+      <div>
+        <p class="badge">{{ detail.person.sigla }} · {{ detail.person.status }}</p>
+        <h1>{{ detail.person.nome }}</h1>
+        <p>{{ detail.person.codigo|default:"Sem numero" }} · CPF {{ detail.person.cpf|default:"nao informado" }} · {{ detail.person.email|default:"sem e-mail" }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/people/">Voltar para pessoas</a>
+        <a class="button" href="/people/{{ detail.person.id }}/edit/">Editar ficha</a>
+        {% if can_manage_finance %}<a class="button" href="/contributions/new/?person_id={{ detail.person.id }}">Lancar contribuicao</a>{% endif %}
+        {% if can_view_finance %}<a class="button" href="/contributions/statements/{{ detail.person.id }}/">Extrato</a>{% endif %}
+        {% if can_manage_finance %}<a class="button" href="/receipts/new/?person_id={{ detail.person.id }}">Gerar recibo</a>{% endif %}
+        {% if can_delete_people %}<a class="button secondary" href="/people/{{ detail.person.id }}/delete/">Excluir ficha</a>{% endif %}
+      </div>
+    </section>
+
+    <section class="grid">
+      {% if can_view_finance %}<div class="card"><span class="label">Total contribuido</span><strong>{{ detail.total_contributions_fmt }}</strong></div>{% endif %}
+      <div class="card"><span class="label">Telefone</span><strong style="font-size: 20px">{{ detail.person.telefone|default:"-" }}</strong></div>
+      <div class="card"><span class="label">WhatsApp</span><strong style="font-size: 20px">{{ detail.person.whatsapp|default:"-" }}</strong></div>
+      <div class="card"><span class="label">Nascimento</span><strong style="font-size: 20px">{{ detail.person.data_nascimento|default:"-" }}</strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Dados cadastrais</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><th>Nome social</th><td>{{ detail.person.nome_social|default:"-" }}</td></tr>
+              <tr><th>RG</th><td>{{ detail.person.rg|default:"-" }}</td></tr>
+              <tr><th>Sexo</th><td>{{ detail.person.sexo|default:"-" }}</td></tr>
+              <tr><th>Estado civil</th><td>{{ detail.person.estado_civil|default:"-" }}</td></tr>
+              <tr><th>Ativo</th><td>{{ detail.person.ativo }}</td></tr>
+              <tr><th>Criado em</th><td>{{ detail.person.criado_em }}</td></tr>
+              <tr><th>Atualizado em</th><td>{{ detail.person.atualizado_em|default:"-" }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Perfis e identidades financeiras</h2>
+        <div class="legend">
+          {% for profile in detail.profiles %}
+            <span class="badge">{{ profile.perfil }}</span>
+          {% empty %}
+            <span class="muted">Sem perfil ativo.</span>
+          {% endfor %}
+        </div>
+        <div class="legend">
+          {% for identifier in detail.identifiers %}
+            <span class="badge">{{ identifier.tipo }} · {{ identifier.valor }}</span>
+          {% empty %}
+            <span class="muted">Sem identidade financeira registrada.</span>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Contatos</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Tipo</th><th>Valor</th><th>Principal</th></tr></thead>
+            <tbody>
+              {% for contact in detail.contacts %}
+                <tr><td>{{ contact.tipo }}</td><td>{{ contact.valor }}</td><td>{% if contact.principal %}Sim{% endif %}</td></tr>
+              {% empty %}
+                <tr><td colspan="3">Nenhum contato complementar.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Enderecos</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Endereco</th><th>Bairro</th><th>Cidade</th></tr></thead>
+            <tbody>
+              {% for address in detail.addresses %}
+                <tr>
+                  <td>{{ address.logradouro }} {{ address.numero }}<div class="muted small">{{ address.complemento }} · {{ address.cep }}</div></td>
+                  <td>{{ address.bairro }}</td>
+                  <td>{{ address.cidade }}/{{ address.uf }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="3">Nenhum endereco cadastrado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Familia domiciliar por endereco</h2>
+        <p class="muted">Quando outra ficha tem exatamente o mesmo endereco completo, o sistema cria a familia domiciliar automaticamente na criacao ou edicao da ficha. Use a sincronizacao abaixo para aplicar a regra em fichas antigas. Se a sugestao for falsa, use Ignorar sugestao para retira-la da fila sem apagar nenhuma ficha.</p>
+        <form method="post" class="actions no-print">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="sync_family_relationships">
+          <button type="submit">Sincronizar familias domiciliares por endereco</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pessoa ainda nao vinculada</th><th>Endereco coincidente</th><th class="no-print">Acao</th></tr></thead>
+            <tbody>
+              {% for item in detail.family_suggestions %}
+                <tr>
+                  <td>
+                    <a href="/people/{{ item.related_id }}/">{{ item.related_nome }}</a>
+                    <div class="muted small">{{ item.sigla }} · {{ item.status }} · CPF {{ item.cpf|default:"-" }}</div>
+                  </td>
+                  <td>{{ item.address }}<div class="muted small">{{ item.reason }}</div></td>
+                  <td class="no-print">
+                    <form method="post">
+                      {% csrf_token %}
+                      <input type="hidden" name="related_person_id" value="{{ item.related_id }}">
+                      <input type="hidden" name="tipo_relacionamento" value="nucleo_familiar">
+                      <input type="hidden" name="observacoes" value="Vinculo sugerido automaticamente por endereco completo igual.">
+                      <div class="actions">
+                        <button type="submit" name="action" value="create_family_relationship">Criar familia domiciliar</button>
+                        <button type="submit" name="action" value="suppress_family_suggestion">Ignorar sugestao</button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="3">Nenhuma ficha pendente por endereco exato.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Relacoes familiares ativas</h2>
+        <p class="muted">Para desassociar alguem da familia domiciliar, use o botao na linha da pessoa abaixo. Em vinculos automaticos por endereco, a remocao tambem impede que o sistema recrie o mesmo par automaticamente.</p>
+        <div class="legend">
+          <span class="badge">Familia domiciliar</span>
+          <span class="badge secondary">Familia estendida</span>
+          <span class="badge warn">Automatico por endereco</span>
+        </div>
+        <div class="relationship-list">
+          {% for item in detail.family_relationships %}
+            <div class="relationship-card">
+              <div class="relationship-card-header">
+                <div>
+                  <a href="/people/{{ item.related_id }}/"><strong>{{ item.related_nome }}</strong></a>
+                  <div class="muted small">{{ item.sigla }} · {{ item.status }} · CPF {{ item.cpf|default:"-" }}</div>
+                </div>
+                <div>
+                  <span class="badge">{{ item.tipo_label }}</span>
+                  {% if item.automatico_endereco %}<span class="badge warn">Automatico por endereco</span>{% endif %}
+                  <div class="muted small">{{ item.criado_em }}</div>
+                </div>
+              </div>
+              {% if item.observacoes %}<div class="muted small">{{ item.observacoes }}</div>{% endif %}
+              <form method="post" class="no-print" style="margin-top:12px">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update_family_relationship">
+                <input type="hidden" name="relationship_id" value="{{ item.id }}">
+                <div class="form-grid">
+                  <label>
+                    Alterar tipo
+                    <select name="tipo_relacionamento">
+                      {% for option in detail.family_relationship_type_options %}
+                        <option value="{{ option.value }}" {% if option.value == item.tipo %}selected{% endif %}>{{ option.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>
+                    Observacoes
+                    <input name="observacoes" value="{{ item.observacoes }}">
+                  </label>
+                </div>
+                <div class="actions">
+                  <button type="submit">Salvar ajuste</button>
+                  <button type="submit" name="action" value="deactivate_family_relationship">
+                    {% if item.tipo == "nucleo_familiar" %}Desassociar da familia domiciliar{% else %}Remover relacao familiar{% endif %}
+                  </button>
+                </div>
+              </form>
+            </div>
+          {% empty %}
+            <div class="relationship-card">Nenhuma relacao familiar registrada.</div>
+          {% endfor %}
+        </div>
+        <form method="post" class="no-print">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="create_family_relationship">
+          <div class="form-grid">
+            <div class="wide person-search-box" data-person-relationship-search data-search-url="/people/search/" data-person-id="{{ detail.person.id }}">
+              <label>
+                Pessoa relacionada
+                <input type="search" data-person-search-input placeholder="Digite nome, CPF ou numero de membro" autocomplete="off">
+              </label>
+              <input type="hidden" name="related_person_id" data-person-search-id required>
+              <div class="field-feedback" data-person-search-feedback>Digite ao menos 2 caracteres para pesquisar no cadastro.</div>
+              <div class="person-search-results" data-person-search-results hidden></div>
+            </div>
+            <label>
+              Tipo de relacao
+              <select name="tipo_relacionamento">
+                {% for option in detail.family_relationship_type_options %}
+                  <option value="{{ option.value }}">{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="wide">
+              Observacoes
+              <textarea name="observacoes" placeholder="Ex.: filho, conjuge, mesma residencia, familia estendida ou referencia pastoral."></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Registrar relacao familiar</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <script>
+      (function () {
+        const root = document.querySelector("[data-person-relationship-search]");
+        if (!root) return;
+        const input = root.querySelector("[data-person-search-input]");
+        const hidden = root.querySelector("[data-person-search-id]");
+        const resultsBox = root.querySelector("[data-person-search-results]");
+        const feedback = root.querySelector("[data-person-search-feedback]");
+        const form = root.closest("form");
+        const searchUrl = root.dataset.searchUrl || "/people/search/";
+        const personId = root.dataset.personId || "";
+        let timer = null;
+
+        function setFeedback(message, kind) {
+          feedback.textContent = message || "";
+          feedback.classList.toggle("error", kind === "error");
+          feedback.classList.toggle("ok", kind === "ok");
+        }
+
+        function clearSelection() {
+          hidden.value = "";
+          input.classList.remove("field-valid");
+        }
+
+        function renderResults(items) {
+          resultsBox.innerHTML = "";
+          if (!items.length) {
+            resultsBox.hidden = true;
+            setFeedback("Nenhuma pessoa encontrada para esta busca.", "error");
+            return;
+          }
+          items.forEach(function (item) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "person-search-result";
+            button.textContent = item.label || item.nome;
+            button.addEventListener("click", function () {
+              hidden.value = item.id;
+              input.value = item.label || item.nome;
+              input.classList.add("field-valid");
+              resultsBox.hidden = true;
+              setFeedback("Pessoa selecionada para a relacao familiar.", "ok");
+            });
+            resultsBox.appendChild(button);
+          });
+          resultsBox.hidden = false;
+          setFeedback("Selecione uma pessoa da lista encontrada.", "");
+        }
+
+        async function searchPeople() {
+          const query = String(input.value || "").trim();
+          clearSelection();
+          if (query.length < 2) {
+            resultsBox.hidden = true;
+            setFeedback("Digite ao menos 2 caracteres para pesquisar no cadastro.", "");
+            return;
+          }
+          try {
+            const params = new URLSearchParams({ q: query, person_id: personId });
+            const response = await fetch(searchUrl + "?" + params.toString(), { headers: { "X-Requested-With": "XMLHttpRequest" } });
+            const data = await response.json();
+            renderResults(Array.isArray(data.results) ? data.results : []);
+          } catch (_error) {
+            resultsBox.hidden = true;
+            setFeedback("Nao foi possivel pesquisar agora. Tente novamente.", "error");
+          }
+        }
+
+        input.addEventListener("input", function () {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(searchPeople, 220);
+        });
+        if (form) {
+          form.addEventListener("submit", function (event) {
+            if (!hidden.value) {
+              event.preventDefault();
+              setFeedback("Pesquise e selecione uma pessoa antes de registrar a relacao.", "error");
+              input.focus();
+            }
+          });
+        }
+      }());
+    </script>
+
+    {% if can_view_finance %}
+      <section class="panel">
+        <h2>Contribuintes vinculados</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nome financeiro</th><th>Tipo</th><th>Documento</th><th>Origem</th></tr></thead>
+            <tbody>
+              {% for contributor in detail.contributors %}
+                <tr>
+                  <td><a href="/contributors/{{ contributor.id }}/">{{ contributor.nome }}</a></td>
+                  <td><span class="badge">{{ contributor.tipo }}</span></td>
+                  <td>{{ contributor.documento }}</td>
+                  <td>{{ contributor.origem }} · {{ contributor.qualidade }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="4">Nenhum contribuinte auxiliar vinculado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="split">
+      {% if can_view_finance %}
+        <div class="panel">
+          <h2>Resumo por competencia</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Competencia</th><th class="num">Remessas</th><th class="num">Total</th></tr></thead>
+              <tbody>
+                {% for item in detail.contribution_summary %}
+                  <tr><td>{{ item.competencia }}</td><td class="num">{{ item.remessas }}</td><td class="num">{{ item.total_fmt }}</td></tr>
+                {% empty %}
+                  <tr><td colspan="3">Sem contribuicoes vinculadas.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+      <div class="panel">
+        <h2>Historico</h2>
+        {% for item in detail.history %}
+          <p><span class="badge">{{ item.data_evento|default:item.criado_em }}</span> <strong>{{ item.titulo }}</strong><br><span class="muted">{{ item.descricao }}</span></p>
+        {% empty %}
+          <p class="muted">Sem historico recente.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if can_view_finance %}
+      <section class="panel">
+        <h2>Ultimas contribuicoes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Data</th><th>Competencia</th><th>Tipo</th><th>Forma</th><th>Origem financeira</th><th>Status</th><th class="num">Valor</th></tr></thead>
+            <tbody>
+              {% for item in detail.contributions %}
+                <tr>
+                  <td>{{ item.data }}</td>
+                  <td>{{ item.competencia }}</td>
+                  <td>{{ item.tipo }}</td>
+                  <td>{{ item.forma }}</td>
+                  <td>{{ item.origem|default:"Direta" }}</td>
+                  <td><span class="badge">{{ item.status }}</span></td>
+                  <td class="num">{{ item.valor_fmt }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="7">Sem contribuicoes registradas.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% else %}
+    <section class="panel"><h1>Pessoa nao encontrada</h1></section>
+  {% endif %}
+{% endblock %}

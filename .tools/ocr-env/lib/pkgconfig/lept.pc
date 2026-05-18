@@ -1,0 +1,12 @@
+prefix=/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include/leptonica
+
+Name: leptonica
+Description: An open source C library for efficient image processing and image analysis operations
+Version: 1.87.0
+Libs: -L${libdir} -lleptonica
+Libs.private: -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -lz -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -lpng16 -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -ljpeg -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -lopenjp2 -lgif -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -ltiff -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -lwebp -L/Users/piraginejr/Documents/New project/Teste/Power Church/.tools/ocr-env/lib -lwebpmux
+Cflags: -I${includedir}
+

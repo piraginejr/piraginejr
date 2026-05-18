@@ -1,0 +1,129 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if form_data %}
+    <section class="hero">
+      <div>
+        <p class="badge">Rateio manual</p>
+        <h1>Dividir contribuicao #{{ form_data.detail.contribution.id }}</h1>
+        <p>Valor original {{ form_data.original_total_fmt }}. A soma das linhas abaixo precisa fechar exatamente com este valor.</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/contributions/{{ form_data.detail.contribution.id }}/">Voltar para contribuicao</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Valor original</span><strong>{{ form_data.original_total_fmt }}</strong></div>
+      <div class="card"><span class="label">Origem financeira</span><strong style="font-size:20px">{{ form_data.detail.contribution.contributor_name|default:"Direta" }}</strong></div>
+      <div class="card"><span class="label">Pessoa atual</span><strong style="font-size:20px">{{ form_data.detail.contribution.person_name|default:"NR" }}</strong></div>
+      <div class="card"><span class="label">Origem</span><strong style="font-size:20px">{% if form_data.detail.contribution.statement_movement_id %}Extrato{% elif form_data.detail.contribution.pix_movement_id %}PIX{% else %}Manual{% endif %}</strong></div>
+    </section>
+
+    <section class="panel">
+      <h2>Rateio com soma fechada</h2>
+      <p class="muted">Use quando o envelope, comprovante ou e-mail indicar que uma remessa pertence a varias pessoas ou varias destinacoes.</p>
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="line_count" value="8">
+        <div class="form-grid">
+          <label>
+            Data do recebimento
+            <input type="date" name="data_recebimento" value="{{ form_data.detail.contribution.data_raw }}">
+          </label>
+          <label>
+            Forma de recebimento
+            <select name="forma_recebimento_id">
+              <option value="">Manter/nao informada</option>
+              {% for option in form_data.receiving_options %}
+                <option value="{{ option.id }}" {% if option.selected %}selected{% endif %}>{{ option.nome }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Status operacional
+            <select name="status_operacional">
+              {% for option in form_data.status_options %}
+                <option value="{{ option.value }}" {% if option.value == form_data.detail.contribution.status %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide">
+            Observacoes gerais
+            <textarea name="observacoes">{{ form_data.detail.contribution.observacoes }}</textarea>
+          </label>
+          <label class="wide">
+            Justificativa obrigatoria
+            <textarea name="justificativa" required placeholder="Ex.: Rateio conforme envelope/e-mail/comprovante apresentado ao operador."></textarea>
+          </label>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Linha</th>
+                <th>Pessoa do rol</th>
+                <th>Contribuinte auxiliar</th>
+                <th>Novo contribuinte</th>
+                <th>Documento</th>
+                <th>Tipo</th>
+                <th>Campanha</th>
+                <th class="num">Valor</th>
+                <th>Obs.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for index in form_data.line_range %}
+                <tr>
+                  <td>{{ index }}</td>
+                  <td>
+                    <select name="linha_pessoa_id_{{ index }}">
+                      <option value="">-</option>
+                      {% for person in form_data.people_options %}
+                        <option value="{{ person.id }}" {% if index == 1 and person.id == form_data.detail.contribution.person_id %}selected{% endif %}>{{ person.nome }} · {{ person.sigla }}{% if person.cpf %} · {{ person.cpf }}{% endif %}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="linha_contribuinte_id_{{ index }}">
+                      <option value="">-</option>
+                      {% for contributor in form_data.contributor_options %}
+                        <option value="{{ contributor.id }}" {% if index == 1 and contributor.id == form_data.detail.contribution.contributor_id %}selected{% endif %}>{{ contributor.nome }}{% if contributor.documento %} · {{ contributor.documento }}{% endif %}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td><input name="linha_contribuinte_nome_{{ index }}" placeholder="Nome se nao estiver na lista"></td>
+                  <td><input name="linha_documento_{{ index }}" placeholder="CPF/CNPJ opcional"></td>
+                  <td>
+                    <select name="linha_tipo_contribuicao_id_{{ index }}">
+                      <option value="">Selecione</option>
+                      {% for option in form_data.type_options %}
+                        <option value="{{ option.id }}" {% if index == 1 and option.nome == form_data.detail.contribution.type_name %}selected{% endif %}>{{ option.nome }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="linha_campanha_id_{{ index }}">
+                      <option value="">Sem campanha</option>
+                      {% for option in form_data.campaign_options %}
+                        <option value="{{ option.id }}">{{ option.nome }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td><input name="linha_valor_{{ index }}" {% if index == 1 %}value="{{ form_data.detail.contribution.valor_input }}"{% endif %} placeholder="0,00"></td>
+                  <td><input name="linha_observacoes_{{ index }}" placeholder="Ex.: dizimo do filho"></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button type="submit">Salvar rateio conferido</button>
+        </div>
+      </form>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Contribuicao nao encontrada.</h1></section>
+  {% endif %}
+{% endblock %}

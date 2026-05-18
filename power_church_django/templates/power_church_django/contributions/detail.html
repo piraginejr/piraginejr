@@ -1,0 +1,135 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">Contribuicao #{{ detail.contribution.id }}</p>
+        <h1>{{ detail.contribution.valor_fmt }}</h1>
+        <p>{{ detail.contribution.data }} · {{ detail.contribution.competencia }} · {{ detail.contribution.status_label }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/contributions/">Voltar para contribuicoes</a>
+        {% if detail.contribution.person_id %}
+          <a class="button" href="/people/{{ detail.contribution.person_id }}/">Abrir ficha</a>
+          <a class="button secondary" href="/contributions/statements/{{ detail.contribution.person_id }}/">Extrato</a>
+          <a class="button secondary" href="/receipts/new/?person_id={{ detail.contribution.person_id }}">Gerar recibo</a>
+        {% endif %}
+        <a class="button" href="/contributions/{{ detail.contribution.id }}/split/">Ratear / dividir</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Pessoa creditada</span><strong style="font-size:20px">{{ detail.contribution.person_name|default:"NR" }}</strong></div>
+      <div class="card"><span class="label">Origem financeira</span><strong style="font-size:20px">{{ detail.contribution.contributor_name|default:"Direta" }}</strong></div>
+      <div class="card"><span class="label">Tipo</span><strong style="font-size:20px">{{ detail.contribution.type_name }}</strong></div>
+      <div class="card"><span class="label">Forma</span><strong style="font-size:20px">{{ detail.contribution.form_name|default:"-" }}</strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <h2>Ajuste manual seguro</h2>
+        <p>Use esta tela apenas quando o operador conferiu a origem do ajuste. A pessoa e a origem financeira nao sao trocadas aqui; para isso use os fluxos de associacao de contribuintes e auditoria de lotes.</p>
+        <form method="post">
+          {% csrf_token %}
+          <div class="form-grid">
+            <label>
+              Data do recebimento
+              <input type="date" name="data_recebimento" value="{{ detail.contribution.data_raw }}">
+            </label>
+            <label>
+              Valor
+              <input name="valor" value="{{ detail.contribution.valor_input }}">
+            </label>
+            <label>
+              Tipo de contribuicao
+              <select name="tipo_contribuicao_id">
+                {% for option in detail.type_options %}
+                  <option value="{{ option.id }}" {% if option.selected %}selected{% endif %}>{{ option.nome }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Campanha / destinacao especifica
+              <select name="campanha_id">
+                <option value="">Sem campanha</option>
+                {% for option in detail.campaign_options %}
+                  <option value="{{ option.id }}" {% if option.selected %}selected{% endif %}>{{ option.nome }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Forma de recebimento
+              <select name="forma_recebimento_id">
+                <option value="">Nao informada</option>
+                {% for option in detail.receiving_options %}
+                  <option value="{{ option.id }}" {% if option.selected %}selected{% endif %}>{{ option.nome }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Status operacional
+              <select name="status_operacional">
+                {% for option in detail.status_options %}
+                  <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="wide">
+              Observacoes do lancamento
+              <textarea name="observacoes">{{ detail.contribution.observacoes }}</textarea>
+            </label>
+            <label class="wide">
+              Justificativa obrigatoria da alteracao
+              <textarea name="justificativa" required placeholder="Explique por que este ajuste manual foi feito. Essa justificativa fica registrada na auditoria."></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Salvar ajuste com auditoria</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Rastreabilidade</h2>
+        <div class="table-wrap">
+          <table>
+            <tbody>
+              <tr><th>Pessoa</th><td>{% if detail.contribution.person_id %}<a href="/people/{{ detail.contribution.person_id }}/">{{ detail.contribution.person_name }}</a>{% else %}Sem vinculo{% endif %}</td></tr>
+              <tr><th>CPF</th><td>{{ detail.contribution.person_cpf|default:"-" }}</td></tr>
+              <tr><th>Contribuinte</th><td>{% if detail.contribution.contributor_id %}<a href="/contributors/{{ detail.contribution.contributor_id }}/">{{ detail.contribution.contributor_name }}</a>{% else %}-{% endif %}</td></tr>
+              <tr><th>Documento origem</th><td>{{ detail.contribution.contributor_document|default:"-" }}</td></tr>
+              <tr><th>Campanha</th><td>{{ detail.contribution.campaign_name|default:"-" }}</td></tr>
+              <tr><th>PIX origem</th><td>{% if detail.contribution.pix_movement_id %}<a href="/imports/pix/movement/{{ detail.contribution.pix_movement_id }}/">Movimento PIX #{{ detail.contribution.pix_movement_id }}</a>{% else %}-{% endif %}</td></tr>
+              <tr><th>Extrato origem</th><td>{% if detail.contribution.statement_movement_id %}<a href="/imports/statement/movement/{{ detail.contribution.statement_movement_id }}/">{{ detail.contribution.statement_bank }} movimento #{{ detail.contribution.statement_movement_id }}</a>{% else %}-{% endif %}</td></tr>
+              <tr><th>Criado em</th><td>{{ detail.contribution.criado_em }}</td></tr>
+              <tr><th>Atualizado em</th><td>{{ detail.contribution.atualizado_em|default:"-" }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Historico de auditoria</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Data</th><th>Acao</th><th>Registro depois</th></tr></thead>
+          <tbody>
+            {% for audit in detail.audit_rows %}
+              <tr>
+                <td>{{ audit.criado_em }}</td>
+                <td><span class="badge">{{ audit.acao }}</span></td>
+                <td><pre style="white-space:pre-wrap; margin:0; max-height:160px; overflow:auto">{{ audit.depois }}</pre></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="3">Sem auditoria registrada para este lancamento.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Contribuicao nao encontrada</h1></section>
+  {% endif %}
+{% endblock %}

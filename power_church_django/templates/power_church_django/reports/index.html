@@ -1,0 +1,148 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Relatorio gerencial</p>
+      <h1>Contribuicoes por periodo</h1>
+      <p>Lista alfabetica por contribuinte, com remessas individuais e total por pessoa.</p>
+    </div>
+    <div class="actions no-print">
+      <button onclick="window.print()">Imprimir</button>
+      <a class="button primary" href="/reports/contributions-period.pdf{% if report_query_string %}?{{ report_query_string }}&inline=1{% else %}?inline=1{% endif %}" target="_blank" rel="noopener">Abrir PDF p/ imprimir</a>
+      <a class="button secondary" href="/reports/contributions-period.pdf{% if report_query_string %}?{{ report_query_string }}{% endif %}">Baixar PDF</a>
+      <a class="button secondary" href="/reports/destinations/{% if report_query_string %}?{{ report_query_string }}{% endif %}">Relatorio por destino</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="toolbar" method="get">
+      <label>
+        Competencia
+        <select name="competencia">
+          <option value="">Todas</option>
+          {% for item in report.competencias %}
+            <option value="{{ item }}" {% if item == competencia %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Data inicial
+        <input type="date" name="date_start" value="{{ date_start }}">
+      </label>
+      <label>
+        Data final
+        <input type="date" name="date_end" value="{{ date_end }}">
+      </label>
+      <label>
+        Pessoa, contribuinte, CPF ou codigo
+        <input name="q" value="{{ q }}" placeholder="Nome, documento, ID ou codigo">
+      </label>
+      <button type="submit">Gerar</button>
+      <a class="button secondary" href="/reports/">Limpar</a>
+    </form>
+  </section>
+
+  {% if report %}
+    <section class="panel report-summary-panel">
+      <div class="report-summary-strip">
+        <div class="summary-pill"><span class="label">Total geral</span><strong>{{ report.summary.total_fmt }}</strong></div>
+        <div class="summary-pill"><span class="label">Contribuintes</span><strong>{{ report.summary.contribuintes }}</strong></div>
+        <div class="summary-pill"><span class="label">Remessas</span><strong>{{ report.summary.remessas }}</strong></div>
+        <div class="summary-pill"><span class="label">Fora do rol</span><strong>{{ report.summary.nr }}</strong></div>
+        <div class="summary-pill"><span class="label">Somente documento</span><strong>{{ report.summary.somente_documento }}</strong></div>
+      </div>
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Legenda do rol</h2>
+      <div class="legend">
+        <span class="badge">SA membro ativo: {{ report.summary.sa }}</span>
+        <span class="badge">SI inativo: {{ report.summary.si }}</span>
+        <span class="badge">NF frequentador: {{ report.summary.nf }}</span>
+        <span class="badge">NV visitante: {{ report.summary.nv }}</span>
+        <span class="badge">NM arquivo morto: {{ report.summary.nm }}</span>
+        <span class="badge">NR sem vinculo: {{ report.summary.nr }}</span>
+      </div>
+      {% if report.truncated %}
+        <p class="alert">A lista foi limitada para proteger a tela. Use filtros para fechar o periodo.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel report-panel">
+      <h2>Contribuintes com nome</h2>
+      <p class="muted small">Ordenacao alfabetica nominal. Quando o banco trouxe numero junto ao nome, o numero fica apenas como referencia.</p>
+      <div class="table-wrap report-table-wrap">
+        <table class="fit-table report-table report-period-table">
+          <thead>
+            <tr>
+              <th>Contribuinte</th>
+              <th>Remessas</th>
+              <th class="num">Total</th>
+              <th>Vinculo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in report.named_items %}
+              <tr>
+                <td>
+                  <strong class="report-name">{{ item.nome }}</strong>
+                  {% if item.documento or item.nome_original %}
+                    <br><span class="muted small">{{ item.documento }}{% if item.nome_original and item.nome_original != item.nome %} · origem: {{ item.nome_original }}{% endif %}</span>
+                  {% endif %}
+                </td>
+                <td class="remittance-cell">
+                  {% for remessa in item.remessas %}
+                    <span class="remittance-chip">{{ remessa.data }} · {{ remessa.valor_fmt }}</span>
+                  {% endfor %}
+                </td>
+                <td class="num"><strong>{{ item.total_fmt }}</strong></td>
+                <td><span class="badge">{{ item.sigla }}</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4">Nenhuma contribuicao com nome encontrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% if report.document_items %}
+      <section class="panel report-panel">
+        <h2>Somente documento/numero</h2>
+        <p class="muted small">Contribuicoes preservadas no relatorio, mas separadas para nao distorcer a ordem alfabetica.</p>
+        <div class="table-wrap report-table-wrap">
+          <table class="fit-table report-table report-period-table">
+            <thead>
+              <tr>
+                <th>Documento</th>
+                <th>Remessas</th>
+                <th class="num">Total</th>
+                <th>Vinculo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in report.document_items %}
+                <tr>
+                  <td>
+                    <strong class="report-name">{{ item.nome }}</strong>
+                    {% if item.nome_original and item.nome_original != item.nome %}
+                      <br><span class="muted small">origem: {{ item.nome_original }}</span>
+                    {% endif %}
+                  </td>
+                  <td class="remittance-cell">
+                    {% for remessa in item.remessas %}
+                      <span class="remittance-chip">{{ remessa.data }} · {{ remessa.valor_fmt }}</span>
+                    {% endfor %}
+                  </td>
+                  <td class="num"><strong>{{ item.total_fmt }}</strong></td>
+                  <td><span class="badge">{{ item.sigla }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% endif %}
+{% endblock %}

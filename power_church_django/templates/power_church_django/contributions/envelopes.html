@@ -1,0 +1,117 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Recebimentos em especie</p>
+      <h1>Envelopes de contribuicao</h1>
+      {% if envelopes %}
+        <p>Mostrando {{ envelopes.shown }} de {{ envelopes.total }} envelope(s), somando {{ envelopes.total_value_fmt }} no filtro atual.</p>
+      {% else %}
+        <p>Arquivo manual e auditavel das imagens de envelopes, separado por competencia e lote.</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button" href="/contributions/envelopes/lots/new/">Criar lote de envelopes</a>
+      <a class="button" href="/contributions/envelopes/new/">Registrar envelope</a>
+      <a class="button secondary" href="/contributions/">Voltar para contribuicoes</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <form class="toolbar" method="get">
+      <label>
+        Pesquisar
+        <input name="q" value="{{ q }}" placeholder="Nome, pessoa, contribuinte, arquivo ou hash...">
+      </label>
+      <label>
+        Competencia
+        <select name="competencia">
+          <option value="">Todas</option>
+          {% for item in envelopes.competencias %}
+            <option value="{{ item }}" {% if item == competencia %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filtrar</button>
+      <a class="button secondary" href="/contributions/envelopes/">Limpar</a>
+    </form>
+  </section>
+
+  {% if envelopes.lots %}
+    <section class="panel">
+      <h2>Lotes recentes</h2>
+      <div class="grid">
+        {% for lot in envelopes.lots %}
+          <div class="card">
+            <span class="label">{{ lot.competencia }}</span>
+            <h3>{{ lot.nome }}</h3>
+            <p>{{ lot.total_envelopes }} envelope(s) · {{ lot.total_valor_fmt }}</p>
+            <p class="small muted">{{ lot.pendentes }} pendente(s) · {{ lot.lancados }} lancado(s) · {{ lot.ignorados }} ignorado(s) · {{ lot.duplicados }} duplicado(s)</p>
+            {% if lot.caminho_pasta %}<p class="small muted">Pasta: {{ lot.caminho_pasta }}</p>{% endif %}
+            <div class="actions">
+              <a class="button secondary" href="{{ lot.detail_url }}">Abrir lote</a>
+              {% if lot.next_pending_url %}<a class="button" href="{{ lot.next_pending_url }}">Digitar proximo</a>{% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+  <section class="panel">
+    <div class="table-wrap">
+      <table class="fit-table">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Competencia</th>
+            <th>Lote</th>
+            <th>Contribuinte</th>
+            <th>Rol</th>
+            <th>Forma</th>
+            <th>Status</th>
+            <th>Imagem</th>
+            <th class="num">Total</th>
+            <th>Acao</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in envelopes.items %}
+            <tr>
+              <td>{{ item.data }}</td>
+              <td>{{ item.competencia }}</td>
+              <td>{{ item.lote_nome }}</td>
+              <td>
+                <a href="{{ item.detail_url }}"><strong>{{ item.nome }}</strong></a>
+                {% if item.nome_informado and item.nome_informado != item.nome %}
+                  <div class="small muted">Informado no envelope: {{ item.nome_informado }}</div>
+                {% endif %}
+              </td>
+              <td><span class="badge">{{ item.sigla }}</span></td>
+              <td>{{ item.forma }}</td>
+              <td><span class="badge">{{ item.status_label }}</span></td>
+              <td>
+                {% if item.image_url %}
+                  <a class="badge ok" href="{{ item.image_url }}" target="_blank" rel="noopener">arquivada</a>
+                {% else %}
+                  <span class="badge warn">sem imagem</span>
+                {% endif %}
+              </td>
+              <td class="num">{{ item.total_fmt }}</td>
+              <td>
+                {% if item.launch_url %}
+                  <a class="button" href="{{ item.launch_url }}">Digitar</a>
+                {% else %}
+                  <a class="button secondary" href="{{ item.detail_url }}">Abrir</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="10">Nenhum envelope registrado ainda.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

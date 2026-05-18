@@ -1,0 +1,27 @@
+# Dependencias para iniciar o projeto Django paralelo.
+# Django 5.2 LTS exige Python 3.10+; o alvo recomendado do projeto e Python 3.11+.
+
+-r base.txt
+
+Django>=5.2,<5.3
+psycopg[binary]>=3.2,<4
+gunicorn>=22,<24
+django-auditlog>=3.4,<4
+django-import-export>=4.4,<5
+openpyxl>=3.1,<4
+django-filter>=25.2,<26
+django-tables2>=2.8,<3
+django-formtools>=2.5,<3
+django-guardian>=3.3,<4
+django-waffle>=4.2,<5
+django-money>=3.6,<4
+django-crispy-forms>=2.6,<3
+crispy-bootstrap5>=2026.3,<2027
+django-anymail>=13.1,<14
+
+# Pacotes instalados/preparados para provas futuras, mas ainda nao ativados
+# automaticamente no fluxo operacional.
+django-allauth>=65.16,<66
+django-rq>=3.2,<4
+django-weasyprint>=2.5,<3
+django-unfold>=0.91,<1

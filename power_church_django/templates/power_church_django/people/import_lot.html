@@ -1,0 +1,127 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">{{ detail.lot.type_label }}</p>
+        <h1>Lote de pessoas #{{ detail.lot.id }}</h1>
+        <p>{{ detail.lot.arquivo_nome }} · {{ detail.lot.criado_em }}</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/people/imports/">Voltar para importacao</a>
+        <a class="button secondary" href="/audit/">Auditoria geral</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Linhas do arquivo</span><strong>{{ detail.cards.total_lines }}</strong></div>
+      <div class="card"><span class="label">Pessoas ativas do lote</span><strong>{{ detail.cards.active_people }}</strong></div>
+      <div class="card"><span class="label">Pendencias abertas</span><strong>{{ detail.cards.open_pendencies }}</strong></div>
+      <div class="card"><span class="label">Fichas sem nome</span><strong>{{ detail.cards.without_name }}</strong></div>
+      <div class="card"><span class="label">Campos para revisar</span><strong>{{ detail.cards.review_mappings }}</strong></div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <div class="section-head">
+          <h2>Resumo por status</h2>
+          <span class="badge">{{ detail.status_rows|length }}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Status</th><th class="num">Qtd.</th></tr></thead>
+            <tbody>
+              {% for row in detail.status_rows %}
+                <tr><td><span class="badge">{{ row.status }}</span></td><td class="num">{{ row.count }}</td></tr>
+              {% empty %}
+                <tr><td colspan="2">Sem pessoas vinculadas ao lote.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="section-head">
+          <h2>Mapeamento de colunas</h2>
+          <span class="badge {% if detail.cards.review_mappings %}warn{% else %}ok{% endif %}">{{ detail.cards.review_mappings }}</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Coluna original</th><th>Destino</th><th>Status</th></tr></thead>
+            <tbody>
+              {% for row in detail.mapping_rows %}
+                <tr>
+                  <td>{{ row.coluna_origem }}</td>
+                  <td>{{ row.campo_destino }}</td>
+                  <td><span class="badge {% if row.acao == 'revisar_depois' %}warn{% else %}ok{% endif %}">{{ row.acao_label }}</span></td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="3">Sem mapeamentos registrados.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Pendencias do lote</h2>
+        <span class="badge {% if detail.pending_rows %}danger{% else %}ok{% endif %}">{{ detail.pending_rows|length }}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Linha</th><th>Severidade</th><th>Tipo</th><th>Descricao</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for row in detail.pending_rows %}
+              <tr>
+                <td>{{ row.linha }}</td>
+                <td><span class="badge {% if row.severidade == 'erro' %}danger{% elif row.severidade == 'aviso' %}warn{% else %}ok{% endif %}">{{ row.severidade }}</span></td>
+                <td>{{ row.tipo }}</td>
+                <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div></td>
+                <td><span class="badge {% if row.resolvido %}ok{% else %}danger{% endif %}">{{ row.status }}</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5">Nenhuma pendencia registrada neste lote.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Linhas importadas</h2>
+        <span class="badge">{{ detail.line_rows|length }} exibidas</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Linha</th><th>Nome no arquivo</th><th>Ficha gerada/atualizada</th><th>Status linha</th><th>Acao</th></tr></thead>
+          <tbody>
+            {% for row in detail.line_rows %}
+              <tr>
+                <td>{{ row.linha }}</td>
+                <td>{{ row.original_name }}</td>
+                <td>
+                  {% if row.person_id and row.person_active %}
+                    <a href="/people/{{ row.person_id }}/">{{ row.person_name }}</a>
+                  {% else %}
+                    {{ row.person_name }}
+                  {% endif %}
+                  <div class="muted small">CPF {{ row.person_cpf|default:"-" }} · {{ row.person_status }}</div>
+                </td>
+                <td><span class="badge {% if row.status == 'importado' or row.status == 'atualizado' %}ok{% else %}warn{% endif %}">{{ row.status }}</span></td>
+                <td>{{ row.normalized_action }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5">Nenhuma linha encontrada.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% else %}
+    <section class="panel"><h1>Lote de pessoas nao encontrado</h1></section>
+  {% endif %}
+{% endblock %}

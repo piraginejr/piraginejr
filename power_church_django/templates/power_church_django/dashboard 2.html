@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: #202837;
+      background: linear-gradient(135deg, #f9f5ed 0%, #fffdf8 48%, #eef5f1 100%);
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 48px 28px;
+    }
+    .panel {
+      border: 1px solid #ded8ce;
+      border-radius: 26px;
+      background: rgba(255, 253, 248, .9);
+      box-shadow: 0 22px 52px rgba(32, 40, 55, .1);
+      padding: 28px;
+    }
+    h1 { margin: 0 0 10px; font-size: 36px; }
+    p { color: #667085; line-height: 1.5; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin-top: 22px;
+    }
+    .card {
+      border: 1px solid #eee6da;
+      border-radius: 18px;
+      background: #fffaf1;
+      padding: 16px;
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>{{ title }}</h1>
+      <p>{{ status }}</p>
+      <p>Esta tela confirma o nascimento do Django em paralelo. As regras bancarias ja sao consumidas do <strong>power_church_core</strong>.</p>
+      <div class="grid">
+        {% for code, label in layouts.items %}
+          <div class="card">{{ code }}<br><small>{{ label }}</small></div>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+

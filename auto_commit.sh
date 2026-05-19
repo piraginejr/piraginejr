@@ -1,11 +1,14 @@
 #!/bin/bash
 
+# Vai automaticamente para a pasta do projeto
+cd "/Users/piraginejr/Documents/New project/Teste/Power Church" || exit
+
 echo "======================================"
 echo " Power Church Auto Backup GitHub"
 echo "======================================"
 echo ""
 
-# Verifica mudanças
+# Verifica alterações
 if [[ -z $(git status --porcelain) ]]; then
     echo "Nenhuma alteração encontrada."
     exit 0
@@ -16,9 +19,8 @@ git status --short
 
 echo ""
 
-# Gera mensagem automática baseada na data
+# Mensagem automática
 DATA=$(date +"%Y-%m-%d %H:%M")
-
 MSG="Auto backup Power Church - $DATA"
 
 echo "Mensagem automática:"
@@ -26,15 +28,12 @@ echo "$MSG"
 
 echo ""
 
-# Adiciona tudo
+# Commit automático
 git add .
-
-# Commit
 git commit -m "$MSG"
-
-# Push
 git push
 
 echo ""
 echo "======================================"
 echo " Backup enviado com sucesso"
+echo "======================================"

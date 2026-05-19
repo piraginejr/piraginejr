@@ -5,6 +5,7 @@ dist
 build
 .DS_Store
 .next
-coveragedata/
+coverage
+data/
 *.db
 *.sqlite3

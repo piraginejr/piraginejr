@@ -192,6 +192,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Rastreabilidade financeira",
             "Numero do cheque",
             "NSU / TID",
+            "Por padrao usa o total do envelope",
             "data-envelope-zoom-image",
             "lupa de leitura manuscrita",
             "Envelope digitalizado",
@@ -203,6 +204,10 @@ def build_checks(db_path: Path) -> list[Check]:
             "Salvar envelope e lancar contribuicoes",
         ],
     )
+    if "Forma identificada" in envelope_html:
+        ok, detail = False, "formulario voltou a duplicar forma de recebimento na rastreabilidade"
+    if 'value="None"' in envelope_html or ">None<" in envelope_html:
+        ok, detail = False, "formulario exibiu None em campo de rastreabilidade"
     checks.append(Check("Envelopes mantem auditoria documental", "OK" if ok else "FALHA", detail))
     envelope_lot_html = get("/contributions/envelopes/lots/new/")
     ok, detail = _contains_all(

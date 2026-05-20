@@ -494,6 +494,7 @@ for path in paths:
             "Rastreabilidade financeira",
             "Numero do cheque",
             "Operacao / autorizacao",
+            "Por padrao usa o total do envelope",
             "data-envelope-zoom-image",
             "lupa de leitura manuscrita",
             "Envelope digitalizado",
@@ -510,6 +511,10 @@ for path in paths:
         ]:
             if snippet not in content:
                 raise AssertionError(f"formulario de envelope Django sem trecho esperado: {snippet}")
+        if "Forma identificada" in content:
+            raise AssertionError("formulario de envelope voltou a duplicar forma de recebimento na rastreabilidade")
+        if 'value="None"' in content or ">None<" in content:
+            raise AssertionError("formulario de envelope exibiu None em campos de rastreabilidade")
     if path == "/contributions/envelopes/lots/new/":
         for snippet in [
             "Criar lote de envelopes",
@@ -539,11 +544,16 @@ for path in paths:
             "Justificativa para ignorar este envelope",
             "Tipo principal do envelope",
             "Rastreabilidade financeira",
+            "Por padrao usa o total do envelope",
             "Rateio em cartoes",
             "data-envelope-zoom-image",
         ]:
             if snippet not in content:
                 raise AssertionError(f"digitacao de envelope pendente sem trecho esperado: {snippet}")
+        if "Forma identificada" in content:
+            raise AssertionError("digitacao de envelope voltou a duplicar forma de recebimento na rastreabilidade")
+        if 'value="None"' in content or ">None<" in content:
+            raise AssertionError("digitacao de envelope exibiu None em campos de rastreabilidade")
     if re.match(r"^/contributions/envelopes/\d+/edit/$", path):
         for snippet in [
             "Editar envelope lancado",
@@ -553,10 +563,15 @@ for path in paths:
             "Rateio em cartoes",
             "Pessoa, contribuinte ou novo nome",
             "Rastreabilidade financeira",
+            "Por padrao usa o total do envelope",
             "data-envelope-zoom-image",
         ]:
             if snippet not in content:
                 raise AssertionError(f"edicao de envelope lancado sem trecho esperado: {snippet}")
+        if "Forma identificada" in content:
+            raise AssertionError("edicao de envelope voltou a duplicar forma de recebimento na rastreabilidade")
+        if 'value="None"' in content or ">None<" in content:
+            raise AssertionError("edicao de envelope exibiu None em campos de rastreabilidade")
     if re.match(r"^/contributions/envelopes/\d+/$", path):
         for snippet in ["Imagem arquivada", "Linhas lancadas", "Hash", "Rastreabilidade financeira", "data-envelope-zoom-image"]:
             if snippet not in content:

@@ -1531,6 +1531,23 @@ def _contribution_catalog_options(
         """,
         (organization_id,),
     ).fetchall()
+
+    def traceability_value_for_receiving(row: sqlite3.Row) -> str:
+        code = normalize_match_name(row["codigo"] or row["nome"])
+        if "DINHEIRO" in code:
+            return "dinheiro"
+        if "PIX" in code:
+            return "pix"
+        if "TRANSFERENCIA" in code or "TED" in code or "DOC" in code:
+            return "transferencia"
+        if "CARTAO" in code:
+            return "cartao_credito"
+        if "CHEQUE" in code:
+            return "cheque"
+        if "DEPOSITO" in code:
+            return "deposito"
+        return ""
+
     return {
         "type_options": [
             {
@@ -1546,6 +1563,7 @@ def _contribution_catalog_options(
                 "id": moneyless_int(row["id"]),
                 "codigo": row["codigo"] or "",
                 "nome": row["nome"] or "",
+                "traceability_value": traceability_value_for_receiving(row),
                 "selected": moneyless_int(row["id"]) == moneyless_int(selected_form_id),
             }
             for row in form_rows
@@ -1660,6 +1678,11 @@ def _empty_envelope_line_defaults(count: int = 10) -> list[dict[str, Any]]:
         }
         for index in range(1, count + 1)
     ]
+
+
+def _clean_optional_text(value: object) -> str:
+    text = normalize_query(value)
+    return "" if text.lower() in {"none", "null"} else text
 
 
 def manual_contribution_context() -> dict[str, Any]:
@@ -1863,19 +1886,19 @@ def launched_envelope_edit_context(envelope_id: int) -> dict[str, Any] | None:
             "default_observacoes": row["observacoes"] or "",
             "line_defaults": line_defaults,
             "traceability": {
-                "forma_identificada": _row_get(row, "rastreio_forma_identificada"),
-                "banco_operadora": _row_get(row, "rastreio_banco_operadora"),
-                "numero_cheque": _row_get(row, "rastreio_numero_cheque"),
-                "numero_operacao": _row_get(row, "rastreio_numero_operacao"),
-                "nsu_tid": _row_get(row, "rastreio_nsu_tid"),
-                "ultimos_digitos_cartao": _row_get(row, "rastreio_ultimos_digitos_cartao"),
-                "data_operacao": _row_get(row, "rastreio_data_operacao"),
+                "forma_identificada": _clean_optional_text(_row_get(row, "rastreio_forma_identificada")),
+                "banco_operadora": _clean_optional_text(_row_get(row, "rastreio_banco_operadora")),
+                "numero_cheque": _clean_optional_text(_row_get(row, "rastreio_numero_cheque")),
+                "numero_operacao": _clean_optional_text(_row_get(row, "rastreio_numero_operacao")),
+                "nsu_tid": _clean_optional_text(_row_get(row, "rastreio_nsu_tid")),
+                "ultimos_digitos_cartao": _clean_optional_text(_row_get(row, "rastreio_ultimos_digitos_cartao")),
+                "data_operacao": _clean_optional_text(_row_get(row, "rastreio_data_operacao")),
                 "valor_operacao": (
                     "" if _row_get(row, "rastreio_valor_operacao", None) in (None, "")
                     else _money(_row_get(row, "rastreio_valor_operacao")).replace("R$ ", "")
                 ),
                 "status_conciliacao": _row_get(row, "rastreio_status_conciliacao", "pendente") or "pendente",
-                "observacoes": _row_get(row, "rastreio_observacoes"),
+                "observacoes": _clean_optional_text(_row_get(row, "rastreio_observacoes")),
             },
         }
     )
@@ -2199,19 +2222,19 @@ def pending_envelope_contribution_context(envelope_id: int) -> dict[str, Any] | 
             "default_endereco_informado": row["endereco_informado"] or "",
             "default_observacoes": row["observacoes"] or "",
             "traceability": {
-                "forma_identificada": _row_get(row, "rastreio_forma_identificada"),
-                "banco_operadora": _row_get(row, "rastreio_banco_operadora"),
-                "numero_cheque": _row_get(row, "rastreio_numero_cheque"),
-                "numero_operacao": _row_get(row, "rastreio_numero_operacao"),
-                "nsu_tid": _row_get(row, "rastreio_nsu_tid"),
-                "ultimos_digitos_cartao": _row_get(row, "rastreio_ultimos_digitos_cartao"),
-                "data_operacao": _row_get(row, "rastreio_data_operacao"),
+                "forma_identificada": _clean_optional_text(_row_get(row, "rastreio_forma_identificada")),
+                "banco_operadora": _clean_optional_text(_row_get(row, "rastreio_banco_operadora")),
+                "numero_cheque": _clean_optional_text(_row_get(row, "rastreio_numero_cheque")),
+                "numero_operacao": _clean_optional_text(_row_get(row, "rastreio_numero_operacao")),
+                "nsu_tid": _clean_optional_text(_row_get(row, "rastreio_nsu_tid")),
+                "ultimos_digitos_cartao": _clean_optional_text(_row_get(row, "rastreio_ultimos_digitos_cartao")),
+                "data_operacao": _clean_optional_text(_row_get(row, "rastreio_data_operacao")),
                 "valor_operacao": (
                     "" if _row_get(row, "rastreio_valor_operacao", None) in (None, "")
                     else _money(_row_get(row, "rastreio_valor_operacao")).replace("R$ ", "")
                 ),
                 "status_conciliacao": _row_get(row, "rastreio_status_conciliacao", "pendente") or "pendente",
-                "observacoes": _row_get(row, "rastreio_observacoes"),
+                "observacoes": _clean_optional_text(_row_get(row, "rastreio_observacoes")),
             },
         }
     )
@@ -2303,18 +2326,18 @@ def get_envelope_detail(envelope_id: int) -> dict[str, Any] | None:
         "documento_principal": format_document(row["documento_principal"]),
         "forma": row["forma_nome"] or "Nao informada",
         "origem_operacional": row["origem_operacional"] or "",
-        "traceability": {
-            "forma_identificada": _row_get(row, "rastreio_forma_identificada"),
-            "banco_operadora": _row_get(row, "rastreio_banco_operadora"),
-            "numero_cheque": _row_get(row, "rastreio_numero_cheque"),
-            "numero_operacao": _row_get(row, "rastreio_numero_operacao"),
-            "nsu_tid": _row_get(row, "rastreio_nsu_tid"),
-            "ultimos_digitos_cartao": _row_get(row, "rastreio_ultimos_digitos_cartao"),
-            "data_operacao": br_date(_row_get(row, "rastreio_data_operacao")) if _row_get(row, "rastreio_data_operacao") else "",
-            "valor_operacao_fmt": _money(_row_get(row, "rastreio_valor_operacao")) if _row_get(row, "rastreio_valor_operacao", None) not in (None, "") else "",
-            "status_conciliacao": _row_get(row, "rastreio_status_conciliacao", "pendente") or "pendente",
-            "observacoes": _row_get(row, "rastreio_observacoes"),
-        },
+            "traceability": {
+                "forma_identificada": _clean_optional_text(_row_get(row, "rastreio_forma_identificada")),
+                "banco_operadora": _clean_optional_text(_row_get(row, "rastreio_banco_operadora")),
+                "numero_cheque": _clean_optional_text(_row_get(row, "rastreio_numero_cheque")),
+                "numero_operacao": _clean_optional_text(_row_get(row, "rastreio_numero_operacao")),
+                "nsu_tid": _clean_optional_text(_row_get(row, "rastreio_nsu_tid")),
+                "ultimos_digitos_cartao": _clean_optional_text(_row_get(row, "rastreio_ultimos_digitos_cartao")),
+                "data_operacao": br_date(_row_get(row, "rastreio_data_operacao")) if _row_get(row, "rastreio_data_operacao") else "",
+                "valor_operacao_fmt": _money(_row_get(row, "rastreio_valor_operacao")) if _row_get(row, "rastreio_valor_operacao", None) not in (None, "") else "",
+                "status_conciliacao": _row_get(row, "rastreio_status_conciliacao", "pendente") or "pendente",
+                "observacoes": _clean_optional_text(_row_get(row, "rastreio_observacoes")),
+            },
         "status": row["status"] or "",
         "observacoes": row["observacoes"] or "",
         "justificativa": row["justificativa"] or "",

@@ -877,7 +877,8 @@ def main() -> int:
         ).fetchone()[0]
         simple_envelope = conn.execute(
             """
-            SELECT e.id, e.total_informado, e.total_linhas, e.caminho_imagem
+            SELECT e.id, e.total_informado, e.total_linhas, e.caminho_imagem,
+                   e.rastreio_forma_identificada, e.rastreio_valor_operacao
               FROM envelopes e
              WHERE e.id = ?
             """,
@@ -1091,6 +1092,8 @@ def main() -> int:
         raise AssertionError("Envelope simples sem rateio nao foi encontrado.")
     if round(float(simple_envelope["total_informado"] or 0), 2) != 25.0 or round(float(simple_envelope["total_linhas"] or 0), 2) != 25.0:
         raise AssertionError("Envelope simples sem rateio nao preservou total principal.")
+    if simple_envelope["rastreio_forma_identificada"] != "pix" or round(float(simple_envelope["rastreio_valor_operacao"] or 0), 2) != 25.0:
+        raise AssertionError("Envelope simples nao derivou forma/valor de rastreabilidade a partir da ficha principal.")
     if len(simple_envelope_item) != 1:
         raise AssertionError("Envelope simples deveria criar exatamente uma contribuicao principal.")
     simple_item = simple_envelope_item[0]

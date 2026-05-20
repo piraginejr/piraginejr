@@ -88,7 +88,7 @@
               </label>
               <label>
                 Total do envelope
-                <input name="valor_total" value="{{ form_data.default_total }}" required placeholder="Ex.: 454,00">
+                <input name="valor_total" value="{{ form_data.default_total|default:'' }}" required placeholder="Ex.: 454,00" data-envelope-total>
               </label>
               <label>
                 Pessoa principal, se identificada
@@ -132,10 +132,10 @@
               </label>
               <label>
                 Forma de recebimento
-                <select name="forma_recebimento_id">
+                <select name="forma_recebimento_id" data-receiving-select>
                   <option value="">Nao informada</option>
                   {% for option in form_data.receiving_options %}
-                    <option value="{{ option.id }}" {% if option.id == form_data.default_form_id %}selected{% endif %}>{{ option.nome }}</option>
+                    <option value="{{ option.id }}" data-traceability="{{ option.traceability_value|default:'' }}" {% if option.id == form_data.default_form_id %}selected{% endif %}>{{ option.nome }}</option>
                   {% endfor %}
                 </select>
               </label>
@@ -180,42 +180,36 @@
             <details class="wide optional-panel">
               <summary>Rastreabilidade financeira opcional</summary>
               <p class="small muted">Use quando o envelope trouxer numero de cheque, comprovante de cartao, autorizacao, NSU/TID ou dado que ajude a conciliar com extratos futuros.</p>
+              <input type="hidden" name="rastreio_forma_identificada" value="{{ form_data.traceability.forma_identificada|default:'' }}" data-traceability-form>
               <div class="form-grid">
                 <label>
-                  Forma identificada
-                  <select name="rastreio_forma_identificada">
-                    {% for option in form_data.traceability_form_options %}
-                      <option value="{{ option.value }}" {% if option.value == form_data.traceability.forma_identificada %}selected{% endif %}>{{ option.label }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label>
                   Banco / operadora
-                  <input name="rastreio_banco_operadora" value="{{ form_data.traceability.banco_operadora }}" placeholder="Ex.: Bradesco, Sicoob, Cielo, Rede">
+                  <input name="rastreio_banco_operadora" value="{{ form_data.traceability.banco_operadora|default:'' }}" placeholder="Ex.: Bradesco, Sicoob, Cielo, Rede">
                 </label>
                 <label>
                   Numero do cheque
-                  <input name="rastreio_numero_cheque" value="{{ form_data.traceability.numero_cheque }}" placeholder="Se houver">
+                  <input name="rastreio_numero_cheque" value="{{ form_data.traceability.numero_cheque|default:'' }}" placeholder="Se houver">
                 </label>
                 <label>
                   Operacao / autorizacao
-                  <input name="rastreio_numero_operacao" value="{{ form_data.traceability.numero_operacao }}" placeholder="Numero do comprovante/cartao">
+                  <input name="rastreio_numero_operacao" value="{{ form_data.traceability.numero_operacao|default:'' }}" placeholder="Numero do comprovante/cartao">
                 </label>
                 <label>
                   NSU / TID
-                  <input name="rastreio_nsu_tid" value="{{ form_data.traceability.nsu_tid }}" placeholder="Se constar no comprovante">
+                  <input name="rastreio_nsu_tid" value="{{ form_data.traceability.nsu_tid|default:'' }}" placeholder="Se constar no comprovante">
                 </label>
                 <label>
                   Final do cartao
-                  <input name="rastreio_ultimos_digitos_cartao" value="{{ form_data.traceability.ultimos_digitos_cartao }}" placeholder="Ultimos digitos">
+                  <input name="rastreio_ultimos_digitos_cartao" value="{{ form_data.traceability.ultimos_digitos_cartao|default:'' }}" placeholder="Ultimos digitos">
                 </label>
                 <label>
                   Data da operacao
-                  <input type="date" name="rastreio_data_operacao" value="{{ form_data.traceability.data_operacao }}">
+                  <input type="date" name="rastreio_data_operacao" value="{{ form_data.traceability.data_operacao|default:'' }}">
                 </label>
                 <label>
                   Valor da operacao
-                  <input name="rastreio_valor_operacao" value="{{ form_data.traceability.valor_operacao }}" placeholder="Ex.: 454,00">
+                  <input name="rastreio_valor_operacao" value="{% firstof form_data.traceability.valor_operacao form_data.default_total '' %}" placeholder="Ex.: 454,00" data-traceability-amount>
+                  <span class="small muted">Por padrao usa o total do envelope; altere apenas se houver cheque + dinheiro, cartao + dinheiro etc.</span>
                 </label>
                 <label>
                   Status de conciliacao
@@ -227,7 +221,7 @@
                 </label>
                 <label class="wide">
                   Observacao de conciliacao
-                  <input name="rastreio_observacoes" value="{{ form_data.traceability.observacoes }}" placeholder="Ex.: comprovante anexado ao envelope, aguardando extrato da operadora">
+                  <input name="rastreio_observacoes" value="{{ form_data.traceability.observacoes|default:'' }}" placeholder="Ex.: comprovante anexado ao envelope, aguardando extrato da operadora">
                 </label>
               </div>
             </details>
@@ -335,6 +329,52 @@
           });
         }
         enableEnvelopeMagnifier();
+
+        const receivingSelect = document.querySelector("[data-receiving-select]");
+        const traceabilityForm = document.querySelector("[data-traceability-form]");
+        function syncTraceabilityForm(force) {
+          if (!receivingSelect || !traceabilityForm) return;
+          const selected = receivingSelect.options[receivingSelect.selectedIndex];
+          const nextValue = selected ? (selected.dataset.traceability || "") : "";
+          if (force || !traceabilityForm.value || traceabilityForm.dataset.autoSynced === "1") {
+            traceabilityForm.value = nextValue;
+            traceabilityForm.dataset.autoSynced = "1";
+          }
+        }
+        syncTraceabilityForm(false);
+        if (receivingSelect) {
+          receivingSelect.addEventListener("change", function () {
+            syncTraceabilityForm(true);
+          });
+        }
+
+        const envelopeTotal = document.querySelector("[data-envelope-total]");
+        const traceabilityAmount = document.querySelector("[data-traceability-amount]");
+        function normalizeMoneyText(value) {
+          return String(value || "").replace(/[R$\\s.]/g, "").replace(",", ".").trim();
+        }
+        if (traceabilityAmount && envelopeTotal) {
+          traceabilityAmount.dataset.autoSynced = (
+            !traceabilityAmount.value ||
+            normalizeMoneyText(traceabilityAmount.value) === normalizeMoneyText(envelopeTotal.value)
+          ) ? "1" : "0";
+          function syncTraceabilityAmount(force) {
+            if (force || !traceabilityAmount.value || traceabilityAmount.dataset.autoSynced === "1") {
+              traceabilityAmount.value = envelopeTotal.value;
+              traceabilityAmount.dataset.autoSynced = "1";
+            }
+          }
+          syncTraceabilityAmount(false);
+          envelopeTotal.addEventListener("input", function () {
+            syncTraceabilityAmount(false);
+          });
+          traceabilityAmount.addEventListener("input", function () {
+            traceabilityAmount.dataset.autoSynced = (
+              !traceabilityAmount.value ||
+              normalizeMoneyText(traceabilityAmount.value) === normalizeMoneyText(envelopeTotal.value)
+            ) ? "1" : "0";
+          });
+        }
 
         const input = document.querySelector("[data-envelope-file-input]");
         const uploadLabel = document.querySelector("[data-envelope-upload-label]");

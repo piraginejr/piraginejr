@@ -2708,26 +2708,73 @@ def _resolve_envelope_participant_reference(
 
 def _optional_money_value(value: object) -> float | None:
     text = normalize_query(value)
+    if text.lower() in {"none", "null"}:
+        return None
     if not text:
         return None
     return round(float(parse_money(text)), 2)
 
 
-def _envelope_traceability_payload(payload: Any) -> dict[str, object]:
+def _optional_trace_text(value: object) -> str:
+    text = normalize_query(value)
+    return "" if text.lower() in {"none", "null"} else text
+
+
+def _traceability_value_for_receiving_text(code_or_name: object) -> str:
+    code = normalize_match_name(code_or_name)
+    if "DINHEIRO" in code:
+        return "dinheiro"
+    if "PIX" in code:
+        return "pix"
+    if "TRANSFERENCIA" in code or "TED" in code or "DOC" in code:
+        return "transferencia"
+    if "CARTAO" in code:
+        return "cartao_credito"
+    if "CHEQUE" in code:
+        return "cheque"
+    if "DEPOSITO" in code:
+        return "deposito"
+    return ""
+
+
+def _traceability_value_from_form_id(conn: sqlite3.Connection, form_id: int | None) -> str:
+    if not form_id:
+        return ""
+    row = conn.execute(
+        "SELECT codigo, nome FROM formas_recebimento WHERE id = ? AND ativo = 1",
+        (moneyless_int(form_id),),
+    ).fetchone()
+    if row is None:
+        return ""
+    return _traceability_value_for_receiving_text(row["codigo"] or row["nome"])
+
+
+def _envelope_traceability_payload(
+    payload: Any,
+    conn: sqlite3.Connection | None = None,
+    form_id: int | None = None,
+    expected_total: float | None = None,
+) -> dict[str, object]:
     status = normalize_query(_form_value(payload, "rastreio_status_conciliacao", "pendente")) or "pendente"
     if status not in {"pendente", "conciliado", "divergente", "ignorado"}:
         status = "pendente"
+    form_value = _optional_trace_text(_form_value(payload, "rastreio_forma_identificada"))
+    if not form_value and conn is not None:
+        form_value = _traceability_value_from_form_id(conn, form_id)
+    operation_value = _optional_money_value(_form_value(payload, "rastreio_valor_operacao"))
+    if operation_value is None and expected_total is not None:
+        operation_value = round(float(expected_total), 2)
     return {
-        "rastreio_forma_identificada": normalize_query(_form_value(payload, "rastreio_forma_identificada")),
-        "rastreio_banco_operadora": normalize_query(_form_value(payload, "rastreio_banco_operadora")),
-        "rastreio_numero_cheque": normalize_query(_form_value(payload, "rastreio_numero_cheque")),
-        "rastreio_numero_operacao": normalize_query(_form_value(payload, "rastreio_numero_operacao")),
-        "rastreio_nsu_tid": normalize_query(_form_value(payload, "rastreio_nsu_tid")),
-        "rastreio_ultimos_digitos_cartao": normalize_query(_form_value(payload, "rastreio_ultimos_digitos_cartao")),
-        "rastreio_data_operacao": normalize_query(_form_value(payload, "rastreio_data_operacao")),
-        "rastreio_valor_operacao": _optional_money_value(_form_value(payload, "rastreio_valor_operacao")),
+        "rastreio_forma_identificada": form_value,
+        "rastreio_banco_operadora": _optional_trace_text(_form_value(payload, "rastreio_banco_operadora")),
+        "rastreio_numero_cheque": _optional_trace_text(_form_value(payload, "rastreio_numero_cheque")),
+        "rastreio_numero_operacao": _optional_trace_text(_form_value(payload, "rastreio_numero_operacao")),
+        "rastreio_nsu_tid": _optional_trace_text(_form_value(payload, "rastreio_nsu_tid")),
+        "rastreio_ultimos_digitos_cartao": _optional_trace_text(_form_value(payload, "rastreio_ultimos_digitos_cartao")),
+        "rastreio_data_operacao": _optional_trace_text(_form_value(payload, "rastreio_data_operacao")),
+        "rastreio_valor_operacao": operation_value,
         "rastreio_status_conciliacao": status,
-        "rastreio_observacoes": normalize_query(_form_value(payload, "rastreio_observacoes")),
+        "rastreio_observacoes": _optional_trace_text(_form_value(payload, "rastreio_observacoes")),
     }
 
 
@@ -3380,10 +3427,10 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
             raise LegacyWriteError("Informe uma justificativa com pelo menos 8 caracteres.")
         header_notes = normalize_query(_form_value(payload, "observacoes"))
         source_label = normalize_query(_form_value(payload, "origem_operacional")) or "Envelope manual com imagem arquivada"
-        traceability = _envelope_traceability_payload(payload)
         expected_total = round(float(parse_money(_form_value(payload, "valor_total"))), 2)
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
+        traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
         main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
         if main_person_id and get_person(conn, main_person_id) is None:
             raise LegacyWriteError("Pessoa principal do envelope invalida.")
@@ -3616,10 +3663,10 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
             raise LegacyWriteError("Informe uma justificativa com pelo menos 8 caracteres.")
         header_notes = normalize_query(_form_value(payload, "observacoes"))
         source_label = normalize_query(_form_value(payload, "origem_operacional")) or normalize_query(envelope["origem_operacional"]) or "Envelope digitalizado"
-        traceability = _envelope_traceability_payload(payload)
         expected_total = round(float(parse_money(_form_value(payload, "valor_total"))), 2)
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
+        traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
         main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
         if main_person_id and get_person(conn, main_person_id) is None:
             raise LegacyWriteError("Pessoa principal do envelope invalida.")
@@ -3830,10 +3877,10 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
             raise LegacyWriteError("Informe uma justificativa com pelo menos 8 caracteres.")
         header_notes = normalize_query(_form_value(payload, "observacoes"))
         source_label = normalize_query(_form_value(payload, "origem_operacional")) or normalize_query(envelope["origem_operacional"]) or "Envelope digitalizado"
-        traceability = _envelope_traceability_payload(payload)
         expected_total = round(float(parse_money(_form_value(payload, "valor_total"))), 2)
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
+        traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
         main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
         if main_person_id and get_person(conn, main_person_id) is None:
             raise LegacyWriteError("Pessoa principal do envelope invalida.")

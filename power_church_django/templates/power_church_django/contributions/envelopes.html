@@ -14,6 +14,10 @@
     <div class="actions no-print">
       <a class="button" href="/contributions/envelopes/lots/new/">Criar lote de envelopes</a>
       <a class="button" href="/contributions/envelopes/new/">Registrar envelope</a>
+      <form method="post" action="/contributions/envelopes/reprocess-profile-updates/">
+        {% csrf_token %}
+        <button class="button secondary" type="submit">Reprocessar telefones/enderecos</button>
+      </form>
       <a class="button secondary" href="/contributions/">Voltar para contribuicoes</a>
     </div>
   </section>

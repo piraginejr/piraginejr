@@ -142,6 +142,8 @@ def main() -> int:
     from power_church_django.services.photos import find_member_photo, save_member_photo_payload
     from power_church_django.services.legacy_write import (
         LegacyWriteError,
+        apply_envelope_profile_update,
+        backfill_envelope_profile_updates,
         create_contribution,
         create_envelope_contribution_batch,
         create_envelope_image_lot,
@@ -152,6 +154,7 @@ def main() -> int:
         create_receipt,
         deactivate_person_relationship,
         get_person_form_initial,
+        ignore_envelope_profile_update,
         ignore_pending_envelope,
         launch_pending_envelope,
         link_contributor_to_person_by_id,
@@ -295,6 +298,42 @@ def main() -> int:
         },
         actor="verificador",
     )
+    try:
+        create_envelope_contribution_batch(
+            {
+                "data_recebimento": "2026-05-12",
+                "competencia_mes": "2026-05",
+                "nome_lote": "Envelopes Teste Maio 26",
+                "valor_total": "430,00",
+                "tipo_contribuicao_id_padrao": "1",
+                "forma_recebimento_id": "1",
+                "status_operacional": "regular",
+                "pessoa_id": str(person_id),
+                "origem_operacional": "Envelope digitalizado de teste automatico.",
+                "observacoes": "Teste de linha residual de navegador.",
+                "justificativa": "Teste automatico de protecao contra linha residual.",
+                "line_count": "4",
+                "linha_pessoa_id_1": str(person_id),
+                "linha_tipo_contribuicao_id_1": "1",
+                "linha_valor_1": "389,00",
+                "linha_observacoes_1": "Dizimo.",
+                "linha_pessoa_id_2": str(person_id),
+                "linha_tipo_contribuicao_id_2": "1",
+                "linha_valor_2": "21,00",
+                "linha_observacoes_2": "Missoes.",
+                "linha_pessoa_id_3": str(person_id),
+                "linha_tipo_contribuicao_id_3": "1",
+                "linha_valor_3": "20,00",
+                "linha_observacoes_3": "Oferta avulsa.",
+                "linha_valor_4": "0,99",
+            },
+            FakeUpload("envelope_linha_residual_teste.png", b"\x89PNG\r\n\x1a\nenvelope-linha-residual"),
+            actor="verificador",
+        )
+        raise AssertionError("Envelope aceitou linha residual somente com valor.")
+    except LegacyWriteError as exc:
+        if "linha 4 tem valor" not in str(exc).lower():
+            raise
     envelope_result = create_envelope_contribution_batch(
         {
             "data_recebimento": "2026-05-12",
@@ -307,7 +346,7 @@ def main() -> int:
             "pessoa_id": str(person_id),
             "nome_informado": "Pessoa Teste Django Atualizada",
             "telefone_informado": "21999999999",
-            "endereco_informado": "Rua Teste Django, 100",
+            "endereco_informado": "Rua Teste Django, 100 Casa 2, Centro, Niteroi",
             "origem_operacional": "Envelope digitalizado de teste automatico.",
             "rastreio_forma_identificada": "cheque",
             "rastreio_banco_operadora": "Banco Teste",
@@ -1148,6 +1187,83 @@ def main() -> int:
         raise AssertionError("Envelope ignorado entrou indevidamente no financeiro.")
     if profile_update_count < 1:
         raise AssertionError("Envelope com telefone/endereco diferente nao gerou pendencia cadastral sugerida.")
+    conn = sqlite3.connect(temp_db)
+    conn.row_factory = sqlite3.Row
+    pending_profile_updates = conn.execute(
+        """
+        SELECT id, campo, status
+          FROM envelope_atualizacoes_cadastrais
+         WHERE envelope_id = ?
+           AND pessoa_id = ?
+         ORDER BY id
+        """,
+        (envelope_result["envelope_id"], person_id),
+    ).fetchall()
+    phone_update = next((row for row in pending_profile_updates if row["campo"] == "telefone"), None)
+    address_update = next((row for row in pending_profile_updates if row["campo"] == "endereco"), None)
+    if phone_update is None or address_update is None:
+        raise AssertionError("Envelope com divergencia cadastral deveria sugerir telefone e endereco.")
+    apply_envelope_profile_update(int(phone_update["id"]), actor="verificador")
+    ignore_envelope_profile_update(int(address_update["id"]), actor="verificador")
+    applied_phone = conn.execute(
+        "SELECT telefone_principal FROM pessoas WHERE id = ?",
+        (person_id,),
+    ).fetchone()
+    treated_updates = conn.execute(
+        """
+        SELECT campo, status
+          FROM envelope_atualizacoes_cadastrais
+         WHERE envelope_id = ?
+           AND pessoa_id = ?
+         ORDER BY campo
+        """,
+        (envelope_result["envelope_id"], person_id),
+    ).fetchall()
+    if str(applied_phone["telefone_principal"] or "").strip() != "21999999999":
+        raise AssertionError("Aplicacao da pendencia de telefone do envelope nao atualizou a ficha.")
+    if {(row["campo"], row["status"]) for row in treated_updates} != {("endereco", "ignorado"), ("telefone", "aplicado")}:
+        raise AssertionError("Pendencias cadastrais do envelope nao foram aplicadas/ignoradas como esperado.")
+    direct_phone_result = create_envelope_contribution_batch(
+        {
+            "data_recebimento": "2026-05-14",
+            "competencia_mes": "2026-05",
+            "nome_lote": "Envelopes Teste Maio 26",
+            "valor_total": "35,00",
+            "tipo_contribuicao_id_padrao": "1",
+            "forma_recebimento_id": "1",
+            "status_operacional": "regular",
+            "pessoa_ref": f"Pessoa #{person_id} · Pessoa Teste Django Atualizada · Ficha 00001",
+            "telefone_informado": "21 99511-6428",
+            "origem_operacional": "Envelope digitalizado",
+            "observacoes": "Envelope com atualizacao imediata de telefone.",
+            "justificativa": "Teste automatico de atualizacao imediata de telefone por envelope.",
+            "aplicar_telefone_na_ficha": "1",
+            "line_count": "10",
+        },
+        FakeUpload("envelope_telefone_imediato.png", b"\x89PNG\r\n\x1a\nenvelope-telefone-imediato"),
+        actor="verificador",
+    )
+    direct_phone = conn.execute(
+        "SELECT telefone_principal FROM pessoas WHERE id = ?",
+        (person_id,),
+    ).fetchone()
+    direct_phone_updates = conn.execute(
+        """
+        SELECT campo, status
+          FROM envelope_atualizacoes_cadastrais
+         WHERE envelope_id = ?
+           AND pessoa_id = ?
+        """,
+        (direct_phone_result["envelope_id"], person_id),
+    ).fetchall()
+    if str(direct_phone["telefone_principal"] or "").strip() != "21 99511-6428":
+        raise AssertionError("Atualizacao imediata de telefone no salvamento do envelope nao gravou o numero novo na ficha.")
+    if any(row["campo"] == "telefone" for row in direct_phone_updates):
+        raise AssertionError("Telefone confirmado para aplicacao imediata ainda gerou pendencia cadastral.")
+    backfill_summary = backfill_envelope_profile_updates(actor="verificador")
+    if int(backfill_summary["scanned"] or 0) < 1:
+        raise AssertionError("Reprocessamento retroativo de pendencias cadastrais nao examinou envelopes lancados.")
+    conn.close()
     envelope_path = Path(str(envelope["caminho_imagem"] or ""))
     if not envelope_path.exists() or not str(envelope_path).startswith(str(envelope_temp_dir)):
         raise AssertionError("Imagem do envelope nao foi arquivada na pasta temporaria esperada.")

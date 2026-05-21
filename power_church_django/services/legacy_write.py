@@ -2616,8 +2616,16 @@ def _envelope_line_payloads(
         line_type_id = moneyless_int(_field_value(data, "linha_tipo_contribuicao_id", index))
         line_campaign_id = moneyless_int(_field_value(data, "linha_campanha_id", index))
         notes = _field_value(data, "linha_observacoes", index)
-        if not any([value_text, participant_ref, person_id, contributor_id, contributor_name, document, line_type_id, line_campaign_id, notes]):
+        has_line_context = any(
+            [participant_ref, person_id, contributor_id, contributor_name, document, line_type_id, line_campaign_id, notes]
+        )
+        if not value_text and not has_line_context:
             continue
+        if value_text and not has_line_context:
+            raise LegacyWriteError(
+                f"A linha {index} tem valor ({value_text}) sem pessoa, contribuinte, destino ou observacao. "
+                "Complete a linha ou limpe esse valor antes de salvar."
+            )
         if not value_text:
             raise LegacyWriteError(f"Informe o valor da linha {index}.")
         value = parse_money(value_text)
@@ -3303,6 +3311,23 @@ def _insert_envelope_profile_update(
     envelope_value: str,
     actor: str,
 ) -> int:
+    normalized_current = normalize_query(current_value)
+    normalized_envelope = normalize_query(envelope_value)
+    existing = conn.execute(
+        """
+        SELECT id
+          FROM envelope_atualizacoes_cadastrais
+         WHERE envelope_id = ?
+           AND pessoa_id = ?
+           AND campo = ?
+           AND COALESCE(valor_envelope, '') = ?
+         ORDER BY id DESC
+         LIMIT 1
+        """,
+        (envelope_id, person_id, field, normalized_envelope),
+    ).fetchone()
+    if existing is not None:
+        return 0
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO envelope_atualizacoes_cadastrais (
@@ -3314,8 +3339,8 @@ def _insert_envelope_profile_update(
             organization_id,
             person_id,
             field,
-            normalize_query(current_value),
-            normalize_query(envelope_value),
+            normalized_current,
+            normalized_envelope,
             "Sugerido automaticamente porque o envelope contem dado diferente da ficha.",
         ),
     )
@@ -3332,8 +3357,8 @@ def _insert_envelope_profile_update(
                 "envelope_id": envelope_id,
                 "pessoa_id": person_id,
                 "campo": field,
-                "valor_cadastro": normalize_query(current_value),
-                "valor_envelope": normalize_query(envelope_value),
+                "valor_cadastro": normalized_current,
+                "valor_envelope": normalized_envelope,
                 "status": "pendente",
             },
             actor=actor,
@@ -3349,6 +3374,7 @@ def _suggest_profile_updates_from_envelope(
     phone_value: str,
     address_value: str,
     actor: str,
+    apply_phone_immediately: bool = False,
 ) -> list[int]:
     if not person_id:
         return []
@@ -3374,18 +3400,41 @@ def _suggest_profile_updates_from_envelope(
     ).fetchall()
     current_phones.update(_digits_only(row["valor"]) for row in contact_rows if _digits_only(row["valor"]))
     if envelope_phone and not _phone_matches(envelope_phone, current_phones):
-        created.append(
-            _insert_envelope_profile_update(
+        if apply_phone_immediately:
+            before_person = person_snapshot(conn, person_id)
+            conn.execute(
+                """
+                UPDATE pessoas
+                   SET telefone_principal = ?, atualizado_em = CURRENT_TIMESTAMP
+                 WHERE id = ?
+                """,
+                (normalize_query(phone_value), person_id),
+            )
+            update_primary_contact(conn, organization_id, person_id, "telefone", phone_value)
+            after_person = person_snapshot(conn, person_id)
+            write_audit_log(
                 conn,
                 organization_id,
-                envelope_id,
+                "atualizar_telefone_imediato_por_envelope_django",
+                "pessoas",
                 person_id,
-                "telefone",
-                ", ".join(sorted(current_phones)) if current_phones else "",
-                phone_value,
-                actor,
+                before_person,
+                after_person,
+                actor=actor,
             )
-        )
+        else:
+            created.append(
+                _insert_envelope_profile_update(
+                    conn,
+                    organization_id,
+                    envelope_id,
+                    person_id,
+                    "telefone",
+                    ", ".join(sorted(current_phones)) if current_phones else "",
+                    phone_value,
+                    actor,
+                )
+            )
 
     envelope_address_key = _profile_compare_key(address_value)
     current_address = _address_text(primary_address(conn, person_id))
@@ -3407,6 +3456,188 @@ def _suggest_profile_updates_from_envelope(
             )
         )
     return [item for item in created if item]
+
+
+def apply_envelope_profile_update(update_id: int, actor: str = "") -> dict[str, object]:
+    update_id = moneyless_int(update_id)
+    with connect_legacy_write() as conn:
+        ensure_envelope_support(conn)
+        row = conn.execute(
+            """
+            SELECT *
+              FROM envelope_atualizacoes_cadastrais
+             WHERE id = ?
+             LIMIT 1
+            """,
+            (update_id,),
+        ).fetchone()
+        if row is None:
+            raise LegacyWriteError("Pendencia cadastral do envelope nao encontrada.")
+        if normalize_query(row["status"]) != "pendente":
+            raise LegacyWriteError("Esta pendencia cadastral ja foi tratada.")
+        field = normalize_query(row["campo"]).lower()
+        if field != "telefone":
+            raise LegacyWriteError("Aplicacao automatica direta so esta disponivel para telefone.")
+
+        person_id = moneyless_int(row["pessoa_id"])
+        organization_id = moneyless_int(row["organizacao_id"])
+        envelope_id = moneyless_int(row["envelope_id"])
+        before_update = dict(row)
+        before_person = person_snapshot(conn, person_id)
+        phone_value = normalize_query(row["valor_envelope"])
+        if not phone_value:
+            raise LegacyWriteError("O telefone informado no envelope esta vazio.")
+
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE pessoas
+                       SET telefone_principal = ?, atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (phone_value, person_id),
+                )
+                update_primary_contact(conn, organization_id, person_id, "telefone", phone_value)
+                conn.execute(
+                    """
+                    UPDATE envelope_atualizacoes_cadastrais
+                       SET status = 'aplicado',
+                           valor_cadastro = ?,
+                           observacoes = ?,
+                           atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        phone_value,
+                        "Aplicado automaticamente na ficha a partir do envelope, com auditoria preservada.",
+                        update_id,
+                    ),
+                )
+                after_person = person_snapshot(conn, person_id)
+                after_update = dict(
+                    conn.execute(
+                        "SELECT * FROM envelope_atualizacoes_cadastrais WHERE id = ?",
+                        (update_id,),
+                    ).fetchone()
+                )
+                write_audit_log(
+                    conn,
+                    organization_id,
+                    "aplicar_atualizacao_cadastral_por_envelope_django",
+                    "envelope_atualizacoes_cadastrais",
+                    update_id,
+                    before_update,
+                    after_update,
+                    actor=actor,
+                )
+                write_audit_log(
+                    conn,
+                    organization_id,
+                    "atualizar_telefone_por_envelope_django",
+                    "pessoas",
+                    person_id,
+                    before_person,
+                    after_person,
+                    actor=actor,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise LegacyWriteError(f"Nao foi possivel aplicar a atualizacao cadastral: {exc}") from exc
+    return {"update_id": update_id, "envelope_id": envelope_id, "person_id": person_id, "field": field}
+
+
+def ignore_envelope_profile_update(update_id: int, actor: str = "") -> dict[str, object]:
+    update_id = moneyless_int(update_id)
+    with connect_legacy_write() as conn:
+        ensure_envelope_support(conn)
+        row = conn.execute(
+            """
+            SELECT *
+              FROM envelope_atualizacoes_cadastrais
+             WHERE id = ?
+             LIMIT 1
+            """,
+            (update_id,),
+        ).fetchone()
+        if row is None:
+            raise LegacyWriteError("Pendencia cadastral do envelope nao encontrada.")
+        if normalize_query(row["status"]) != "pendente":
+            raise LegacyWriteError("Esta pendencia cadastral ja foi tratada.")
+
+        before_update = dict(row)
+        organization_id = moneyless_int(row["organizacao_id"])
+        envelope_id = moneyless_int(row["envelope_id"])
+        person_id = moneyless_int(row["pessoa_id"])
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE envelope_atualizacoes_cadastrais
+                       SET status = 'ignorado',
+                           observacoes = ?,
+                           atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        "Ignorado manualmente pelo operador apos revisao do envelope e da ficha.",
+                        update_id,
+                    ),
+                )
+                after_update = dict(
+                    conn.execute(
+                        "SELECT * FROM envelope_atualizacoes_cadastrais WHERE id = ?",
+                        (update_id,),
+                    ).fetchone()
+                )
+                write_audit_log(
+                    conn,
+                    organization_id,
+                    "ignorar_atualizacao_cadastral_por_envelope_django",
+                    "envelope_atualizacoes_cadastrais",
+                    update_id,
+                    before_update,
+                    after_update,
+                    actor=actor,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise LegacyWriteError(f"Nao foi possivel ignorar a pendencia cadastral: {exc}") from exc
+    return {"update_id": update_id, "envelope_id": envelope_id, "person_id": person_id}
+
+
+def backfill_envelope_profile_updates(actor: str = "") -> dict[str, int]:
+    with connect_legacy_write() as conn:
+        ensure_envelope_support(conn)
+        rows = conn.execute(
+            """
+            SELECT id, organizacao_id, pessoa_id, telefone_informado, endereco_informado
+              FROM envelopes
+             WHERE ativo = 1
+               AND status = 'lancado'
+               AND pessoa_id IS NOT NULL
+               AND (
+                    COALESCE(telefone_informado, '') <> ''
+                    OR COALESCE(endereco_informado, '') <> ''
+               )
+             ORDER BY id
+            """
+        ).fetchall()
+        scanned = 0
+        created = 0
+        with conn:
+            for row in rows:
+                scanned += 1
+                created += len(
+                    _suggest_profile_updates_from_envelope(
+                        conn,
+                        moneyless_int(row["organizacao_id"]),
+                        moneyless_int(row["id"]),
+                        moneyless_int(row["pessoa_id"]),
+                        row["telefone_informado"] or "",
+                        row["endereco_informado"] or "",
+                        actor,
+                    )
+                )
+    return {"scanned": scanned, "created": created}
 
 
 def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "") -> dict[str, object]:
@@ -3441,6 +3672,9 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
         )
         if main_contributor_id:
             main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        apply_phone_immediately = (
+            normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
+        )
         lines = _envelope_line_payloads(
             payload,
             organization_id,
@@ -3525,6 +3759,7 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                     _form_value(payload, "telefone_informado"),
                     _form_value(payload, "endereco_informado"),
                     actor,
+                    apply_phone_immediately=apply_phone_immediately,
                 )
                 traceability_note = _traceability_note(traceability)
                 origin_note = "\n".join(
@@ -3677,6 +3912,9 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
         )
         if main_contributor_id:
             main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        apply_phone_immediately = (
+            normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
+        )
         lines = _envelope_line_payloads(
             payload,
             organization_id,
@@ -3752,6 +3990,7 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
                     _form_value(payload, "telefone_informado"),
                     _form_value(payload, "endereco_informado"),
                     actor,
+                    apply_phone_immediately=apply_phone_immediately,
                 )
                 traceability_note = _traceability_note(traceability)
                 origin_note = "\n".join(
@@ -3891,6 +4130,9 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
         )
         if main_contributor_id:
             main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        apply_phone_immediately = (
+            normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
+        )
         lines = _envelope_line_payloads(
             payload,
             organization_id,
@@ -4011,6 +4253,7 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                     _form_value(payload, "telefone_informado"),
                     _form_value(payload, "endereco_informado"),
                     actor,
+                    apply_phone_immediately=apply_phone_immediately,
                 )
                 traceability_note = _traceability_note(traceability)
                 origin_note = "\n".join(

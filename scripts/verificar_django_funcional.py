@@ -222,6 +222,7 @@ paths = [
     "/contributions/manual/",
     "/contributions/envelopes/",
     "/contributions/envelopes/new/",
+    "/contributions/envelopes/lookup/?phone=21999999999&address=Rua%20Teste%20Django%20100",
     "/contributions/envelopes/lots/new/",
     f"/contributions/{contribution_id}/",
     f"/contributions/{contribution_id}/split/",
@@ -315,6 +316,12 @@ for path in paths:
             raise AssertionError("imagem de envelope retornou arquivo vazio")
         continue
     content = body.decode("utf-8", errors="replace")
+    if path.startswith("/contributions/envelopes/lookup/"):
+        lowered = content.lower()
+        for snippet in ['"ok": true', '"phone_matches"', '"address_matches"']:
+            if snippet not in lowered:
+                raise AssertionError(f"lookup de envelope nao respondeu JSON esperado: {snippet}")
+        continue
     if "/branding/logo" not in content or "Navegacao principal" not in content:
         raise AssertionError(f"{path} nao renderizou o layout Django")
     if path == "/" and "/branding/logo" not in content:
@@ -482,7 +489,7 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"lancamento manual assistido Django sem trecho esperado: {snippet}")
     if path == "/contributions/envelopes/":
-        for snippet in ["Envelopes de contribuicao", "Criar lote de envelopes", "Registrar envelope", "Abrir lote"]:
+        for snippet in ["Envelopes de contribuicao", "Criar lote de envelopes", "Registrar envelope", "Abrir lote", "Reprocessar telefones/enderecos"]:
             if snippet not in content:
                 raise AssertionError(f"lista de envelopes Django sem trecho esperado: {snippet}")
     if path == "/contributions/envelopes/new/":
@@ -506,6 +513,7 @@ for path in paths:
             "numero da ficha/codigo interno",
             "Rateio em cartoes por pessoa, contribuinte e destinacao",
             "Pessoa, contribuinte ou novo nome",
+            "Sugestoes por telefone e endereco",
             "Salvar agora e lancar",
             "Usar tipo principal",
         ]:
@@ -547,6 +555,7 @@ for path in paths:
             "Por padrao usa o total do envelope",
             "Rateio em cartoes",
             "data-envelope-zoom-image",
+            "Sugestoes por telefone e endereco",
         ]:
             if snippet not in content:
                 raise AssertionError(f"digitacao de envelope pendente sem trecho esperado: {snippet}")
@@ -565,6 +574,7 @@ for path in paths:
             "Rastreabilidade financeira",
             "Por padrao usa o total do envelope",
             "data-envelope-zoom-image",
+            "Sugestoes por telefone e endereco",
         ]:
             if snippet not in content:
                 raise AssertionError(f"edicao de envelope lancado sem trecho esperado: {snippet}")

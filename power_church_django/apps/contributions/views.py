@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from django.contrib import messages
-from django.http import FileResponse, Http404, HttpRequest, HttpResponse
+from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from pathlib import Path
 
 from power_church_django.services.legacy_write import (
     LegacyWriteError,
+    apply_envelope_profile_update,
+    backfill_envelope_profile_updates,
     create_contribution,
     create_envelope_contribution_batch,
     create_envelope_image_lot,
@@ -14,6 +16,7 @@ from power_church_django.services.legacy_write import (
     create_frequentador_from_contributor,
     create_receipt,
     envelope_upload_root,
+    ignore_envelope_profile_update,
     ignore_pending_envelope,
     launch_pending_envelope,
     link_contributor_to_person_by_id,
@@ -40,6 +43,7 @@ from power_church_django.services.legacy import (
     new_contribution_context,
     pending_envelope_contribution_context,
     person_statement_data,
+    lookup_envelope_people,
     receipt_new_context,
     split_contribution_context,
 )
@@ -266,6 +270,60 @@ def envelope_ignore(request: HttpRequest, envelope_id: int) -> HttpResponse:
         return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
     if lot_id:
         return redirect(f"/contributions/envelopes/lots/{lot_id}/")
+    return redirect("/contributions/envelopes/")
+
+
+def envelope_lookup(request: HttpRequest) -> JsonResponse:
+    phone = request.GET.get("phone", "")
+    address = request.GET.get("address", "")
+    try:
+        payload = lookup_envelope_people(phone=phone, address=address)
+    except LegacyDatabaseError as exc:
+        return JsonResponse({"ok": False, "error": str(exc), "phone_matches": [], "address_matches": []}, status=500)
+    return JsonResponse({"ok": True, **payload})
+
+
+def envelope_profile_update_apply(request: HttpRequest, update_id: int) -> HttpResponse:
+    if request.method != "POST":
+        return redirect("/contributions/envelopes/")
+    envelope_id = int(request.POST.get("envelope_id") or 0)
+    try:
+        result = apply_envelope_profile_update(update_id, actor=_actor(request))
+        envelope_id = int(result["envelope_id"])
+        messages.success(request, f"Telefone aplicado na ficha da pessoa vinculada ao envelope #{envelope_id}.")
+    except LegacyWriteError as exc:
+        messages.error(request, str(exc))
+    if envelope_id:
+        return redirect(f"/contributions/envelopes/{envelope_id}/")
+    return redirect("/contributions/envelopes/")
+
+
+def envelope_profile_update_ignore(request: HttpRequest, update_id: int) -> HttpResponse:
+    if request.method != "POST":
+        return redirect("/contributions/envelopes/")
+    envelope_id = int(request.POST.get("envelope_id") or 0)
+    try:
+        result = ignore_envelope_profile_update(update_id, actor=_actor(request))
+        envelope_id = int(result["envelope_id"])
+        messages.success(request, f"Pendencia cadastral do envelope #{envelope_id} marcada como revisada.")
+    except LegacyWriteError as exc:
+        messages.error(request, str(exc))
+    if envelope_id:
+        return redirect(f"/contributions/envelopes/{envelope_id}/")
+    return redirect("/contributions/envelopes/")
+
+
+def envelope_profile_update_backfill(request: HttpRequest) -> HttpResponse:
+    if request.method != "POST":
+        return redirect("/contributions/envelopes/")
+    try:
+        result = backfill_envelope_profile_updates(actor=_actor(request))
+        messages.success(
+            request,
+            f"Reprocessamento concluido: {result['scanned']} envelope(s) verificado(s) e {result['created']} pendencia(s) criada(s).",
+        )
+    except LegacyWriteError as exc:
+        messages.error(request, str(exc))
     return redirect("/contributions/envelopes/")
 
 

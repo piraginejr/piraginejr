@@ -1587,7 +1587,7 @@ def _contribution_catalog_options(
 def _manual_people_options(conn: sqlite3.Connection, organization_id: int, limit: int = 5000) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT id, codigo_interno, nome, cpf, status
+        SELECT id, codigo_interno, nome, cpf, status, telefone_principal, whatsapp_principal
           FROM pessoas
          WHERE organizacao_id = ? AND ativo = 1
          ORDER BY nome COLLATE NOCASE ASC, id ASC
@@ -1603,6 +1603,8 @@ def _manual_people_options(conn: sqlite3.Connection, organization_id: int, limit
             "cpf": format_cpf(row["cpf"]),
             "status": format_status(row["status"]),
             "sigla": status_sigla(row["status"], True),
+            "telefone": row["telefone_principal"] or "",
+            "whatsapp": row["whatsapp_principal"] or "",
         }
         for row in rows
     ]
@@ -1629,6 +1631,170 @@ def _manual_contributor_options(conn: sqlite3.Connection, organization_id: int, 
         }
         for row in rows
     ]
+
+
+def _digits_only(value: object) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _address_lookup_key(value: object) -> str:
+    normalized = normalize_match_name(value)
+    return "".join(ch for ch in normalized if ch.isalnum())
+
+
+def _address_lookup_tokens(value: object) -> set[str]:
+    return {
+        token
+        for token in normalize_match_name(value).split()
+        if len(token) >= 3 and token not in {"RUA", "AV", "AVENIDA", "APT", "APTO", "BLOCO", "CASA"}
+    }
+
+
+def lookup_envelope_people(phone: str = "", address: str = "", limit: int = 8) -> dict[str, Any]:
+    limit = max(1, min(moneyless_int(limit) or 8, 12))
+    phone_digits = _digits_only(phone)
+    address_text = normalize_query(address)
+    address_key = _address_lookup_key(address_text)
+    address_tokens = _address_lookup_tokens(address_text)
+    address_cep = _digits_only(address_text)
+
+    with connect_legacy() as conn:
+        phone_matches: list[dict[str, Any]] = []
+        address_matches: list[dict[str, Any]] = []
+
+        if len(phone_digits) >= 8:
+            like = f"%{phone_digits[-8:]}%"
+            rows = conn.execute(
+                """
+                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                       p.telefone_principal, p.whatsapp_principal,
+                       GROUP_CONCAT(pc.valor, '||') AS contatos_texto
+                  FROM pessoas p
+                  LEFT JOIN pessoa_contatos pc
+                    ON pc.pessoa_id = p.id
+                   AND pc.tipo IN ('telefone', 'celular', 'whatsapp')
+                   AND COALESCE(pc.valor, '') <> ''
+                 WHERE p.ativo = 1
+                   AND (
+                        COALESCE(p.telefone_principal, '') LIKE ?
+                        OR COALESCE(p.whatsapp_principal, '') LIKE ?
+                        OR COALESCE(pc.valor, '') LIKE ?
+                   )
+                 GROUP BY p.id, p.codigo_interno, p.nome, p.cpf, p.status, p.telefone_principal, p.whatsapp_principal
+                 ORDER BY p.nome COLLATE NOCASE ASC, p.id ASC
+                 LIMIT ?
+                """,
+                (like, like, like, limit * 6),
+            ).fetchall()
+            ranked: list[tuple[int, dict[str, Any]]] = []
+            for row in rows:
+                contact_values = {
+                    normalize_query(row["telefone_principal"]),
+                    normalize_query(row["whatsapp_principal"]),
+                }
+                contact_values.update(
+                    normalize_query(item)
+                    for item in str(row["contatos_texto"] or "").split("||")
+                    if normalize_query(item)
+                )
+                best_score = 0
+                matched_value = ""
+                for contact in contact_values:
+                    candidate_digits = _digits_only(contact)
+                    if not candidate_digits:
+                        continue
+                    if candidate_digits == phone_digits:
+                        best_score = max(best_score, 30)
+                        matched_value = contact
+                    elif len(candidate_digits) >= 8 and phone_digits[-8:] == candidate_digits[-8:]:
+                        if best_score < 20:
+                            best_score = 20
+                            matched_value = contact
+                if not best_score:
+                    continue
+                person = {
+                    "id": moneyless_int(row["id"]),
+                    "nome": row["nome"] or "",
+                    "codigo": row["codigo_interno"] or "",
+                    "cpf": format_cpf(row["cpf"]),
+                    "sigla": status_sigla(row["status"], True),
+                }
+                ranked.append(
+                    (
+                        best_score,
+                        {
+                            "id": person["id"],
+                            "label": _person_option_label(person),
+                            "nome": person["nome"],
+                            "codigo": person["codigo"],
+                            "cpf": person["cpf"],
+                            "sigla": person["sigla"],
+                            "matched_value": matched_value,
+                            "source": "Telefone exato" if best_score >= 30 else "Final do telefone",
+                        },
+                    )
+                )
+            phone_matches = [item for _score, item in sorted(ranked, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]]
+
+        if address_key or address_tokens:
+            rows = conn.execute(
+                """
+                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+                  FROM pessoas p
+                  JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+                 WHERE p.ativo = 1
+                 ORDER BY p.nome COLLATE NOCASE ASC, p.id ASC
+                """
+            ).fetchall()
+            ranked_addresses: list[tuple[int, dict[str, Any]]] = []
+            for row in rows:
+                current_address = _format_address_line(row)
+                current_key = _address_lookup_key(current_address)
+                current_tokens = _address_lookup_tokens(current_address)
+                current_cep = _digits_only(row["cep"])
+                score = 0
+                if address_key and current_key and (address_key in current_key or current_key in address_key):
+                    score = max(score, 30)
+                common_tokens = len(address_tokens & current_tokens)
+                if common_tokens >= 4:
+                    score = max(score, 26)
+                elif common_tokens >= 3:
+                    score = max(score, 20)
+                elif common_tokens >= 2:
+                    score = max(score, 12)
+                if address_cep and current_cep and (address_cep.endswith(current_cep) or current_cep.endswith(address_cep)):
+                    score = max(score, 18)
+                if not score:
+                    continue
+                person = {
+                    "id": moneyless_int(row["id"]),
+                    "nome": row["nome"] or "",
+                    "codigo": row["codigo_interno"] or "",
+                    "cpf": format_cpf(row["cpf"]),
+                    "sigla": status_sigla(row["status"], True),
+                }
+                ranked_addresses.append(
+                    (
+                        score,
+                        {
+                            "id": person["id"],
+                            "label": _person_option_label(person),
+                            "nome": person["nome"],
+                            "codigo": person["codigo"],
+                            "cpf": person["cpf"],
+                            "sigla": person["sigla"],
+                            "matched_value": current_address,
+                            "source": "Endereco muito proximo" if score >= 26 else "Endereco semelhante",
+                        },
+                    )
+                )
+            address_matches = [
+                item
+                for _score, item in sorted(ranked_addresses, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]
+            ]
+
+    return {"phone_matches": phone_matches, "address_matches": address_matches}
 
 
 def _person_option_label(person: dict[str, Any]) -> str:
@@ -2353,12 +2519,17 @@ def get_envelope_detail(envelope_id: int) -> dict[str, Any] | None:
                 "id": moneyless_int(update["id"]),
                 "pessoa_nome": update["pessoa_nome"] or "",
                 "pessoa_url": f"/people/{moneyless_int(update['pessoa_id'])}/",
+                "pessoa_edit_url": f"/people/{moneyless_int(update['pessoa_id'])}/edit/",
                 "codigo": update["codigo_interno"] or "",
                 "cpf": format_cpf(update["cpf"]),
                 "campo": update["campo"] or "",
                 "valor_cadastro": update["valor_cadastro"] or "",
                 "valor_envelope": update["valor_envelope"] or "",
                 "status": update["status"] or "",
+                "can_apply": (update["campo"] or "") == "telefone" and (update["status"] or "") == "pendente",
+                "can_ignore": (update["status"] or "") == "pendente",
+                "apply_url": f"/contributions/envelopes/profile-updates/{moneyless_int(update['id'])}/apply/",
+                "ignore_url": f"/contributions/envelopes/profile-updates/{moneyless_int(update['id'])}/ignore/",
             }
             for update in update_rows
         ],

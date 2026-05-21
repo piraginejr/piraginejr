@@ -78,7 +78,7 @@
     {% if detail.profile_updates %}
       <section class="panel">
         <h2>Pendencias cadastrais sugeridas</h2>
-        <p class="muted">O envelope trouxe telefone ou endereco diferente da ficha. Nada foi alterado automaticamente; use o numero da ficha para conferir antes de atualizar o cadastro.</p>
+        <p class="muted">O envelope trouxe telefone ou endereco diferente da ficha. Telefone pode ser aplicado diretamente com auditoria; endereco fica em revisao manual para nao desmontar os campos estruturados da ficha.</p>
         <div class="table-wrap">
           <table class="fit-table">
             <thead>
@@ -88,6 +88,7 @@
                 <th>Na ficha</th>
                 <th>No envelope</th>
                 <th>Status</th>
+                <th>Acao</th>
               </tr>
             </thead>
             <tbody>
@@ -102,6 +103,26 @@
                   <td>{{ update.valor_cadastro|default:"-" }}</td>
                   <td>{{ update.valor_envelope }}</td>
                   <td><span class="badge">{{ update.status }}</span></td>
+                  <td>
+                    <div class="actions compact-actions">
+                      {% if update.can_apply %}
+                        <form method="post" action="{{ update.apply_url }}">
+                          {% csrf_token %}
+                          <input type="hidden" name="envelope_id" value="{{ detail.id }}">
+                          <button type="submit">Aplicar na ficha</button>
+                        </form>
+                      {% elif update.campo == "endereco" %}
+                        <a class="button secondary" href="{{ update.pessoa_edit_url }}">Revisar ficha</a>
+                      {% endif %}
+                      {% if update.can_ignore %}
+                        <form method="post" action="{{ update.ignore_url }}">
+                          {% csrf_token %}
+                          <input type="hidden" name="envelope_id" value="{{ detail.id }}">
+                          <button class="button secondary" type="submit">Ignorar</button>
+                        </form>
+                      {% endif %}
+                    </div>
+                  </td>
                 </tr>
               {% endfor %}
             </tbody>

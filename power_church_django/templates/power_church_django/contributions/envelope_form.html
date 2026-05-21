@@ -26,7 +26,7 @@
         {% endif %}
         <datalist id="envelope-people-options">
           {% for person in form_data.people_options %}
-            <option value="Pessoa #{{ person.id }} · {{ person.nome }} · {{ person.sigla }}{% if person.codigo %} · Ficha {{ person.codigo }}{% endif %}{% if person.cpf %} · CPF {{ person.cpf }}{% endif %}"></option>
+            <option value="Pessoa #{{ person.id }} · {{ person.nome }} · {{ person.sigla }}{% if person.codigo %} · Ficha {{ person.codigo }}{% endif %}{% if person.cpf %} · CPF {{ person.cpf }}{% endif %}" data-phone="{{ person.telefone|default:'' }}" data-whatsapp="{{ person.whatsapp|default:'' }}"></option>
           {% endfor %}
         </datalist>
         <datalist id="envelope-contributor-options">
@@ -106,12 +106,22 @@
               </label>
               <label>
                 Telefone lido
-                <input name="telefone_informado" value="{{ form_data.default_telefone_informado }}" placeholder="Opcional">
+                <input name="telefone_informado" value="{{ form_data.default_telefone_informado }}" placeholder="Opcional" data-envelope-phone>
+              </label>
+              <div class="wide small muted" data-envelope-phone-warning hidden></div>
+              <label class="wide small" data-envelope-phone-apply hidden>
+                <input type="checkbox" name="aplicar_telefone_na_ficha" value="1">
+                Atualizar imediatamente o telefone da ficha ao salvar este envelope
               </label>
               <label class="wide">
                 Endereco lido
-                <input name="endereco_informado" value="{{ form_data.default_endereco_informado }}" placeholder="Rua, numero, bairro, cidade, CEP...">
+                <input name="endereco_informado" value="{{ form_data.default_endereco_informado }}" placeholder="Rua, numero, bairro, cidade, CEP..." data-envelope-address>
               </label>
+              <div class="wide" data-envelope-hints hidden data-lookup-url="/contributions/envelopes/lookup/">
+                <span class="label">Sugestoes por telefone e endereco</span>
+                <div class="summary-grid" data-envelope-hints-content></div>
+                <p class="small muted">Use estas sugestoes para preencher a pessoa principal quando a escrita do envelope estiver dificil.</p>
+              </div>
               <label>
                 Tipo principal do envelope
                 <select name="tipo_contribuicao_id_padrao" required>
@@ -375,6 +385,188 @@
             ) ? "1" : "0";
           });
         }
+
+        const form = document.querySelector("form[method='post']");
+        if (form) {
+          form.addEventListener("submit", function (event) {
+            const lineCount = parseInt((form.querySelector("input[name='line_count']") || {}).value || "0", 10);
+            for (let index = 1; index <= lineCount; index += 1) {
+              const valueInput = form.querySelector("[name='linha_valor_" + index + "']");
+              if (!valueInput || !String(valueInput.value || "").trim()) continue;
+              const contextFields = [
+                "linha_participante_ref_",
+                "linha_pessoa_id_",
+                "linha_pessoa_ref_",
+                "linha_contribuinte_id_",
+                "linha_contribuinte_ref_",
+                "linha_contribuinte_nome_",
+                "linha_documento_",
+                "linha_tipo_contribuicao_id_",
+                "linha_campanha_id_",
+                "linha_observacoes_",
+              ];
+              const hasContext = contextFields.some(function (prefix) {
+                const field = form.querySelector("[name='" + prefix + index + "']");
+                return field && String(field.value || "").trim();
+              });
+              if (!hasContext) {
+                event.preventDefault();
+                valueInput.focus();
+                alert("A linha " + index + " tem valor, mas nao tem pessoa, contribuinte, destino ou observacao. Complete a linha ou limpe esse valor antes de salvar.");
+                return;
+              }
+            }
+          });
+        }
+
+        const phoneInput = document.querySelector("[data-envelope-phone]");
+        const addressInput = document.querySelector("[data-envelope-address]");
+        const hintsBox = document.querySelector("[data-envelope-hints]");
+        const hintsContent = document.querySelector("[data-envelope-hints-content]");
+        const personRefInput = document.querySelector("[name='pessoa_ref']");
+        const peopleOptions = document.querySelector("#envelope-people-options");
+        const phoneWarning = document.querySelector("[data-envelope-phone-warning]");
+        const phoneApplyLabel = document.querySelector("[data-envelope-phone-apply]");
+        const phoneApplyInput = phoneApplyLabel ? phoneApplyLabel.querySelector("input[name='aplicar_telefone_na_ficha']") : null;
+        const lookupUrl = hintsBox ? hintsBox.dataset.lookupUrl : "";
+        let lookupTimer = 0;
+        function escapeHtml(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+        function renderHintSection(title, items) {
+          if (!items.length) return "";
+          const cards = items.map(function (item) {
+            const cpf = item.cpf ? "<div class='small muted'>CPF " + escapeHtml(item.cpf) + "</div>" : "";
+            const codigo = item.codigo ? "<div class='small muted'>Ficha " + escapeHtml(item.codigo) + "</div>" : "";
+            const matched = item.matched_value ? "<div class='small muted'>Base: " + escapeHtml(item.matched_value) + "</div>" : "";
+            return (
+              "<div>" +
+                "<span class='label'>" + escapeHtml(item.source || title) + "</span>" +
+                "<strong>" + escapeHtml(item.nome) + "</strong>" +
+                "<div class='small muted'>" + escapeHtml(item.sigla || "") + "</div>" +
+                codigo +
+                cpf +
+                matched +
+                "<div class='actions compact-actions'>" +
+                  "<button type='button' class='button secondary' data-person-label='" + escapeHtml(item.label) + "'>Usar na pessoa principal</button>" +
+                "</div>" +
+              "</div>"
+            );
+          }).join("");
+          return "<div><span class='label'>" + escapeHtml(title) + "</span><div class='summary-grid'>" + cards + "</div></div>";
+        }
+        function fetchEnvelopeHints() {
+          if (!lookupUrl || !hintsBox || !hintsContent) return;
+          const phone = phoneInput ? phoneInput.value : "";
+          const address = addressInput ? addressInput.value : "";
+          const phoneDigits = String(phone || "").replace(/\D/g, "");
+          const addressText = String(address || "").trim();
+          if (phoneDigits.length < 8 && addressText.length < 10) {
+            hintsBox.hidden = true;
+            hintsContent.innerHTML = "";
+            return;
+          }
+          const url = lookupUrl + "?phone=" + encodeURIComponent(phone) + "&address=" + encodeURIComponent(address);
+          fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+            .then(function (response) { return response.json(); })
+            .then(function (payload) {
+              if (!payload || payload.ok === false) {
+                hintsBox.hidden = true;
+                hintsContent.innerHTML = "";
+                return;
+              }
+              const phoneHtml = renderHintSection("Telefone", payload.phone_matches || []);
+              const addressHtml = renderHintSection("Endereco", payload.address_matches || []);
+              const html = phoneHtml + addressHtml;
+              hintsContent.innerHTML = html;
+              hintsBox.hidden = !html;
+            })
+            .catch(function () {
+              hintsBox.hidden = true;
+              hintsContent.innerHTML = "";
+            });
+        }
+        function scheduleEnvelopeHints() {
+          window.clearTimeout(lookupTimer);
+          lookupTimer = window.setTimeout(fetchEnvelopeHints, 260);
+        }
+        function phoneMatches(envelopeDigits, currentDigits) {
+          if (!envelopeDigits || !currentDigits) return false;
+          if (envelopeDigits === currentDigits) return true;
+          if (envelopeDigits.length >= 8 && currentDigits.length >= 8) {
+            return envelopeDigits.slice(-8) === currentDigits.slice(-8);
+          }
+          return false;
+        }
+        function syncPhoneWarning() {
+          if (!phoneWarning || !phoneInput || !personRefInput || !peopleOptions) return;
+          const typedPhone = String(phoneInput.value || "").replace(/\D/g, "");
+          const personLabel = String(personRefInput.value || "").trim();
+          if (!typedPhone || !personLabel) {
+            phoneWarning.hidden = true;
+            phoneWarning.textContent = "";
+            if (phoneApplyLabel) phoneApplyLabel.hidden = true;
+            if (phoneApplyInput) phoneApplyInput.checked = false;
+            return;
+          }
+          const option = Array.from(peopleOptions.options).find(function (item) {
+            return item.value === personLabel;
+          });
+          if (!option) {
+            phoneWarning.hidden = true;
+            phoneWarning.textContent = "";
+            if (phoneApplyLabel) phoneApplyLabel.hidden = true;
+            if (phoneApplyInput) phoneApplyInput.checked = false;
+            return;
+          }
+          const storedPhones = [option.dataset.phone || "", option.dataset.whatsapp || ""]
+            .map(function (value) { return String(value || "").replace(/\D/g, ""); })
+            .filter(Boolean);
+          const hasMatch = storedPhones.some(function (stored) {
+            return phoneMatches(typedPhone, stored);
+          });
+          if (hasMatch) {
+            phoneWarning.hidden = true;
+            phoneWarning.textContent = "";
+            if (phoneApplyLabel) phoneApplyLabel.hidden = true;
+            if (phoneApplyInput) phoneApplyInput.checked = false;
+            return;
+          }
+          phoneWarning.hidden = false;
+          phoneWarning.textContent = "Telefone divergente da ficha selecionada. Marque abaixo para atualizar a ficha agora; se nao marcar, o sistema criara uma pendencia cadastral para auditoria.";
+          if (phoneApplyLabel) phoneApplyLabel.hidden = false;
+        }
+        if (phoneInput) {
+          phoneInput.addEventListener("input", scheduleEnvelopeHints);
+          phoneInput.addEventListener("blur", scheduleEnvelopeHints);
+          phoneInput.addEventListener("input", syncPhoneWarning);
+          phoneInput.addEventListener("blur", syncPhoneWarning);
+        }
+        if (addressInput) {
+          addressInput.addEventListener("input", scheduleEnvelopeHints);
+          addressInput.addEventListener("blur", scheduleEnvelopeHints);
+        }
+        if (hintsContent && personRefInput) {
+          hintsContent.addEventListener("click", function (event) {
+            const button = event.target.closest("[data-person-label]");
+            if (!button) return;
+            personRefInput.value = button.dataset.personLabel || "";
+            personRefInput.dispatchEvent(new Event("input", { bubbles: true }));
+            personRefInput.focus();
+            syncPhoneWarning();
+          });
+        }
+        if (personRefInput) {
+          personRefInput.addEventListener("input", syncPhoneWarning);
+          personRefInput.addEventListener("blur", syncPhoneWarning);
+        }
+        scheduleEnvelopeHints();
+        syncPhoneWarning();
 
         const input = document.querySelector("[data-envelope-file-input]");
         const uploadLabel = document.querySelector("[data-envelope-upload-label]");

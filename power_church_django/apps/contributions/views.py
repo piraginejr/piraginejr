@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from pathlib import Path
+from urllib.parse import urlencode
 
 from power_church_django.services.legacy_write import (
     LegacyWriteError,
@@ -45,7 +46,16 @@ from power_church_django.services.legacy import (
     person_statement_data,
     lookup_envelope_people,
     receipt_new_context,
+    search_receipt_people,
     split_contribution_context,
+)
+from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_filename
+from power_church_django.services.receipt_delivery import (
+    enrich_receipt_form,
+    queue_receipt_dispatches,
+    receipt_dispatch_history,
+    issue_and_optionally_send_receipts,
+    update_receipt_email_template,
 )
 
 
@@ -56,6 +66,145 @@ def _actor(request: HttpRequest) -> str:
     return "django"
 
 
+def _envelope_hub() -> dict[str, object]:
+    envelopes = list_envelopes(limit=None)
+    lots = list(envelopes.get("lots") or [])
+    items = list(envelopes.get("items") or [])
+    next_pending_lot = next((lot for lot in lots if lot.get("next_pending_url")), None)
+    next_pending_item = next((item for item in items if item.get("launch_url")), None)
+    latest_launched = next((item for item in items if item.get("edit_url")), None)
+    recent_lot = lots[0] if lots else None
+    pending_total = sum(int(lot.get("pendentes") or 0) for lot in lots)
+    return {
+        "total": int(envelopes.get("total") or 0),
+        "total_value_fmt": str(envelopes.get("total_value_fmt") or ""),
+        "lots_count": len(lots),
+        "pending_total": pending_total,
+        "list_url": "/contributions/envelopes/",
+        "new_lot_url": "/contributions/envelopes/lots/new/",
+        "new_envelope_url": "/contributions/envelopes/new/",
+        "next_pending_url": (
+            str(next_pending_lot.get("next_pending_url") or "")
+            if next_pending_lot
+            else (str(next_pending_item.get("launch_url") or "") if next_pending_item else "")
+        ),
+        "next_pending_label": (
+            f"{next_pending_lot['nome']} ({next_pending_lot['competencia']})"
+            if next_pending_lot
+            else (str(next_pending_item.get("nome") or "") if next_pending_item else "")
+        ),
+        "recent_lot_url": str(recent_lot.get("detail_url") or "") if recent_lot else "",
+        "recent_lot_label": (
+            f"{recent_lot['nome']} ({recent_lot['competencia']})"
+            if recent_lot
+            else ""
+        ),
+        "latest_edit_url": str(latest_launched.get("edit_url") or "") if latest_launched else "",
+        "latest_edit_label": str(latest_launched.get("nome") or "") if latest_launched else "",
+        "latest_detail_url": str(latest_launched.get("detail_url") or "") if latest_launched else "",
+    }
+
+
+def _notify_envelope_reconciliation(request: HttpRequest, result: dict[str, object]) -> None:
+    reconciliation = result.get("reconciliation")
+    if not isinstance(reconciliation, dict):
+        return
+    if reconciliation.get("matched"):
+        source_label = str(reconciliation.get("source_label") or "fonte bancaria existente")
+        matched_id = int(reconciliation.get("matched_contribution_id") or 0)
+        messages.info(
+            request,
+            f"Conciliacao automatica aplicada: o envelope reaproveitou a contribuicao bancaria #{matched_id} via {source_label}; o valor nao foi duplicado.",
+        )
+        return
+    if reconciliation.get("reason") == "multiple_candidates_forced_new":
+        candidate_count = int(reconciliation.get("candidate_count") or 0)
+        messages.info(
+            request,
+            f"Atencao do operador: havia {candidate_count} candidato(s) bancario(s) para conciliacao e a opcao foi lancar como novo. Revise depois na auditoria para evitar duplicidade.",
+        )
+
+
+def _receipt_hub_query(
+    *,
+    q: str = "",
+    person_id: int = 0,
+    date_start: str = "",
+    date_end: str = "",
+    selected_person_id: int = 0,
+    person_lookup: str = "",
+    form_date_start: str = "",
+    form_date_end: str = "",
+) -> str:
+    params: list[tuple[str, str]] = []
+    if str(q or "").strip():
+        params.append(("q", str(q).strip()))
+    if int(person_id or 0):
+        params.append(("person_id", str(int(person_id))))
+    if str(date_start or "").strip():
+        params.append(("date_start", str(date_start).strip()))
+    if str(date_end or "").strip():
+        params.append(("date_end", str(date_end).strip()))
+    if int(selected_person_id or 0):
+        params.append(("selected_person_id", str(int(selected_person_id))))
+    if str(person_lookup or "").strip():
+        params.append(("person_lookup", str(person_lookup).strip()))
+    if str(form_date_start or "").strip():
+        params.append(("form_date_start", str(form_date_start).strip()))
+    if str(form_date_end or "").strip():
+        params.append(("form_date_end", str(form_date_end).strip()))
+    return urlencode(params)
+
+
+def _receipt_hub_redirect(query: str = "") -> HttpResponse:
+    return redirect(f"/receipts/{'?' + query if query else ''}")
+
+
+def _receipt_message_fields(payload: object) -> dict[str, str]:
+    getter = getattr(payload, "get", None)
+    if getter is None:
+        return {"email_to": "", "subject": "", "body": "", "default_from_email": "", "reply_to_email": ""}
+    return {
+        "email_to": str(getter("email_to", "") or "").strip(),
+        "subject": str(getter("email_subject", "") or "").strip(),
+        "body": str(getter("email_body", "") or "").strip(),
+        "default_from_email": str(getter("email_default_from", "") or "").strip(),
+        "reply_to_email": str(getter("email_reply_to", "") or "").strip(),
+    }
+
+
+def _maybe_save_receipt_template(payload: object, *, actor: str) -> None:
+    getter = getattr(payload, "get", None)
+    if getter is None:
+        return
+    if str(getter("save_as_default", "") or "") not in {"1", "on", "true", "sim"}:
+        return
+    fields = _receipt_message_fields(payload)
+    update_receipt_email_template(
+        subject_template=fields["subject"],
+        body_template=fields["body"],
+        default_from_email=fields["default_from_email"],
+        reply_to_email=fields["reply_to_email"],
+        actor=actor,
+    )
+
+
+def _receipt_return_query(payload: object, fallback_selected_person_id: int = 0) -> str:
+    getter = getattr(payload, "get", None)
+    if getter is None:
+        return _receipt_hub_query(selected_person_id=fallback_selected_person_id)
+    return _receipt_hub_query(
+        q=getter("return_q", ""),
+        person_id=int(getter("return_person_id", "") or 0),
+        date_start=getter("return_date_start", ""),
+        date_end=getter("return_date_end", ""),
+        selected_person_id=int(getter("return_selected_person_id", "") or fallback_selected_person_id or 0),
+        person_lookup=getter("return_person_lookup", ""),
+        form_date_start=getter("return_form_date_start", ""),
+        form_date_end=getter("return_form_date_end", ""),
+    )
+
+
 def index(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Contribuicoes",
@@ -64,13 +213,12 @@ def index(request: HttpRequest) -> HttpResponse:
         "status": request.GET.get("status", ""),
     }
     try:
-        list_limit = 5000 if context["competencia"] or context["q"] or context["status"] else 300
         context["contributions"] = list_contributions(
             q=context["q"],
             competencia=context["competencia"],
             status=context["status"],
-            limit=list_limit,
         )
+        context["envelope_hub"] = _envelope_hub()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/contributions/list.html", context)
@@ -124,8 +272,8 @@ def envelopes(request: HttpRequest) -> HttpResponse:
         context["envelopes"] = list_envelopes(
             q=context["q"],
             competencia=context["competencia"],
-            limit=1000 if context["q"] or context["competencia"] else 300,
         )
+        context["envelope_hub"] = _envelope_hub()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/contributions/envelopes.html", context)
@@ -143,6 +291,7 @@ def envelope_new(request: HttpRequest) -> HttpResponse:
                 request,
                 f"Envelope #{result['envelope_id']} registrado com {len(result['contribution_ids'])} linha(s) e imagem arquivada.",
             )
+            _notify_envelope_reconciliation(request, result)
             return redirect(f"/contributions/envelopes/{result['envelope_id']}/")
         except (LegacyWriteError, ValueError) as exc:
             messages.error(request, str(exc))
@@ -218,6 +367,7 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
                 request,
                 f"Envelope #{envelope_id} lancado com {len(result['contribution_ids'])} contribuicao(oes).",
             )
+            _notify_envelope_reconciliation(request, result)
             if next_id:
                 return redirect(f"/contributions/envelopes/{next_id}/launch/")
             return redirect(f"/contributions/envelopes/lots/{lot_id}/")
@@ -243,6 +393,7 @@ def envelope_edit(request: HttpRequest, envelope_id: int) -> HttpResponse:
                 request,
                 f"Envelope #{envelope_id} corrigido com {len(result['contribution_ids'])} linha(s) ativa(s); versao anterior preservada na auditoria.",
             )
+            _notify_envelope_reconciliation(request, result)
             return redirect(f"/contributions/envelopes/{envelope_id}/")
         except (LegacyWriteError, ValueError) as exc:
             messages.error(request, str(exc))
@@ -420,12 +571,67 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
 
 
 def receipts(request: HttpRequest) -> HttpResponse:
+    if request.method == "POST":
+        person_id = int(request.POST.get("pessoa_id") or 0)
+        action = str(request.POST.get("action") or "generate_consolidated")
+        try:
+            actor = _actor(request)
+            fields = _receipt_message_fields(request.POST)
+            if action == "save_email_template":
+                update_receipt_email_template(
+                    subject_template=fields["subject"],
+                    body_template=fields["body"],
+                    default_from_email=fields["default_from_email"],
+                    reply_to_email=fields["reply_to_email"],
+                    actor=actor,
+                )
+                messages.success(request, "Modelo padrao de e-mail do recibo atualizado.")
+                return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
+            _maybe_save_receipt_template(request.POST, actor=actor)
+            if action in {"generate_competence", "generate_and_send_competence"}:
+                competences = [value for value in request.POST.getlist("competencia_key") if str(value).strip()]
+                if not competences:
+                    raise LegacyWriteError("Selecione pelo menos uma competencia para gerar os recibos.")
+                result = issue_and_optionally_send_receipts(
+                    person_id=person_id,
+                    competences=competences,
+                    emission_date=str(request.POST.get("data_emissao") or ""),
+                    notes=str(request.POST.get("observacoes") or ""),
+                    email_to=fields["email_to"] if action == "generate_and_send_competence" else "",
+                    subject=fields["subject"],
+                    body=fields["body"],
+                    actor=actor,
+                    send_now=action == "generate_and_send_competence",
+                )
+                messages.success(request, f"{len(result['receipt_ids'])} recibo(s) gerado(s) por competencia.")
+                return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
+            receipt_id = create_receipt(request.POST, actor=actor)
+            if action == "generate_and_send_consolidated":
+                queue_receipt_dispatches(
+                    [receipt_id],
+                    email_to=fields["email_to"],
+                    subject=fields["subject"],
+                    body=fields["body"],
+                    actor=actor,
+                    send_now=True,
+                )
+                messages.success(request, f"Recibo #{receipt_id} gerado e processado para envio.")
+            else:
+                messages.success(request, f"Recibo #{receipt_id} gerado com auditoria.")
+            return redirect(f"/receipts/{receipt_id}/")
+        except LegacyWriteError as exc:
+            messages.error(request, str(exc))
+            return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
     context = {
         "title": "Recibos",
         "q": request.GET.get("q", ""),
         "person_id": int(request.GET.get("person_id") or 0),
         "date_start": request.GET.get("date_start", ""),
         "date_end": request.GET.get("date_end", ""),
+        "selected_person_id": int(request.GET.get("selected_person_id") or 0),
+        "person_lookup": request.GET.get("person_lookup", ""),
+        "form_date_start": request.GET.get("form_date_start", ""),
+        "form_date_end": request.GET.get("form_date_end", ""),
     }
     try:
         context["receipts"] = list_receipts(
@@ -434,6 +640,19 @@ def receipts(request: HttpRequest) -> HttpResponse:
             date_start=context["date_start"],
             date_end=context["date_end"],
         )
+        context["receipt_people"] = search_receipt_people(context["person_lookup"]) if context["person_lookup"] else []
+        if context["selected_person_id"]:
+            context["receipt_form"] = enrich_receipt_form(
+                receipt_new_context(
+                    context["selected_person_id"],
+                    date_start=context["form_date_start"],
+                    date_end=context["form_date_end"],
+                ),
+                selected_competences=request.GET.getlist("competencia_key"),
+            )
+            if context["receipt_form"] is None:
+                context["selected_person_id"] = 0
+                messages.error(request, "Pessoa selecionada para gerar recibo nao foi encontrada.")
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/receipts/list.html", context)
@@ -448,28 +667,67 @@ def receipt_new(request: HttpRequest) -> HttpResponse:
             return redirect(f"/receipts/{receipt_id}/")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
-            return redirect(f"/receipts/new/?person_id={person_id}")
-    person_id = int(request.GET.get("person_id") or 0)
-    context = {
-        "title": "Novo recibo",
-        "person_id": person_id,
-        "date_start": request.GET.get("date_start", ""),
-        "date_end": request.GET.get("date_end", ""),
-    }
-    try:
-        context["form_data"] = receipt_new_context(person_id, date_start=context["date_start"], date_end=context["date_end"])
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
-    return render(request, "power_church_django/receipts/form.html", context)
+            query = _receipt_return_query(request.POST, fallback_selected_person_id=int(person_id or 0))
+            if not query:
+                query = _receipt_hub_query(selected_person_id=int(person_id or 0))
+            return _receipt_hub_redirect(query)
+    query = _receipt_hub_query(
+        selected_person_id=int(request.GET.get("person_id") or 0),
+        person_lookup=request.GET.get("person_lookup", ""),
+        form_date_start=request.GET.get("form_date_start", "") or request.GET.get("date_start", ""),
+        form_date_end=request.GET.get("form_date_end", "") or request.GET.get("date_end", ""),
+    )
+    return _receipt_hub_redirect(query)
 
 
 def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
+    if request.method == "POST":
+        try:
+            fields = _receipt_message_fields(request.POST)
+            _maybe_save_receipt_template(request.POST, actor=_actor(request))
+            queue_receipt_dispatches(
+                [receipt_id],
+                email_to=fields["email_to"],
+                subject=fields["subject"],
+                body=fields["body"],
+                actor=_actor(request),
+                send_now=True,
+            )
+            messages.success(request, "Recibo processado para envio manual.")
+        except LegacyWriteError as exc:
+            messages.error(request, str(exc))
+        return redirect(f"/receipts/{receipt_id}/")
     context = {"title": "Recibo"}
     try:
         context["detail"] = get_receipt_detail(receipt_id)
+        if context["detail"]:
+            person_id = int((context["detail"].get("receipt") or {}).get("person_id") or 0)
+            context["dispatch_history"] = [
+                item
+                for item in receipt_dispatch_history(person_id, limit=20)
+                if str(item.get("receipt_number") or "") == str((context["detail"].get("receipt") or {}).get("numero") or "")
+            ]
+            context["receipt_form"] = enrich_receipt_form(
+                {
+                    "person": context["detail"].get("person") or {},
+                    "items": context["detail"].get("items") or [],
+                    "total_fmt": (context["detail"].get("receipt") or {}).get("valor_fmt") or "",
+                    "filters": {},
+                }
+            )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/receipts/detail.html", context)
+
+
+def receipt_pdf_view(request: HttpRequest, receipt_id: int) -> HttpResponse:
+    detail = get_receipt_detail(receipt_id)
+    if detail is None:
+        raise Http404("Recibo nao encontrado.")
+    payload = receipt_pdf(detail)
+    response = HttpResponse(payload, content_type="application/pdf")
+    response["Content-Disposition"] = f'inline; filename="{receipt_pdf_filename(detail)}"'
+    return response
 
 
 def contributors(request: HttpRequest) -> HttpResponse:
@@ -484,7 +742,6 @@ def contributors(request: HttpRequest) -> HttpResponse:
         "selected_tags": selected_tags,
     }
     try:
-        list_limit = 10000 if context["q"] or context["mode"] != "todos" or selected_tags or context["section"] else 500
         context["contributors"] = list_contributors(
             q=context["q"],
             status=context["status"],
@@ -492,7 +749,6 @@ def contributors(request: HttpRequest) -> HttpResponse:
             mode=context["mode"],
             tags=selected_tags,
             section=context["section"],
-            limit=list_limit,
         )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)

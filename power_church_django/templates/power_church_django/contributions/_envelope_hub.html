@@ -1,0 +1,56 @@
+<section class="panel no-print">
+  <div class="section-head">
+    <div>
+      <h2>Central de envelopes</h2>
+      <p class="muted">Atalhos para subir lote, subir envelope, digitar pendencias e editar os ultimos lancamentos em um unico lugar.</p>
+    </div>
+    <a class="button secondary" href="{{ envelope_hub.list_url }}">Abrir lista completa</a>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <span class="label">Envelopes ativos</span>
+      <strong>{{ envelope_hub.total }}</strong>
+      <span class="muted">arquivo auditavel disponivel em tela</span>
+    </div>
+    <div class="card">
+      <span class="label">Total lancado</span>
+      <strong>{{ envelope_hub.total_value_fmt }}</strong>
+      <span class="muted">somatorio dos envelopes ja lancados</span>
+    </div>
+    <div class="card">
+      <span class="label">Lotes recentes</span>
+      <strong>{{ envelope_hub.lots_count }}</strong>
+      <span class="muted">com {{ envelope_hub.pending_total }} pendencia(s) aberta(s)</span>
+    </div>
+    <div class="card">
+      <span class="label">Acao rapida</span>
+      {% if envelope_hub.next_pending_url %}
+        <strong><a href="{{ envelope_hub.next_pending_url }}">Digitar proximo envelope</a></strong>
+        <span class="muted">{{ envelope_hub.next_pending_label }}</span>
+      {% elif envelope_hub.latest_edit_url %}
+        <strong><a href="{{ envelope_hub.latest_edit_url }}">Editar ultimo lancamento</a></strong>
+        <span class="muted">{{ envelope_hub.latest_edit_label }}</span>
+      {% else %}
+        <strong>Sem pendencias</strong>
+        <span class="muted">use os atalhos abaixo para registrar novos envelopes</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="actions compact-actions">
+    <a class="button" href="{{ envelope_hub.new_lot_url }}">Subir lote</a>
+    <a class="button" href="{{ envelope_hub.new_envelope_url }}">Subir envelope</a>
+    {% if envelope_hub.next_pending_url %}
+      <a class="button secondary" href="{{ envelope_hub.next_pending_url }}">Digitar um envelope</a>
+    {% endif %}
+    {% if envelope_hub.recent_lot_url %}
+      <a class="button secondary" href="{{ envelope_hub.recent_lot_url }}">Abrir lote recente</a>
+    {% endif %}
+    {% if envelope_hub.latest_edit_url %}
+      <a class="button secondary" href="{{ envelope_hub.latest_edit_url }}">Editar ultimo lancamento</a>
+    {% elif envelope_hub.latest_detail_url %}
+      <a class="button secondary" href="{{ envelope_hub.latest_detail_url }}">Abrir ultimo envelope</a>
+    {% endif %}
+  </div>
+</section>

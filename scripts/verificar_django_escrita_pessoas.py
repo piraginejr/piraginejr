@@ -138,6 +138,8 @@ def main() -> int:
 
     django.setup()
 
+    from django.conf import settings
+
     from power_church_django.services.legacy_bank_write import save_cent_rule_from_form
     from power_church_django.services.photos import find_member_photo, save_member_photo_payload
     from power_church_django.services.legacy_write import (
@@ -277,6 +279,42 @@ def main() -> int:
         },
         actor="verificador",
     )
+    conn = sqlite3.connect(temp_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        auto_receipt = conn.execute(
+            """
+            SELECT r.id, r.valor_total, r.status
+              FROM recibos r
+              JOIN recibo_itens ri ON ri.recibo_id = r.id
+             WHERE ri.contribuicao_id = ?
+               AND r.status <> 'cancelado'
+               AND r.cancelado_em IS NULL
+             ORDER BY r.id DESC
+             LIMIT 1
+            """,
+            (contribution_id,),
+        ).fetchone()
+        auto_receipt_items = conn.execute(
+            """
+            SELECT COUNT(*)
+              FROM recibo_itens ri
+              JOIN recibos r ON r.id = ri.recibo_id
+             WHERE ri.contribuicao_id = ?
+               AND r.status <> 'cancelado'
+               AND r.cancelado_em IS NULL
+            """,
+            (contribution_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    if auto_receipt is None:
+        raise AssertionError("Lancamento com pessoa e e-mail nao gerou recibo automatico por evento.")
+    if round(float(auto_receipt["valor_total"] or 0), 2) != 150.0 or auto_receipt["status"] != "emitido":
+        raise AssertionError("Recibo automatico por evento nao persistiu total/status esperados apos ajuste manual.")
+    if int(auto_receipt_items or 0) != 1:
+        raise AssertionError("Recibo automatico por evento nao vinculou exatamente uma contribuicao.")
+    auto_receipt_id = int(auto_receipt["id"] or 0)
     manual_ids = create_manual_contribution_batch(
         {
             "data_recebimento": "2026-05-11",
@@ -617,10 +655,25 @@ def main() -> int:
             "ativo": "1",
         }
     )
+    settings.POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED = False
+    manual_receipt_contribution_id = create_contribution(
+        {
+            "pessoa_id": str(person_id),
+            "data_recebimento": "2026-05-10",
+            "tipo_contribuicao_id": "1",
+            "forma_recebimento_id": "1",
+            "valor": "100,00",
+            "status_operacional": "regular",
+            "observacoes": "Contribuicao reservada para recibo manual.",
+            "justificativa": "Teste automatico do fluxo manual de recibo.",
+        },
+        actor="verificador",
+    )
+    settings.POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED = True
     receipt_id = create_receipt(
         {
             "pessoa_id": str(person_id),
-            "contribuicao_id": [str(contribution_id)],
+            "contribuicao_id": [str(manual_receipt_contribution_id)],
             "data_emissao": "2026-05-10",
             "observacoes": "Recibo de teste automatico.",
         },
@@ -1349,7 +1402,7 @@ def main() -> int:
     print(
         "OK escrita Django em banco temporario: "
         f"pessoas={people}, ativas={active_people}, auditoria={audit}, contatos={contacts}, contribuintes={contributors}, "
-        f"contribuicao={contribution_id}, regra_centavos={rule_id}, recibo={receipt_id}, "
+        f"contribuicao={contribution_id}, regra_centavos={rule_id}, recibo_auto={auto_receipt_id}, recibo_manual={receipt_id}, "
         f"manual_rateado={len(manual_ids)}, split={len(split_ids)}, "
         f"envelope={envelope_result['envelope_id']}, envelope_linhas={len(envelope_result['contribution_ids'])}, "
         f"envelope_editado={editable_envelope_result['envelope_id']}, envelope_edit_linhas={len(editable_update_result['contribution_ids'])}, "

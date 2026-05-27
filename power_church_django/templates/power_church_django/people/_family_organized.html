@@ -1,0 +1,83 @@
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>Nucleos organizados</h2>
+      <p class="muted">Mostrando {{ families.organized.shown }} de {{ families.organized.total }} nucleo(s) domiciliar(es). {% if families.organized.review_groups %}{{ families.organized.review_groups }} pedem auditoria de endereco.{% endif %}</p>
+    </div>
+    <span class="badge">{{ families.organized.shown }} exibidos</span>
+  </div>
+</section>
+
+{% if families.organized.items %}
+  {% for group in families.organized.items %}
+    <section class="family-card">
+      <div class="split">
+        <div>
+          <h2>{{ group.label }}</h2>
+          <p>{{ group.address }}<br><span class="muted">{{ group.review_reason }}</span></p>
+          <div class="legend">
+            <span class="badge {% if group.needs_review %}warn{% else %}ok{% endif %}">{{ group.alignment_badge }}</span>
+            <span class="badge">Pessoas {{ group.member_count }}</span>
+            <span class="badge">SA {{ group.status_summary.sa }}</span>
+            <span class="badge">Outros {{ group.status_summary.outros }}</span>
+            {% if group.surname_label %}
+              <span class="badge">Familia {{ group.surname_label }}</span>
+            {% endif %}
+            <span class="badge">Com contribuicao {{ group.financial_summary.contributing_people }}</span>
+            <span class="badge">Vinculos {{ group.financial_summary.linked_contributors }}</span>
+            <span class="badge">Total {{ group.financial_summary.total_fmt }}</span>
+          </div>
+        </div>
+        <div class="actions no-print">
+          {% if group.surname_label %}
+            <a class="button secondary" href="/people/families/?section=extended&q={{ group.surname_label|urlencode }}">Abrir familia estendida</a>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="relationship-card" style="margin-top:14px">
+        <div class="relationship-card-header">
+          <div>
+            <strong>Contribuicao na familia</strong>
+            <div class="muted small">Use este bloco para verificar rapidamente se o nucleo tem atividade financeira para apoio a regras de votacao e auditoria.</div>
+          </div>
+          <span class="badge {% if group.has_financial_member %}ok{% else %}warn{% endif %}">
+            {% if group.has_financial_member %}Ha membro contribuinte{% else %}Sem atividade financeira{% endif %}
+          </span>
+        </div>
+        {% if group.financial_summary.note %}
+          <p class="muted">{{ group.financial_summary.note }}</p>
+        {% else %}
+          <p class="muted">Nenhum membro com contribuicao ativa ou contribuinte vinculado foi encontrado neste nucleo.</p>
+        {% endif %}
+      </div>
+
+      <div class="person-strip">
+        {% for person in group.people %}
+          <a class="person-card" href="/people/{{ person.id }}/">
+            {% if person.photo_url %}
+              <img class="person-photo" src="{{ person.photo_url }}" alt="Foto de {{ person.nome }}">
+            {% else %}
+              <span class="person-photo-placeholder">{{ person.sigla }}</span>
+            {% endif %}
+            <span>
+              <strong>{{ person.nome }}</strong>
+              <span class="muted small">{{ person.sigla }} · {{ person.status }} · {{ person.codigo|default:"sem codigo" }}</span>
+              <span class="muted small">{{ person.endereco|default:"sem endereco principal" }}</span>
+              {% if person.financial.summary %}
+                <span class="muted small">Financeiro: {{ person.financial.summary }}</span>
+              {% else %}
+                <span class="muted small">Sem contribuicao ativa no nucleo ate aqui.</span>
+              {% endif %}
+            </span>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+  {% endfor %}
+{% else %}
+  <section class="panel">
+    <h2>Nenhum nucleo organizado encontrado</h2>
+    <p>Altere os filtros ou confira se os vinculos familiares ativos ja foram criados para essas pessoas.</p>
+  </section>
+{% endif %}

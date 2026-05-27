@@ -4,12 +4,24 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 DJANGO_DIR="$BASE_DIR/power_church_django"
 PYTHON_BIN="$DJANGO_DIR/.venv/bin/python"
+ENV_FILE="$BASE_DIR/.env.power_church_django.local"
 HOST="${POWER_CHURCH_DJANGO_HOST:-127.0.0.1}"
 PORT="${POWER_CHURCH_DJANGO_PORT:-63620}"
 URL="http://$HOST:$PORT/"
 HEALTH_URL="$URL"
 
 cd "$BASE_DIR"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
+HOST="${POWER_CHURCH_DJANGO_HOST:-127.0.0.1}"
+PORT="${POWER_CHURCH_DJANGO_PORT:-63620}"
+URL="http://$HOST:$PORT/"
+HEALTH_URL="$URL"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "Nao encontrei o Python do Django em:"

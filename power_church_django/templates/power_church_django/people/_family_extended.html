@@ -1,0 +1,62 @@
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>Familias estendidas</h2>
+      <p class="muted">Mostrando {{ families.extended.shown }} sobrenome(s) familiares. Sem busca, a lista destaca apenas sobrenomes com mais de um nucleo domiciliar.</p>
+    </div>
+    <span class="badge">{{ families.extended.shown }} grupos</span>
+  </div>
+</section>
+
+{% if families.extended.items %}
+  {% for cluster in families.extended.items %}
+    <section class="family-card">
+      <div class="split">
+        <div>
+          <h2>Familia {{ cluster.label }}</h2>
+          <p>{{ cluster.nuclei_count }} nucleo(s) domiciliar(es) identificado(s) para este sobrenome.</p>
+          <div class="legend">
+            <span class="badge">Nucleos {{ cluster.nuclei_count }}</span>
+            <span class="badge">Pessoas {{ cluster.people_count }}</span>
+            <span class="badge {% if cluster.review_count %}warn{% else %}ok{% endif %}">Auditar {{ cluster.review_count }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="fit-table">
+          <thead>
+            <tr>
+              <th>Nucleo domiciliar</th>
+              <th>Membros</th>
+              <th>Financeiro</th>
+              <th>Situacao</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for nucleus in cluster.nuclei %}
+              <tr>
+                <td>
+                  <strong>{{ nucleus.label }}</strong>
+                  <div class="muted small">{{ nucleus.address }}</div>
+                </td>
+                <td>
+                  {% for person in nucleus.people %}
+                    <a href="/people/{{ person.id }}/">{{ person.nome }}</a>{% if not forloop.last %}, {% endif %}
+                  {% endfor %}
+                </td>
+                <td>{{ nucleus.financial_summary.note|default:"Sem atividade financeira no nucleo." }}</td>
+                <td><span class="badge {% if nucleus.needs_review %}warn{% else %}ok{% endif %}">{{ nucleus.alignment_badge }}</span></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endfor %}
+{% else %}
+  <section class="panel">
+    <h2>Nenhuma familia estendida encontrada</h2>
+    <p>Refine a busca por sobrenome, pessoa ou endereco para localizar os nucleos domiciliares desejados.</p>
+  </section>
+{% endif %}

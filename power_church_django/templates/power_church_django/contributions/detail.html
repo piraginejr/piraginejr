@@ -13,7 +13,7 @@
         {% if detail.contribution.person_id %}
           <a class="button" href="/people/{{ detail.contribution.person_id }}/">Abrir ficha</a>
           <a class="button secondary" href="/contributions/statements/{{ detail.contribution.person_id }}/">Extrato</a>
-          <a class="button secondary" href="/receipts/new/?person_id={{ detail.contribution.person_id }}">Gerar recibo</a>
+          <a class="button secondary" href="/receipts/?selected_person_id={{ detail.contribution.person_id }}#gerar-recibo">Gerar recibo</a>
         {% endif %}
         <a class="button" href="/contributions/{{ detail.contribution.id }}/split/">Ratear / dividir</a>
       </div>

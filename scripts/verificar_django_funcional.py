@@ -65,7 +65,7 @@ from django.conf import settings
 from django.test import Client
 
 from power_church_django.services.access_control import access_control_snapshot
-from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, list_contributions, list_contributors, list_secure_people_trash
+from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people, list_secure_people_trash
 from power_church_django.services.legacy_bank_write import _parse_upload_with_provider, _parsed_summary, compare_pdf_upload_providers
 from power_church_core.normalization import contribution_report_identity
 
@@ -79,6 +79,37 @@ if summary["people_total"] <= 0:
     raise AssertionError("dashboard nao encontrou pessoas")
 if summary["contributions_count"] <= 0:
     raise AssertionError("dashboard nao encontrou contribuicoes")
+people_data = list_people()
+if int(people_data["shown"] or 0) != int(people_data["total"] or 0):
+    raise AssertionError(
+        f"lista de pessoas ainda esta limitada: {people_data['shown']} de {people_data['total']}"
+    )
+contributors_data = list_contributors()
+if int(contributors_data["shown"] or 0) != int(contributors_data["total"] or 0):
+    raise AssertionError(
+        f"lista de contribuintes ainda esta limitada: {contributors_data['shown']} de {contributors_data['total']}"
+    )
+all_contributions_data = list_contributions()
+if int(all_contributions_data["shown"] or 0) != int(all_contributions_data["total"] or 0):
+    raise AssertionError(
+        f"lista de contribuicoes ainda esta limitada: {all_contributions_data['shown']} de {all_contributions_data['total']}"
+    )
+all_envelopes_data = list_envelopes()
+if int(all_envelopes_data["shown"] or 0) != int(all_envelopes_data["total"] or 0):
+    raise AssertionError(
+        f"lista de envelopes ainda esta limitada: {all_envelopes_data['shown']} de {all_envelopes_data['total']}"
+    )
+families_data = family_registry_dashboard(section="organized")
+if int(families_data["organized"]["shown"] or 0) != int(families_data["organized"]["total"] or 0):
+    raise AssertionError(
+        f"lista de familias organizadas ainda esta limitada: {families_data['organized']['shown']} de {families_data['organized']['total']}"
+    )
+families_audit_data = family_registry_dashboard(section="audit", mode="all")
+expected_audit_groups = int(families_audit_data["audit"]["summary"]["filtered_automatic_groups"] or 0) + int(families_audit_data["audit"]["summary"]["filtered_hypothesis_groups"] or 0)
+if int(families_audit_data["audit"]["summary"]["shown_groups"] or 0) != expected_audit_groups:
+    raise AssertionError(
+        f"fila de auditoria das familias ainda esta limitada: {families_audit_data['audit']['summary']['shown_groups']} de {expected_audit_groups}"
+    )
 access = access_control_snapshot()
 if not access["installed"]:
     raise AssertionError("permissoes Power Church nao instaladas no Django")
@@ -204,11 +235,14 @@ paths = [
     "/people/",
     "/people/new/",
     "/people/families/",
+    "/people/families/?section=audit",
+    "/people/families/?section=extended",
     f"/people/{person_id}/",
     f"/people/{person_id}/edit/",
     "/people/?q=Maria",
     "/people/export/?format=csv",
     "/people/export/?q=Maria&format=xlsx",
+    "/people/export/?preset=familias_votacao&column=nome&column=familia_domiciliar&column=familia_tem_contribuinte&format=csv",
     "/people/imports/",
     "/contributors/",
     "/contributors/?tag=pf&section=contributors",
@@ -230,7 +264,7 @@ paths = [
     f"/contributions/statements/{contribution_person_id}/",
     f"/contributions/?competencia={quote(latest_competence)}",
     "/receipts/",
-    f"/receipts/new/?person_id={contribution_person_id}",
+    f"/receipts/?selected_person_id={contribution_person_id}",
     "/imports/",
     "/imports/rules/",
     "/reports/",
@@ -258,6 +292,7 @@ if pix_movement:
     paths.append(f"/imports/pix/movement/{pix_movement[0]}/")
 if receipt_row:
     paths.append(f"/receipts/{receipt_row[0]}/")
+    paths.append(f"/receipts/{receipt_row[0]}/pdf/")
 if envelope_row:
     paths.append(f"/contributions/envelopes/{envelope_row[0]}/")
     if envelope_row["caminho_imagem"]:
@@ -291,6 +326,8 @@ for path in paths:
                 raise AssertionError("exportacao CSV de pessoas nao retornou text/csv")
             if b"Nome" not in body or len(body) < 200:
                 raise AssertionError("exportacao CSV de pessoas vazia ou sem cabecalho")
+            if "familia_domiciliar" in path and b"Familia domiciliar" not in body:
+                raise AssertionError("exportacao dinamica CSV sem coluna familiar esperada")
         if "format=xlsx" in path:
             if "spreadsheet" not in response["Content-Type"]:
                 raise AssertionError("exportacao XLSX de pessoas nao retornou planilha")
@@ -308,6 +345,12 @@ for path in paths:
             raise AssertionError("PDF de contribuicoes por destino nao retornou application/pdf")
         if not body.startswith(b"%PDF") or len(body) < 1200:
             raise AssertionError("PDF de contribuicoes por destino invalido ou pequeno demais")
+        continue
+    if re.match(r"^/receipts/\d+/pdf/$", path):
+        if not response["Content-Type"].startswith("application/pdf"):
+            raise AssertionError("PDF de recibo nao retornou application/pdf")
+        if not body.startswith(b"%PDF") or len(body) < 1200:
+            raise AssertionError("PDF de recibo invalido ou pequeno demais")
         continue
     if path.startswith("/contributions/envelopes/") and path.endswith("/image/"):
         if response["Content-Type"].startswith("text/html"):
@@ -331,7 +374,16 @@ for path in paths:
     if path == "/" and "/contributions/envelopes/new/" not in content:
         raise AssertionError("dashboard nao incluiu botao direto para subir envelope")
     if path == "/people/":
-        for snippet in ["Exportar XLSX", "Exportar CSV"]:
+        for snippet in [
+            "Exportar XLSX",
+            "Exportar CSV",
+            "Exportacao dinamica de pessoas",
+            "Cadastro basico",
+            "Familias e votacao",
+            "Selecionar tudo",
+            "Imprimir lista",
+            f"Mostrando {people_data['total']} de {people_data['total']} registros",
+        ]:
             if snippet not in content:
                 raise AssertionError(f"lista de pessoas sem exportacao import-export: {snippet}")
         if inactive_person and f"/people/{inactive_person['id']}/" in content:
@@ -363,14 +415,33 @@ for path in paths:
     if path == "/people/families/":
         for snippet in [
             "Familias domiciliares",
-            "Hipoteses para auditoria",
-            "Membros ativos na lista",
+            "Nucleos organizados",
+            "Fila de auditoria",
+            "Familias estendidas",
+            "Situacao do domicilio",
+            "Contribuicao na familia",
+        ]:
+            if snippet not in content:
+                raise AssertionError(f"familias domiciliares Django sem trecho esperado: {snippet}")
+    if path == "/people/families/?section=audit":
+        for snippet in [
+            "Fila de auditoria",
             "Aplicacao em lote",
+            "Hipoteses para auditoria",
             "Ignorar sugestoes selecionadas",
             "Criar familias selecionadas",
         ]:
             if snippet not in content:
-                raise AssertionError(f"familias domiciliares Django sem trecho esperado: {snippet}")
+                raise AssertionError(f"auditoria de familias Django sem trecho esperado: {snippet}")
+    if path == "/people/families/?section=extended":
+        for snippet in [
+            "Familias estendidas",
+            "Nucleo domiciliar",
+            "Financeiro",
+            "Situacao",
+        ]:
+            if snippet not in content:
+                raise AssertionError(f"familias estendidas Django sem trecho esperado: {snippet}")
     path_parts = [part for part in path.strip("/").split("/") if part]
     if len(path_parts) == 2 and path_parts[0] == "people" and path_parts[1].isdigit():
         for snippet in ["Familia domiciliar por endereco", "Sincronizar familias domiciliares por endereco", "Relacoes familiares ativas", "relationship-card", "Desassociar da familia domiciliar", "Ignorar sugestao", "data-person-relationship-search", "Registrar relacao familiar"]:
@@ -388,11 +459,13 @@ for path in paths:
         for snippet in ["compact-marker-grid", "compact-check"]:
             if snippet not in content:
                 raise AssertionError(f"central de contribuintes sem marcadores compactos: {snippet}")
-        data = list_contributors(limit=10000)
+        data = list_contributors()
         order = [
             (0 if item.get("group_kind") == "nome" else 1, str(item.get("sort_key") or ""), int(item.get("id") or 0))
             for item in data["items"]
         ]
+        if len(data["items"]) != int(data["total"] or 0):
+            raise AssertionError(f"central de contribuintes carregou {len(data['items'])} de {data['total']}")
         if order != sorted(order):
             raise AssertionError("central de contribuintes nao esta em ordem alfabetica")
         bad_named_numbers = [
@@ -428,6 +501,24 @@ for path in paths:
             raise AssertionError("central de contribuintes sem painel de associacoes familiares")
         if "section=family_groups" in path and "Blocos familiares sugeridos" not in content:
             raise AssertionError("central de contribuintes sem painel de blocos familiares")
+    if path == "/contributions/":
+        total = int(all_contributions_data["total"] or 0)
+        required = [
+            "Central de envelopes",
+            "Lancamentos",
+            "Envelopes",
+            "Envelopes ativos",
+            "Total lancado",
+            "Lotes recentes",
+            "Abrir lista completa",
+            "Subir lote",
+            "Subir envelope",
+            "Imprimir lista filtrada",
+            f"Mostrando {total} de {total} lancamentos",
+        ]
+        for snippet in required:
+            if snippet not in content:
+                raise AssertionError(f"contribuicoes Django sem central operativa esperada: {snippet}")
     if path.startswith("/imports/rules/"):
         required = ["Regras por centavos", "Mapa atual", "Salvar regra", "Conta / campanha", "Criar/usar tipo proprio da destinacao"]
         if "edit_rule_id=" in path:
@@ -489,7 +580,22 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"lancamento manual assistido Django sem trecho esperado: {snippet}")
     if path == "/contributions/envelopes/":
-        for snippet in ["Envelopes de contribuicao", "Criar lote de envelopes", "Registrar envelope", "Abrir lote", "Reprocessar telefones/enderecos"]:
+        total = int(all_envelopes_data["total"] or 0)
+        for snippet in [
+            "Envelopes de contribuicao",
+            "Criar lote de envelopes",
+            "Registrar envelope",
+            "Central de envelopes",
+            "Lancamentos",
+            "Envelopes",
+            "Abrir lote",
+            "Abrir lista completa",
+            "Subir lote",
+            "Subir envelope",
+            "Imprimir lista",
+            "Reprocessar telefones/enderecos",
+            f"Mostrando {total} de {total} envelope(s)",
+        ]:
             if snippet not in content:
                 raise AssertionError(f"lista de envelopes Django sem trecho esperado: {snippet}")
     if path == "/contributions/envelopes/new/":
@@ -599,17 +705,34 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"nova contribuicao Django sem lancamento auditavel: {snippet}")
     if path == "/receipts/":
-        for snippet in ["Recibos", "Pesquisar recibos", "Lista de recibos"]:
+        for snippet in ["Recibos", "Gerar recibo por pessoa", "Pesquisar recibos", "Lista de recibos", "Envio automatico"]:
             if snippet not in content:
                 raise AssertionError(f"lista de recibos Django sem trecho esperado: {snippet}")
-    if path.startswith("/receipts/new/"):
-        for snippet in ["Gerar recibo individual", "Contribuicoes selecionaveis", "Gerar recibo"]:
+    if path.startswith("/receipts/?selected_person_id="):
+        for snippet in [
+            "Gerar recibos para",
+            "Varios recibos por competencia",
+            "Recibo consolidado do periodo filtrado",
+            "E-mail do recibo",
+            "Salvar somente o padrao",
+            "Gerar e enviar consolidado",
+            "Ver recibos desta pessoa",
+        ]:
             if snippet not in content:
-                raise AssertionError(f"novo recibo Django sem trecho esperado: {snippet}")
-    if path.startswith("/receipts/") and path not in {"/receipts/"} and not path.startswith("/receipts/new/"):
-        for snippet in ["Recibo de contribuicoes", "Imprimir recibo", "Contribuicoes do recibo"]:
+                raise AssertionError(f"central de recibos Django sem trecho esperado: {snippet}")
+    if re.match(r"^/receipts/\d+/$", path):
+        for snippet in ["Recibo de contribuicoes", "Imprimir recibo", "Contribuicoes do recibo", "Logo do cliente", "Enviar ou reenviar por e-mail", "Abrir PDF"]:
             if snippet not in content:
                 raise AssertionError(f"detalhe de recibo Django sem trecho esperado: {snippet}")
+legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")
+if legacy_receipt_redirect.status_code not in {301, 302}:
+    raise AssertionError("rota legada /receipts/new/ nao redirecionou para a central nova")
+redirect_target = legacy_receipt_redirect.headers.get("Location", "")
+expected_receipt_target = f"/receipts/?selected_person_id={contribution_person_id}"
+if expected_receipt_target not in redirect_target:
+    raise AssertionError(
+        f"rota legada /receipts/new/ redirecionou para destino inesperado: {redirect_target or '-'}"
+    )
     if path.startswith("/reports/?competencia="):
         report = contribution_report(competencia=latest_competence)
         items = report["items"]

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from django.contrib import messages
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 
-from power_church_django.services.data_exchange import dataset_download_response, people_export_dataset
+from power_church_django.services.data_exchange import (
+    dataset_download_response,
+    people_export_dataset,
+    people_export_form_context,
+)
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.legacy import (
     LegacyDatabaseError,
-    family_nuclei_dashboard,
+    family_registry_dashboard,
     get_people_import_lot_detail,
     get_person_detail,
     list_secure_people_trash,
@@ -55,6 +61,8 @@ def index(request: HttpRequest) -> HttpResponse:
         "q": request.GET.get("q", ""),
         "status": request.GET.get("status", ""),
         "can_delete_people": _can_delete_people(request),
+        "people": None,
+        "export_options": people_export_form_context(),
     }
     try:
         context["people"] = list_people(q=context["q"], status=context["status"])
@@ -66,9 +74,11 @@ def index(request: HttpRequest) -> HttpResponse:
 def export(request: HttpRequest) -> HttpResponse:
     q = request.GET.get("q", "")
     status = request.GET.get("status", "")
+    preset = request.GET.get("preset", "")
+    columns = [value for value in request.GET.getlist("column") if value.strip()]
     export_format = request.GET.get("format", "xlsx")
     try:
-        export_data = people_export_dataset(q=q, status=status)
+        export_data = people_export_dataset(q=q, status=status, columns=columns, preset=preset)
     except LegacyDatabaseError as exc:
         messages.error(request, str(exc))
         return redirect("/people/")
@@ -83,6 +93,9 @@ def export(request: HttpRequest) -> HttpResponse:
                 "q": q,
                 "status": status,
                 "formato": export_format,
+                "preset": export_data["preset"],
+                "colunas": export_data["columns"],
+                "quantidade_colunas": len(export_data["columns"]),
                 "total_filtrado": export_data["total"],
                 "registros_exportados": export_data["shown"],
             },
@@ -201,16 +214,37 @@ def families(request: HttpRequest) -> HttpResponse:
                     request,
                     f"Familia domiciliar criada: {changed} relacao(oes) nova(s) em {len(selected_groups)} grupo(s).",
                 )
-        return redirect(
-            f"/people/families/?cep={request.POST.get('cep', '')}&mode={request.POST.get('mode', 'all')}"
+        section = request.POST.get("section", "audit")
+        cep = request.POST.get("cep", "")
+        mode = request.POST.get("mode", "all")
+        q = request.POST.get("q", "")
+        review = request.POST.get("review", "all")
+        query = urlencode(
+            {
+                "section": section,
+                "cep": cep,
+                "mode": mode,
+                "q": q,
+                "review": review,
+            }
         )
+        return redirect(f"/people/families/?{query}")
     context = {
         "title": "Familias domiciliares",
+        "q": request.GET.get("q", ""),
         "cep": request.GET.get("cep", ""),
+        "section": request.GET.get("section", "organized"),
         "mode": request.GET.get("mode", "all"),
+        "review": request.GET.get("review", "all"),
     }
     try:
-        context["families"] = family_nuclei_dashboard(cep=context["cep"], mode=context["mode"])
+        context["families"] = family_registry_dashboard(
+            q=context["q"],
+            cep=context["cep"],
+            section=context["section"],
+            mode=context["mode"],
+            review=context["review"],
+        )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/families.html", context)

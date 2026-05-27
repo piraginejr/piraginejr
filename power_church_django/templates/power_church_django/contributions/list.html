@@ -10,13 +10,16 @@
       {% endif %}
     </div>
     <div class="actions no-print">
-      <a class="button" href="/contributions/envelopes/">Envelopes digitalizados</a>
+      <a class="button" href="/contributions/envelopes/">Central de envelopes</a>
       <a class="button" href="/contributions/manual/">Lancamento manual assistido</a>
       <a class="button secondary" href="/people/">Escolher pessoa para lancar</a>
       <a class="button" href="/reports/?competencia={{ competencia|urlencode }}&q={{ q|urlencode }}">Visualizar relatorio alfabetico</a>
       <button type="button" onclick="window.print()">Imprimir lista filtrada</button>
     </div>
   </section>
+
+  {% include "power_church_django/contributions/_tabs.html" with active_tab="contributions" %}
+  {% include "power_church_django/contributions/_envelope_hub.html" %}
 
   <section class="panel">
     <form class="toolbar" method="get">

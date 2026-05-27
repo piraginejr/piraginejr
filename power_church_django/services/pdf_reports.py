@@ -369,3 +369,136 @@ def contribution_destination_pdf_filename(report: dict[str, Any]) -> str:
     else:
         suffix = "todos"
     return f"contribuicoes_por_destino_{suffix}.pdf"
+
+
+def receipt_pdf(detail: dict[str, Any]) -> bytes:
+    receipt = detail.get("receipt") or {}
+    person = detail.get("person") or {}
+    items = list(detail.get("items") or [])
+    pages: list[list[str]] = []
+    current: list[str] = []
+    y = 800
+
+    def new_page() -> None:
+        nonlocal current, y
+        if current:
+            pages.append(current)
+        current = ["0.12 0.16 0.22 rg"]
+        y = 800
+
+    def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        font = "F2" if bold else "F1"
+        current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
+
+    def line(value: object, size: int = 9, bold: bool = False, x: int = 42, advance: int = 14) -> None:
+        nonlocal y
+        if y < 54:
+            new_page()
+        text_at(x, y, value, size=size, bold=bold)
+        y -= advance
+
+    def rule() -> None:
+        nonlocal y
+        current.append(f"0.86 0.83 0.78 RG 0.8 w 42 {y} m 553 {y} l S")
+        y -= 12
+
+    def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
+        current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
+
+    def summary_box(top: int, label: str, value: object, x: int, width: int = 160) -> None:
+        fill_rect(x, top - 34, width, 34)
+        current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
+        text_at(x + 7, top - 14, label, size=7, bold=True)
+        text_at(x + 7, top - 28, value, size=10, bold=True)
+
+    new_page()
+    line(f"Recibo de contribuicoes {receipt.get('numero') or ''}".strip(), size=18, bold=True, advance=22)
+    line(
+        f"Emitido em {receipt.get('data') or br_date(date.today().isoformat())} | Organizacao: {receipt.get('organizacao') or 'Power Church'}",
+        size=9,
+        advance=18,
+    )
+    rule()
+    fill_rect(408, y - 58, 145, 58, "0.99 0.97 0.93")
+    current.append(f"0.82 0.77 0.70 RG 0.8 w 408 {y - 58} 145 58 re S")
+    text_at(418, y - 18, "Espaco reservado", size=7, bold=False)
+    text_at(418, y - 34, "Logo do cliente", size=11, bold=True)
+    text_at(418, y - 48, "Pode receber marca no futuro", size=7, bold=False)
+    top = y
+    summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=220)
+    summary_box(top, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 270, width=180)
+    summary_box(top - 64, "Valor total", receipt.get("valor_fmt") or "-", 408, width=145)
+    y -= 108
+    line(
+        f"Codigo: {person.get('codigo') or receipt.get('person_code') or 'sem codigo'} | CPF: {person.get('cpf') or receipt.get('person_cpf') or 'nao informado'}",
+        size=9,
+        advance=14,
+    )
+    if person.get("email") or receipt.get("person_email"):
+        line(f"E-mail: {person.get('email') or receipt.get('person_email')}", size=9, advance=14)
+    if receipt.get("observacoes"):
+        line("Observacoes do recibo:", size=9, bold=True, advance=14)
+        for chunk in _wrap(receipt.get("observacoes"), 90):
+            line(chunk, size=8, advance=12)
+    rule()
+    line(
+        f"Recebemos de {person.get('nome') or receipt.get('person_name') or 'Contribuinte'} as contribuicoes abaixo relacionadas.",
+        size=9,
+        advance=16,
+    )
+
+    def table_header() -> None:
+        nonlocal y
+        if y < 90:
+            new_page()
+        fill_rect(42, y - 15, 511, 18, "0.95 0.91 0.84")
+        text_at(48, y - 10, "Data", size=8, bold=True)
+        text_at(106, y - 10, "Competencia", size=8, bold=True)
+        text_at(196, y - 10, "Tipo", size=8, bold=True)
+        text_at(356, y - 10, "Forma", size=8, bold=True)
+        text_at(462, y - 10, "Valor", size=8, bold=True)
+        y -= 24
+
+    def row_separator() -> None:
+        current.append(f"0.90 0.86 0.80 RG 0.4 w 42 {y + 3} m 553 {y + 3} l S")
+
+    table_header()
+    for item in items:
+        type_lines = _wrap(item.get("tipo"), 28)[:2]
+        form_lines = _wrap(item.get("forma") or "-", 16)[:2]
+        row_lines = max(len(type_lines), len(form_lines), 1)
+        row_height = 10 + (row_lines * 11)
+        if y - row_height < 48:
+            new_page()
+            table_header()
+        start_y = y
+        text_at(48, start_y, item.get("data") or "-", size=8)
+        text_at(106, start_y, item.get("competencia") or "-", size=8)
+        for index, value in enumerate(type_lines):
+            text_at(196, start_y - (index * 11), value, size=8, bold=index == 0)
+        for index, value in enumerate(form_lines):
+            text_at(356, start_y - (index * 11), value, size=8)
+        text_at(462, start_y, item.get("valor_fmt") or "-", size=8, bold=True)
+        y -= row_height
+        if item.get("observacoes"):
+            for chunk in _wrap(item.get("observacoes"), 78)[:2]:
+                text_at(196, y + 2, f"Obs: {chunk}", size=7)
+                y -= 10
+        row_separator()
+    if not items:
+        line("Recibo sem itens vinculados.", size=10)
+    if current:
+        pages.append(current)
+    for index, page in enumerate(pages, start=1):
+        page.append(f"0.40 0.44 0.50 rg BT /F1 8 Tf 1 0 0 1 500 24 Tm (Pagina {index}/{len(pages)}) Tj ET")
+    return _build_pdf(pages)
+
+
+def receipt_pdf_filename(detail: dict[str, Any]) -> str:
+    receipt = detail.get("receipt") or {}
+    number = normalize_query(receipt.get("numero")).lower().replace(" ", "_").replace("/", "_")
+    person = normalize_query(receipt.get("person_name")).lower()
+    person_slug = "".join(ch if ch.isalnum() else "_" for ch in person).strip("_") or "contribuinte"
+    if number:
+        return f"recibo_{number}.pdf"
+    return f"recibo_{person_slug}.pdf"

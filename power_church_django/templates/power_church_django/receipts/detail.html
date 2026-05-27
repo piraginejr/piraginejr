@@ -11,6 +11,7 @@
       <div class="actions no-print">
         <a class="button secondary" href="/receipts/">Voltar para recibos</a>
         <a class="button secondary" href="/people/{{ detail.receipt.person_id }}/">Abrir ficha</a>
+        <a class="button secondary" href="/receipts/{{ detail.receipt.id }}/pdf/" target="_blank" rel="noopener">Abrir PDF</a>
         <button type="button" onclick="window.print()">Imprimir recibo</button>
       </div>
     </section>
@@ -23,10 +24,87 @@
     </section>
 
     <section class="panel">
-      <h2>Declaracao</h2>
-      <p>Recebemos de <strong>{{ detail.receipt.person_name }}</strong> as contribuicoes abaixo relacionadas, no valor total de <strong>{{ detail.receipt.valor_fmt }}</strong>.</p>
-      {% if detail.receipt.observacoes %}
-        <p><strong>Observacoes:</strong> {{ detail.receipt.observacoes }}</p>
+      <div style="display:grid; grid-template-columns:minmax(0, 1fr) 180px; gap:18px; align-items:start;">
+        <div>
+          <h2>Declaracao</h2>
+          <p>Recebemos de <strong>{{ detail.receipt.person_name }}</strong> as contribuicoes abaixo relacionadas, no valor total de <strong>{{ detail.receipt.valor_fmt }}</strong>.</p>
+          {% if detail.receipt.observacoes %}
+            <p><strong>Observacoes:</strong> {{ detail.receipt.observacoes }}</p>
+          {% endif %}
+        </div>
+        <div style="border:1px dashed #bda98b; min-height:108px; border-radius:14px; padding:12px; background:#fcfaf6;">
+          <div class="muted small">Espaco reservado</div>
+          <strong style="display:block; margin-top:8px;">Logo do cliente</strong>
+          <div class="muted small" style="margin-top:8px;">A logo pode ser encaixada aqui no layout impresso e no PDF.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Enviar ou reenviar por e-mail</h2>
+          <p class="muted">Use este painel para reenviar o mesmo recibo manualmente, ajustando o destinatario se necessario.</p>
+        </div>
+        <span class="badge">{{ receipt_form.person.email|default:"sem e-mail" }}</span>
+      </div>
+      <form method="post">
+        {% csrf_token %}
+        <div class="form-grid">
+          <label>
+            Destinatario deste envio
+            <input type="email" name="email_to" value="{{ receipt_form.email_to_default }}" placeholder="email@destino.com">
+          </label>
+          <label>
+            Remetente padrao
+            <input type="email" name="email_default_from" value="{{ receipt_form.email_default_from }}" placeholder="recebimento@dominio.com">
+          </label>
+          <label>
+            Responder para
+            <input type="email" name="email_reply_to" value="{{ receipt_form.email_reply_to }}" placeholder="Opcional">
+          </label>
+          <label class="wide">
+            Assunto
+            <input name="email_subject" value="{{ receipt_form.email_template_subject }}">
+          </label>
+          <label class="wide">
+            Corpo do e-mail
+            <textarea name="email_body" rows="8">{{ receipt_form.email_template_body }}</textarea>
+          </label>
+        </div>
+        <label class="muted" style="display:flex; gap:8px; align-items:center; margin-top:12px;">
+          <input type="checkbox" name="save_as_default" value="1">
+          Salvar esta mensagem como novo padrao do sistema
+        </label>
+        <div class="actions">
+          <button type="submit">Enviar este recibo agora</button>
+        </div>
+      </form>
+      {% if dispatch_history %}
+        <div class="table-wrap" style="margin-top:16px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Recibo</th>
+                <th>Status</th>
+                <th>Destino</th>
+                <th>Data</th>
+                <th>Erro</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in dispatch_history %}
+                <tr>
+                  <td>{{ item.receipt_number|default:"-" }}</td>
+                  <td><span class="badge">{{ item.status }}</span></td>
+                  <td>{{ item.email_to|default:"-" }}</td>
+                  <td>{{ item.sent_at|default:item.updated_at }}</td>
+                  <td>{{ item.last_error|default:"-" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       {% endif %}
     </section>
 

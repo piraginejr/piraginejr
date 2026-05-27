@@ -229,6 +229,14 @@
                     {% endfor %}
                   </select>
                 </label>
+                <label>
+                  Se houver mais de um candidato bancario
+                  <select name="acao_ambiguidade_conciliacao">
+                    <option value="supervisao" selected>Parar e pedir supervisao</option>
+                    <option value="novo">Lancar como nova contribuicao</option>
+                  </select>
+                  <span class="small muted">Para PIX/transferencia, o sistema tenta reaproveitar a entrada bancaria ja importada. Se houver ambiguidade, esta opcao define se ele para para revisao ou segue por decisao do operador.</span>
+                </label>
                 <label class="wide">
                   Observacao de conciliacao
                   <input name="rastreio_observacoes" value="{{ form_data.traceability.observacoes|default:'' }}" placeholder="Ex.: comprovante anexado ao envelope, aguardando extrato da operadora">

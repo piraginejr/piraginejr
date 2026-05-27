@@ -10,7 +10,7 @@
       </div>
       <div class="actions no-print">
         <a class="button secondary" href="/people/{{ statement.person.id }}/">Abrir ficha</a>
-        <a class="button secondary" href="/receipts/new/?person_id={{ statement.person.id }}">Gerar recibo</a>
+        <a class="button secondary" href="/receipts/?selected_person_id={{ statement.person.id }}#gerar-recibo">Gerar recibo</a>
         <button type="button" onclick="window.print()">Imprimir extrato</button>
       </div>
     </section>

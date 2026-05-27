@@ -1,0 +1,98 @@
+<section class="panel">
+  <div class="section-head">
+    <div>
+      <h2>Fila de auditoria</h2>
+      <p class="muted">Mostrando {{ families.audit.summary.shown_groups }} grupo(s). Alta confianca filtrada: {{ families.audit.summary.filtered_automatic_groups }}. Hipoteses filtradas: {{ families.audit.summary.filtered_hypothesis_groups }}.</p>
+    </div>
+    <span class="badge">{{ families.audit.summary.shown_groups }} exibidos</span>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card">
+    <span class="label">Alta confianca</span>
+    <strong>{{ families.audit.summary.automatic_groups }}</strong>
+    <div class="muted small">{{ families.audit.summary.automatic_people }} pessoa(s)</div>
+  </div>
+  <div class="card">
+    <span class="label">Hipoteses para auditoria</span>
+    <strong>{{ families.audit.summary.hypothesis_groups }}</strong>
+    <div class="muted small">{{ families.audit.summary.hypothesis_people }} pessoa(s)</div>
+  </div>
+  <div class="card">
+    <span class="label">Membros ativos na lista</span>
+    <strong>{{ families.audit.summary.shown_status.sa }}</strong>
+    <div class="muted small">{{ families.audit.summary.shown_status.outros }} em outras modalidades</div>
+  </div>
+</section>
+
+{% if families.audit.groups %}
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="section" value="{{ families.section }}">
+    <input type="hidden" name="q" value="{{ q }}">
+    <input type="hidden" name="review" value="{{ review }}">
+    <input type="hidden" name="cep" value="{{ cep }}">
+    <input type="hidden" name="mode" value="{{ mode }}">
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Aplicacao em lote</h2>
+          <p class="muted">Marque varias hipoteses para criar familias domiciliares ou retirar falsas sugestoes da fila em uma unica operacao auditada.</p>
+        </div>
+        <div class="actions">
+          <button type="submit" name="bulk_action" value="create">Criar familias selecionadas</button>
+          <button type="submit" name="bulk_action" value="suppress">Ignorar sugestoes selecionadas</button>
+        </div>
+      </div>
+    </section>
+
+    {% for group in families.audit.groups %}
+      <section class="family-card">
+        <div class="split">
+          <div>
+            <label class="check-item no-print">
+              <input type="checkbox" name="person_ids" value="{{ group.person_ids }}">
+              <span>Selecionar este grupo</span>
+            </label>
+            <h2>{{ group.label }}</h2>
+            <p>{{ group.address }}<br><span class="muted">{{ group.reason }}</span></p>
+            <div class="legend">
+              <span class="badge {% if group.confidence == 'Alta confianca' %}ok{% else %}warn{% endif %}">{{ group.confidence }}</span>
+              <span class="badge">Pendentes {{ group.missing_relationships }}</span>
+              <span class="badge">SA {{ group.status_summary.sa }}</span>
+              <span class="badge">Outros {{ group.status_summary.outros }}</span>
+              <span class="badge">Total {{ group.status_summary.total }}</span>
+              <span class="badge">CEP {{ group.cep }}</span>
+            </div>
+          </div>
+          <div class="actions no-print">
+            <button type="submit" name="single_person_ids" value="{{ group.person_ids }}">Criar familia domiciliar deste grupo</button>
+            <button type="submit" name="single_suppress_person_ids" value="{{ group.person_ids }}">Ignorar sugestao deste grupo</button>
+          </div>
+        </div>
+        <div class="person-strip">
+          {% for person in group.people %}
+            <a class="person-card" href="/people/{{ person.id }}/">
+              {% if person.photo_url %}
+                <img class="person-photo" src="{{ person.photo_url }}" alt="Foto de {{ person.nome }}">
+              {% else %}
+                <span class="person-photo-placeholder">{{ person.sigla }}</span>
+              {% endif %}
+              <span>
+                <strong>{{ person.nome }}</strong>
+                <span class="muted small">{{ person.sigla }} · {{ person.status }} · {{ person.codigo|default:"sem codigo" }}</span>
+                <span class="muted small">{{ person.complemento|default:"sem complemento" }}</span>
+              </span>
+            </a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endfor %}
+  </form>
+{% else %}
+  <section class="panel">
+    <h2>Nenhuma sugestao encontrada</h2>
+    <p>Com os filtros atuais, nao ha familia domiciliar pendente de auditoria para mostrar.</p>
+  </section>
+{% endif %}

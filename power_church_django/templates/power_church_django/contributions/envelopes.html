@@ -18,9 +18,13 @@
         {% csrf_token %}
         <button class="button secondary" type="submit">Reprocessar telefones/enderecos</button>
       </form>
+      <button type="button" onclick="window.print()">Imprimir lista</button>
       <a class="button secondary" href="/contributions/">Voltar para contribuicoes</a>
     </div>
   </section>
+
+  {% include "power_church_django/contributions/_tabs.html" with active_tab="envelopes" %}
+  {% include "power_church_django/contributions/_envelope_hub.html" %}
 
   <section class="panel">
     <form class="toolbar" method="get">
@@ -106,6 +110,8 @@
               <td>
                 {% if item.launch_url %}
                   <a class="button" href="{{ item.launch_url }}">Digitar</a>
+                {% elif item.edit_url %}
+                  <a class="button secondary" href="{{ item.edit_url }}">Editar</a>
                 {% else %}
                   <a class="button secondary" href="{{ item.detail_url }}">Abrir</a>
                 {% endif %}

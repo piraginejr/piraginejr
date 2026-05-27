@@ -2262,6 +2262,7 @@ def _contribution_payload(data: Any) -> dict[str, object]:
 
 def create_contribution(payload: Any, actor: str = "") -> int:
     person_id = moneyless_int(_form_value(payload, "pessoa_id"))
+    contribution_id = 0
     with connect_legacy_write() as conn:
         person = get_person(conn, person_id)
         if person is None:
@@ -2315,9 +2316,10 @@ def create_contribution(payload: Any, actor: str = "") -> int:
                     after,
                     actor=actor,
                 )
-                return contribution_id
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel registrar a contribuicao: {exc}") from exc
+    _auto_issue_event_receipts([contribution_id], actor=actor)
+    return contribution_id
 
 
 def update_contribution(contribution_id: int, payload: Any, actor: str = "") -> None:
@@ -2380,6 +2382,7 @@ def update_contribution(contribution_id: int, payload: Any, actor: str = "") -> 
                 )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel ajustar a contribuicao: {exc}") from exc
+    _auto_issue_event_receipts([contribution_id], actor=actor)
 
 
 def _field_value(data: Any, key: str, index: int, default: str = "") -> str:
@@ -2811,6 +2814,276 @@ def _traceability_note(traceability: Mapping[str, object]) -> str:
     return "Rastreabilidade financeira: " + "; ".join(parts) + "." if parts else ""
 
 
+def _traceability_can_reconcile_existing_bank_contribution(traceability: Mapping[str, object]) -> bool:
+    value = normalize_query(traceability.get("rastreio_forma_identificada")).lower()
+    return value in {"transferencia", "pix"}
+
+
+def _append_traceability_observation(traceability: dict[str, object], note: str) -> None:
+    text = normalize_query(note)
+    if not text:
+        return
+    current = normalize_query(traceability.get("rastreio_observacoes"))
+    merged = "\n".join(part for part in [current, text] if part)
+    traceability["rastreio_observacoes"] = merged
+
+
+def _bank_reconciliation_source_label(row: sqlite3.Row) -> str:
+    pix_id = moneyless_int(_row_value(row, "pix_movimento_id"))
+    statement_id = moneyless_int(_row_value(row, "extrato_movimento_id"))
+    if pix_id:
+        return f"PIX #{pix_id}"
+    if statement_id:
+        return f"extrato #{statement_id}"
+    return f"contribuicao #{moneyless_int(_row_value(row, 'id'))}"
+
+
+def _envelope_reconciliation_ambiguity_resolution(payload: Any) -> str:
+    resolution = normalize_match_name(_form_value(payload, "acao_ambiguidade_conciliacao", "supervisao"))
+    if resolution == "NOVO":
+        return "novo"
+    return "supervisao"
+
+
+def _find_existing_bank_contribution_for_envelope(
+    conn: sqlite3.Connection,
+    *,
+    person_id: int,
+    received_on: str,
+    expected_total: float,
+    form_id: int | None,
+    traceability: Mapping[str, object],
+    exclude_contribution_ids: list[int] | None = None,
+) -> dict[str, object]:
+    if not person_id or not received_on or expected_total <= 0:
+        return {"matched": False, "reason": "missing_data", "candidate_count": 0}
+    if not _traceability_can_reconcile_existing_bank_contribution(traceability):
+        return {"matched": False, "reason": "traceability_not_supported", "candidate_count": 0}
+    excluded = _unique_ints(exclude_contribution_ids or [])
+    params: list[object] = [person_id, received_on, expected_total - 0.009, expected_total + 0.009]
+    excluded_sql = ""
+    if excluded:
+        excluded_sql = f" AND c.id NOT IN ({','.join('?' for _ in excluded)})"
+        params.extend(excluded)
+    form_sql = ""
+    if moneyless_int(form_id):
+        form_sql = " AND COALESCE(c.forma_recebimento_id, 0) = ?"
+        params.append(moneyless_int(form_id))
+    rows = conn.execute(
+        f"""
+        SELECT c.*
+          FROM contribuicoes c
+         WHERE c.ativo = 1
+           AND c.pessoa_id = ?
+           AND c.data_recebimento = ?
+           AND c.valor BETWEEN ? AND ?
+           AND (COALESCE(c.pix_movimento_id, 0) > 0 OR COALESCE(c.extrato_movimento_id, 0) > 0)
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM envelope_itens ei
+                 WHERE ei.contribuicao_id = c.id
+                   AND ei.ativo = 1
+           )
+           {excluded_sql}
+           {form_sql}
+         ORDER BY c.id
+        """,
+        tuple(params),
+    ).fetchall()
+    candidate_count = len(rows)
+    if candidate_count == 1:
+        return {"matched": True, "row": rows[0], "candidate_count": candidate_count}
+    if candidate_count > 1:
+        return {"matched": False, "reason": "multiple_candidates", "candidate_count": candidate_count}
+    return {"matched": False, "reason": "not_found", "candidate_count": 0}
+
+
+def _reconcile_envelope_with_existing_bank_contribution(
+    conn: sqlite3.Connection,
+    *,
+    envelope_id: int,
+    lot_id: int,
+    organization_id: int,
+    person_id: int,
+    received_on: str,
+    competence: str,
+    competence_order: int,
+    expected_total: float,
+    form_id: int | None,
+    status: str,
+    header_notes: str,
+    origin_note: str,
+    justification: str,
+    lines: list[dict[str, object]],
+    traceability: dict[str, object],
+    actor: str = "",
+    exclude_contribution_ids: list[int] | None = None,
+    ambiguity_resolution: str = "supervisao",
+) -> dict[str, object]:
+    match = _find_existing_bank_contribution_for_envelope(
+        conn,
+        person_id=person_id,
+        received_on=received_on,
+        expected_total=expected_total,
+        form_id=form_id,
+        traceability=traceability,
+        exclude_contribution_ids=exclude_contribution_ids,
+    )
+    if not match.get("matched"):
+        if match.get("reason") == "multiple_candidates":
+            if ambiguity_resolution == "novo":
+                traceability["rastreio_status_conciliacao"] = "divergente"
+                _append_traceability_observation(
+                    traceability,
+                    "Conciliacao automatica ignorada pelo operador; havia mais de uma contribuicao bancaria candidata.",
+                )
+                return {
+                    "matched": False,
+                    "reason": "multiple_candidates_forced_new",
+                    "candidate_count": moneyless_int(match.get("candidate_count")),
+                    "resolution": "novo",
+                }
+            raise LegacyWriteError(
+                f"Existe mais de uma contribuicao bancaria candidata para conciliar este envelope de {expected_total:.2f}. "
+                "Escolha se quer lancar como novo ou deixar para supervisao antes de salvar."
+            )
+        return match
+    current = match["row"]
+    current_id = moneyless_int(current["id"])
+    source_label = _bank_reconciliation_source_label(current)
+    traceability["rastreio_status_conciliacao"] = "conciliado"
+    _append_traceability_observation(
+        traceability,
+        f"Conciliado automaticamente com a contribuicao bancaria #{current_id} via {source_label}.",
+    )
+    cancelled_receipt_ids = _cancel_active_receipts_for_contribution_ids(
+        conn,
+        [current_id],
+        actor=actor,
+        reason=f"Recibo cancelado por conciliacao/rateio do envelope #{envelope_id}.",
+    )
+    before = dict(current)
+    first = lines[0]
+    conn.execute(
+        """
+        UPDATE contribuicoes
+           SET pessoa_id = ?, contribuinte_id = ?, tipo_contribuicao_id = ?, campanha_id = ?,
+               data_recebimento = ?, competencia = ?, competencia_ordem = ?,
+               valor = ?, forma_recebimento_id = ?, observacoes = ?, status_operacional = ?,
+               atualizado_em = CURRENT_TIMESTAMP
+         WHERE id = ?
+        """,
+        (
+            first["pessoa_id"],
+            first["contribuinte_id"],
+            first["tipo_contribuicao_id"],
+            first["campanha_id"],
+            received_on,
+            competence,
+            competence_order,
+            first["valor"],
+            form_id,
+            _line_observations(
+                header_notes,
+                str(first["observacoes"] or ""),
+                "\n".join(
+                    [
+                        origin_note,
+                        f"Contribuicao bancaria original #{current_id} reconciliada automaticamente via {source_label}.",
+                    ]
+                ),
+            ),
+            status,
+            current_id,
+        ),
+    )
+    created_ids = [current_id]
+    after = dict(get_contribution(conn, current_id) or {})
+    after["justificativa_operador"] = justification
+    after["envelope_id"] = envelope_id
+    after["envelope_lote_id"] = lot_id
+    after["conciliado_com_fonte_bancaria"] = source_label
+    after["rateio_manual_linhas"] = len(lines)
+    write_audit_log(
+        conn,
+        organization_id,
+        "conciliar_contribuicao_bancaria_por_envelope_django",
+        "contribuicoes",
+        current_id,
+        before,
+        after,
+        actor=actor,
+    )
+    for line in lines[1:]:
+        cursor = conn.execute(
+            """
+            INSERT INTO contribuicoes (
+                organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
+                campanha_id, data_recebimento, competencia, competencia_ordem,
+                valor, forma_recebimento_id, conta_financeira_id, observacoes, import_lote_id,
+                pix_movimento_id, extrato_movimento_id, status_operacional, ativo, atualizado_em
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            """,
+            (
+                organization_id,
+                current["unidade_id"],
+                line["pessoa_id"],
+                line["contribuinte_id"],
+                line["tipo_contribuicao_id"],
+                line["campanha_id"],
+                received_on,
+                competence,
+                competence_order,
+                line["valor"],
+                form_id,
+                _row_value(current, "conta_financeira_id"),
+                _line_observations(
+                    header_notes,
+                    str(line["observacoes"] or ""),
+                    "\n".join(
+                        [
+                            origin_note,
+                            (
+                                f"Linha rateada a partir da contribuicao bancaria original #{current_id} via {source_label}; "
+                                "o vinculo bancario permanece somente na linha principal para evitar duplicidade tecnica."
+                            ),
+                        ]
+                    ),
+                ),
+                _row_value(current, "import_lote_id"),
+                None,
+                None,
+                status,
+            ),
+        )
+        new_id = moneyless_int(cursor.lastrowid)
+        created_ids.append(new_id)
+        new_after = dict(get_contribution(conn, new_id) or {})
+        new_after["justificativa_operador"] = justification
+        new_after["rateio_origem_contribuicao_id"] = current_id
+        new_after["envelope_id"] = envelope_id
+        new_after["envelope_lote_id"] = lot_id
+        new_after["conciliado_com_fonte_bancaria"] = source_label
+        write_audit_log(
+            conn,
+            organization_id,
+            "criar_linha_rateio_conciliacao_envelope_django",
+            "contribuicoes",
+            new_id,
+            None,
+            new_after,
+            actor=actor,
+        )
+    return {
+        "matched": True,
+        "row": current,
+        "contribution_ids": created_ids,
+        "cancelled_receipt_ids": cancelled_receipt_ids,
+        "source_label": source_label,
+        "matched_contribution_id": current_id,
+    }
+
+
 def _row_value(row: sqlite3.Row, key: str, default: object = None) -> object:
     return row[key] if key in row.keys() else default
 
@@ -2890,6 +3163,7 @@ def create_manual_contribution_batch(payload: Any, actor: str = "") -> list[int]
                     )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel registrar o rateio manual: {exc}") from exc
+    _auto_issue_event_receipts(created_ids, actor=actor)
     return created_ids
 
 
@@ -3696,6 +3970,12 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
         lot_name = normalize_query(_form_value(payload, "nome_lote"))
         created_ids: list[int] = []
         item_ids: list[int] = []
+        cancelled_receipt_ids: list[int] = []
+        reconciliation_result: dict[str, object] = {
+            "matched": False,
+            "reason": "not_attempted",
+            "candidate_count": 0,
+        }
         try:
             with conn:
                 lot_id = _envelope_lot_id(conn, organization_id, competence, competence_order, lot_name)
@@ -3770,33 +4050,72 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                     ]
                     if item
                 )
-                for line in lines:
-                    contribution_cursor = conn.execute(
-                        """
-                        INSERT INTO contribuicoes (
-                            organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
-                            campanha_id, data_recebimento, competencia, competencia_ordem,
-                            valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
-                            ativo, atualizado_em
-                        ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
-                        """,
-                        (
+                reconciliation_result = _reconcile_envelope_with_existing_bank_contribution(
+                    conn,
+                    envelope_id=envelope_id,
+                    lot_id=lot_id,
+                    organization_id=organization_id,
+                    person_id=moneyless_int(main_person_id),
+                    received_on=received_on,
+                    competence=competence,
+                    competence_order=competence_order,
+                    expected_total=expected_total,
+                    form_id=form_id,
+                    status=status,
+                    header_notes=header_notes,
+                    origin_note=origin_note,
+                    justification=justification,
+                    lines=lines,
+                    traceability=traceability,
+                    actor=actor,
+                    ambiguity_resolution=_envelope_reconciliation_ambiguity_resolution(payload),
+                )
+                if reconciliation_result.get("matched"):
+                    created_ids.extend(_unique_ints(reconciliation_result.get("contribution_ids") or []))
+                    cancelled_receipt_ids.extend(_unique_ints(reconciliation_result.get("cancelled_receipt_ids") or []))
+                else:
+                    for line in lines:
+                        contribution_cursor = conn.execute(
+                            """
+                            INSERT INTO contribuicoes (
+                                organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
+                                campanha_id, data_recebimento, competencia, competencia_ordem,
+                                valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
+                                ativo, atualizado_em
+                            ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
+                            """,
+                            (
+                                organization_id,
+                                line["pessoa_id"],
+                                line["contribuinte_id"],
+                                line["tipo_contribuicao_id"],
+                                line["campanha_id"],
+                                received_on,
+                                competence,
+                                competence_order,
+                                line["valor"],
+                                form_id,
+                                _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
+                                status,
+                            ),
+                        )
+                        contribution_id = moneyless_int(contribution_cursor.lastrowid)
+                        created_ids.append(contribution_id)
+                        after = dict(get_contribution(conn, contribution_id) or {})
+                        after["justificativa_operador"] = justification
+                        after["envelope_id"] = envelope_id
+                        after["envelope_lote_id"] = lot_id
+                        write_audit_log(
+                            conn,
                             organization_id,
-                            line["pessoa_id"],
-                            line["contribuinte_id"],
-                            line["tipo_contribuicao_id"],
-                            line["campanha_id"],
-                            received_on,
-                            competence,
-                            competence_order,
-                            line["valor"],
-                            form_id,
-                            _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
-                            status,
-                        ),
-                    )
-                    contribution_id = moneyless_int(contribution_cursor.lastrowid)
-                    created_ids.append(contribution_id)
+                            "lancar_contribuicao_por_envelope_django",
+                            "contribuicoes",
+                            contribution_id,
+                            None,
+                            after,
+                            actor=actor,
+                        )
+                for line, contribution_id in zip(lines, created_ids):
                     item_cursor = conn.execute(
                         """
                         INSERT INTO envelope_itens (
@@ -3817,20 +4136,18 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                         ),
                     )
                     item_ids.append(moneyless_int(item_cursor.lastrowid))
-                    after = dict(get_contribution(conn, contribution_id) or {})
-                    after["justificativa_operador"] = justification
-                    after["envelope_id"] = envelope_id
-                    after["envelope_lote_id"] = lot_id
-                    write_audit_log(
-                        conn,
-                        organization_id,
-                        "lancar_contribuicao_por_envelope_django",
-                        "contribuicoes",
-                        contribution_id,
-                        None,
-                        after,
-                        actor=actor,
-                    )
+                conn.execute(
+                    """
+                    UPDATE envelopes
+                       SET rastreio_status_conciliacao = ?, rastreio_observacoes = ?, atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        traceability["rastreio_status_conciliacao"],
+                        traceability["rastreio_observacoes"],
+                        envelope_id,
+                    ),
+                )
                 _refresh_envelope_lot_totals(conn, lot_id, folder)
                 envelope_after = {
                     "id": envelope_id,
@@ -3844,6 +4161,7 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                     "caminho_imagem": str(stored_path),
                     "imagem_hash": file_payload["hash"],
                     "rastreabilidade_financeira": traceability,
+                    "reconciliacao_bancaria": reconciliation_result,
                 }
                 write_audit_log(
                     conn,
@@ -3857,7 +4175,19 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                 )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel registrar o envelope: {exc}") from exc
-    return {"envelope_id": envelope_id, "lot_id": lot_id, "contribution_ids": created_ids}
+    if cancelled_receipt_ids:
+        _mark_receipt_dispatches_cancelled(
+            cancelled_receipt_ids,
+            actor=actor,
+            reason=f"Recibo cancelado por conciliacao/rateio do envelope #{envelope_id}.",
+        )
+    _auto_issue_event_receipts(created_ids, actor=actor)
+    return {
+        "envelope_id": envelope_id,
+        "lot_id": lot_id,
+        "contribution_ids": created_ids,
+        "reconciliation": reconciliation_result,
+    }
 
 
 def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> dict[str, object]:
@@ -3935,6 +4265,12 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
         )
         created_ids: list[int] = []
         item_ids: list[int] = []
+        cancelled_receipt_ids: list[int] = []
+        reconciliation_result: dict[str, object] = {
+            "matched": False,
+            "reason": "not_attempted",
+            "candidate_count": 0,
+        }
         try:
             with conn:
                 before = dict(envelope)
@@ -4001,33 +4337,72 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
                     ]
                     if item
                 )
-                for line in lines:
-                    contribution_cursor = conn.execute(
-                        """
-                        INSERT INTO contribuicoes (
-                            organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
-                            campanha_id, data_recebimento, competencia, competencia_ordem,
-                            valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
-                            ativo, atualizado_em
-                        ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
-                        """,
-                        (
+                reconciliation_result = _reconcile_envelope_with_existing_bank_contribution(
+                    conn,
+                    envelope_id=envelope_id,
+                    lot_id=lot_id,
+                    organization_id=organization_id,
+                    person_id=moneyless_int(main_person_id),
+                    received_on=received_on,
+                    competence=competence,
+                    competence_order=competence_order,
+                    expected_total=expected_total,
+                    form_id=form_id,
+                    status=status,
+                    header_notes=header_notes,
+                    origin_note=origin_note,
+                    justification=justification,
+                    lines=lines,
+                    traceability=traceability,
+                    actor=actor,
+                    ambiguity_resolution=_envelope_reconciliation_ambiguity_resolution(payload),
+                )
+                if reconciliation_result.get("matched"):
+                    created_ids.extend(_unique_ints(reconciliation_result.get("contribution_ids") or []))
+                    cancelled_receipt_ids.extend(_unique_ints(reconciliation_result.get("cancelled_receipt_ids") or []))
+                else:
+                    for line in lines:
+                        contribution_cursor = conn.execute(
+                            """
+                            INSERT INTO contribuicoes (
+                                organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
+                                campanha_id, data_recebimento, competencia, competencia_ordem,
+                                valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
+                                ativo, atualizado_em
+                            ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
+                            """,
+                            (
+                                organization_id,
+                                line["pessoa_id"],
+                                line["contribuinte_id"],
+                                line["tipo_contribuicao_id"],
+                                line["campanha_id"],
+                                received_on,
+                                competence,
+                                competence_order,
+                                line["valor"],
+                                form_id,
+                                _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
+                                status,
+                            ),
+                        )
+                        contribution_id = moneyless_int(contribution_cursor.lastrowid)
+                        created_ids.append(contribution_id)
+                        after = dict(get_contribution(conn, contribution_id) or {})
+                        after["justificativa_operador"] = justification
+                        after["envelope_id"] = envelope_id
+                        after["envelope_lote_id"] = lot_id
+                        write_audit_log(
+                            conn,
                             organization_id,
-                            line["pessoa_id"],
-                            line["contribuinte_id"],
-                            line["tipo_contribuicao_id"],
-                            line["campanha_id"],
-                            received_on,
-                            competence,
-                            competence_order,
-                            line["valor"],
-                            form_id,
-                            _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
-                            status,
-                        ),
-                    )
-                    contribution_id = moneyless_int(contribution_cursor.lastrowid)
-                    created_ids.append(contribution_id)
+                            "lancar_contribuicao_por_envelope_django",
+                            "contribuicoes",
+                            contribution_id,
+                            None,
+                            after,
+                            actor=actor,
+                        )
+                for line, contribution_id in zip(lines, created_ids):
                     item_cursor = conn.execute(
                         """
                         INSERT INTO envelope_itens (
@@ -4048,26 +4423,25 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
                         ),
                     )
                     item_ids.append(moneyless_int(item_cursor.lastrowid))
-                    after = dict(get_contribution(conn, contribution_id) or {})
-                    after["justificativa_operador"] = justification
-                    after["envelope_id"] = envelope_id
-                    after["envelope_lote_id"] = lot_id
-                    write_audit_log(
-                        conn,
-                        organization_id,
-                        "lancar_contribuicao_por_envelope_django",
-                        "contribuicoes",
-                        contribution_id,
-                        None,
-                        after,
-                        actor=actor,
-                    )
+                conn.execute(
+                    """
+                    UPDATE envelopes
+                       SET rastreio_status_conciliacao = ?, rastreio_observacoes = ?, atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        traceability["rastreio_status_conciliacao"],
+                        traceability["rastreio_observacoes"],
+                        envelope_id,
+                    ),
+                )
                 _refresh_envelope_lot_totals(conn, lot_id, Path(str(envelope["caminho_imagem"] or "")).parent)
                 after_envelope = dict(conn.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,)).fetchone() or {})
                 after_envelope["contribuicoes"] = created_ids
                 after_envelope["itens"] = item_ids
                 after_envelope["atualizacoes_cadastrais"] = update_suggestion_ids
                 after_envelope["rastreabilidade_financeira"] = traceability
+                after_envelope["reconciliacao_bancaria"] = reconciliation_result
                 write_audit_log(
                     conn,
                     organization_id,
@@ -4080,7 +4454,19 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
                 )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel lancar o envelope pendente: {exc}") from exc
-    return {"envelope_id": envelope_id, "lot_id": lot_id, "contribution_ids": created_ids}
+    if cancelled_receipt_ids:
+        _mark_receipt_dispatches_cancelled(
+            cancelled_receipt_ids,
+            actor=actor,
+            reason=f"Recibo cancelado por conciliacao/rateio do envelope #{envelope_id}.",
+        )
+    _auto_issue_event_receipts(created_ids, actor=actor)
+    return {
+        "envelope_id": envelope_id,
+        "lot_id": lot_id,
+        "contribution_ids": created_ids,
+        "reconciliation": reconciliation_result,
+    }
 
 
 def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") -> dict[str, object]:
@@ -4168,8 +4554,20 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
         ]
         created_ids: list[int] = []
         item_ids: list[int] = []
+        cancelled_receipt_ids: list[int] = []
+        reconciliation_result: dict[str, object] = {
+            "matched": False,
+            "reason": "not_attempted",
+            "candidate_count": 0,
+        }
         try:
             with conn:
+                cancelled_receipt_ids = _cancel_active_receipts_for_contribution_ids(
+                    conn,
+                    old_contribution_ids,
+                    actor=actor,
+                    reason=f"Recibo cancelado por correcao do envelope #{envelope_id}.",
+                )
                 for contribution_id in old_contribution_ids:
                     current = get_contribution(conn, contribution_id)
                     conn.execute(
@@ -4264,33 +4662,74 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                     ]
                     if item
                 )
-                for line in lines:
-                    contribution_cursor = conn.execute(
-                        """
-                        INSERT INTO contribuicoes (
-                            organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
-                            campanha_id, data_recebimento, competencia, competencia_ordem,
-                            valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
-                            ativo, atualizado_em
-                        ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
-                        """,
-                        (
+                reconciliation_result = _reconcile_envelope_with_existing_bank_contribution(
+                    conn,
+                    envelope_id=envelope_id,
+                    lot_id=lot_id,
+                    organization_id=organization_id,
+                    person_id=moneyless_int(main_person_id),
+                    received_on=received_on,
+                    competence=competence,
+                    competence_order=competence_order,
+                    expected_total=expected_total,
+                    form_id=form_id,
+                    status=status,
+                    header_notes=header_notes,
+                    origin_note=origin_note,
+                    justification=justification,
+                    lines=lines,
+                    traceability=traceability,
+                    actor=actor,
+                    exclude_contribution_ids=old_contribution_ids,
+                    ambiguity_resolution=_envelope_reconciliation_ambiguity_resolution(payload),
+                )
+                if reconciliation_result.get("matched"):
+                    created_ids.extend(_unique_ints(reconciliation_result.get("contribution_ids") or []))
+                    cancelled_receipt_ids.extend(_unique_ints(reconciliation_result.get("cancelled_receipt_ids") or []))
+                else:
+                    for line in lines:
+                        contribution_cursor = conn.execute(
+                            """
+                            INSERT INTO contribuicoes (
+                                organizacao_id, unidade_id, pessoa_id, contribuinte_id, tipo_contribuicao_id,
+                                campanha_id, data_recebimento, competencia, competencia_ordem,
+                                valor, forma_recebimento_id, conta_financeira_id, observacoes, status_operacional,
+                                ativo, atualizado_em
+                            ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, CURRENT_TIMESTAMP)
+                            """,
+                            (
+                                organization_id,
+                                line["pessoa_id"],
+                                line["contribuinte_id"],
+                                line["tipo_contribuicao_id"],
+                                line["campanha_id"],
+                                received_on,
+                                competence,
+                                competence_order,
+                                line["valor"],
+                                form_id,
+                                _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
+                                status,
+                            ),
+                        )
+                        contribution_id = moneyless_int(contribution_cursor.lastrowid)
+                        created_ids.append(contribution_id)
+                        after_contribution = dict(get_contribution(conn, contribution_id) or {})
+                        after_contribution["justificativa_operador"] = justification
+                        after_contribution["envelope_id"] = envelope_id
+                        after_contribution["envelope_lote_id"] = lot_id
+                        after_contribution["substitui_contribuicoes"] = old_contribution_ids
+                        write_audit_log(
+                            conn,
                             organization_id,
-                            line["pessoa_id"],
-                            line["contribuinte_id"],
-                            line["tipo_contribuicao_id"],
-                            line["campanha_id"],
-                            received_on,
-                            competence,
-                            competence_order,
-                            line["valor"],
-                            form_id,
-                            _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
-                            status,
-                        ),
-                    )
-                    contribution_id = moneyless_int(contribution_cursor.lastrowid)
-                    created_ids.append(contribution_id)
+                            "recriar_contribuicao_por_correcao_envelope_django",
+                            "contribuicoes",
+                            contribution_id,
+                            None,
+                            after_contribution,
+                            actor=actor,
+                        )
+                for line, contribution_id in zip(lines, created_ids):
                     item_cursor = conn.execute(
                         """
                         INSERT INTO envelope_itens (
@@ -4311,21 +4750,18 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                         ),
                     )
                     item_ids.append(moneyless_int(item_cursor.lastrowid))
-                    after_contribution = dict(get_contribution(conn, contribution_id) or {})
-                    after_contribution["justificativa_operador"] = justification
-                    after_contribution["envelope_id"] = envelope_id
-                    after_contribution["envelope_lote_id"] = lot_id
-                    after_contribution["substitui_contribuicoes"] = old_contribution_ids
-                    write_audit_log(
-                        conn,
-                        organization_id,
-                        "recriar_contribuicao_por_correcao_envelope_django",
-                        "contribuicoes",
-                        contribution_id,
-                        None,
-                        after_contribution,
-                        actor=actor,
-                    )
+                conn.execute(
+                    """
+                    UPDATE envelopes
+                       SET rastreio_status_conciliacao = ?, rastreio_observacoes = ?, atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        traceability["rastreio_status_conciliacao"],
+                        traceability["rastreio_observacoes"],
+                        envelope_id,
+                    ),
+                )
                 _refresh_envelope_lot_totals(conn, lot_id, Path(str(envelope["caminho_imagem"] or "")).parent)
                 after_envelope = dict(conn.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,)).fetchone() or {})
                 after_envelope["contribuicoes_novas"] = created_ids
@@ -4333,6 +4769,7 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                 after_envelope["contribuicoes_desativadas"] = old_contribution_ids
                 after_envelope["atualizacoes_cadastrais"] = update_suggestion_ids
                 after_envelope["rastreabilidade_financeira"] = traceability
+                after_envelope["reconciliacao_bancaria"] = reconciliation_result
                 write_audit_log(
                     conn,
                     organization_id,
@@ -4345,11 +4782,19 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                 )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel corrigir o envelope lancado: {exc}") from exc
+    if cancelled_receipt_ids:
+        _mark_receipt_dispatches_cancelled(
+            cancelled_receipt_ids,
+            actor=actor,
+            reason=f"Recibo cancelado por correcao do envelope #{envelope_id}.",
+        )
+    _auto_issue_event_receipts(created_ids, actor=actor)
     return {
         "envelope_id": envelope_id,
         "lot_id": lot_id,
         "contribution_ids": created_ids,
         "deactivated_contribution_ids": old_contribution_ids,
+        "reconciliation": reconciliation_result,
     }
 
 
@@ -4421,8 +4866,15 @@ def split_contribution(contribution_id: int, payload: Any, actor: str = "") -> l
         origin_note = f"Rateio manual da contribuicao original #{contribution_id}; comprovante/envelope/e-mail conferido pelo operador."
         before = dict(current)
         created_ids: list[int] = [contribution_id]
+        cancelled_receipt_ids: list[int] = []
         try:
             with conn:
+                cancelled_receipt_ids = _cancel_active_receipts_for_contribution_ids(
+                    conn,
+                    [contribution_id],
+                    actor=actor,
+                    reason=f"Recibo cancelado por rateio manual da contribuicao #{contribution_id}.",
+                )
                 first = lines[0]
                 conn.execute(
                     """
@@ -4485,10 +4937,17 @@ def split_contribution(contribution_id: int, payload: Any, actor: str = "") -> l
                             line["valor"],
                             form_id,
                             _row_value(current, "conta_financeira_id"),
-                            _line_observations(header_notes, str(line["observacoes"] or ""), origin_note),
+                            _line_observations(
+                                header_notes,
+                                str(line["observacoes"] or ""),
+                                (
+                                    f"{origin_note}\n"
+                                    "Linha complementar do rateio; o vinculo PIX/extrato fica na linha principal para evitar duplicidade tecnica."
+                                ),
+                            ),
                             _row_value(current, "import_lote_id"),
-                            _row_value(current, "pix_movimento_id"),
-                            _row_value(current, "extrato_movimento_id"),
+                            None,
+                            None,
                             status,
                         ),
                     )
@@ -4509,6 +4968,13 @@ def split_contribution(contribution_id: int, payload: Any, actor: str = "") -> l
                     )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel ratear a contribuicao: {exc}") from exc
+    if cancelled_receipt_ids:
+        _mark_receipt_dispatches_cancelled(
+            cancelled_receipt_ids,
+            actor=actor,
+            reason=f"Recibo cancelado por rateio manual da contribuicao #{contribution_id}.",
+        )
+    _auto_issue_event_receipts(created_ids, actor=actor)
     return created_ids
 
 
@@ -4534,32 +5000,31 @@ def next_receipt_number(conn: sqlite3.Connection, organization_id: int, emission
     return f"{prefix}-{next_seq:04d}"
 
 
-def create_receipt(payload: Any, actor: str = "") -> int:
-    person_id = moneyless_int(_form_value(payload, "pessoa_id"))
-    getter = getattr(payload, "getlist", None)
-    raw_ids = getter("contribuicao_id") if getter else payload.get("contribuicao_id", [])
-    if isinstance(raw_ids, str):
-        raw_ids = [raw_ids]
-    contribution_ids = [moneyless_int(value) for value in raw_ids if moneyless_int(value)]
-    if not contribution_ids:
+def _unique_ints(values: list[object]) -> list[int]:
+    seen: set[int] = set()
+    result: list[int] = []
+    for value in values:
+        int_value = moneyless_int(value)
+        if int_value and int_value not in seen:
+            seen.add(int_value)
+            result.append(int_value)
+    return result
+
+
+def _receipt_rows_for_person(
+    conn: sqlite3.Connection,
+    *,
+    person_id: int,
+    contribution_ids: list[int],
+    allow_existing_receipts: bool = False,
+) -> list[sqlite3.Row]:
+    clean_ids = _unique_ints([value for value in contribution_ids if int(value or 0)])
+    if not clean_ids:
         raise LegacyWriteError("Selecione pelo menos uma contribuicao para o recibo.")
-    emission_date = normalize_query(_form_value(payload, "data_emissao", date.today().isoformat()))
-    if not emission_date:
-        emission_date = date.today().isoformat()
-    notes = normalize_query(_form_value(payload, "observacoes"))
-    with connect_legacy_write() as conn:
-        person = get_person(conn, person_id)
-        if person is None:
-            raise LegacyWriteError("Escolha uma pessoa valida para gerar o recibo.")
-        organization_id = moneyless_int(person["organizacao_id"])
-        placeholders = ",".join("?" for _ in contribution_ids)
-        rows = conn.execute(
-            f"""
-            SELECT c.*
-              FROM contribuicoes c
-             WHERE c.id IN ({placeholders})
-               AND c.pessoa_id = ?
-               AND c.ativo = 1
+    placeholders = ",".join("?" for _ in clean_ids)
+    receipt_clause = ""
+    if not allow_existing_receipts:
+        receipt_clause = """
                AND NOT EXISTS (
                     SELECT 1
                       FROM recibo_itens ri
@@ -4568,39 +5033,312 @@ def create_receipt(payload: Any, actor: str = "") -> int:
                        AND r.status <> 'cancelado'
                        AND r.cancelado_em IS NULL
                )
-             ORDER BY c.data_recebimento, c.id
+        """
+    rows = conn.execute(
+        f"""
+        SELECT c.*
+          FROM contribuicoes c
+         WHERE c.id IN ({placeholders})
+           AND c.pessoa_id = ?
+           AND c.ativo = 1
+           {receipt_clause}
+         ORDER BY c.data_recebimento, c.id
+        """,
+        (*clean_ids, person_id),
+    ).fetchall()
+    if len(rows) != len(clean_ids):
+        if allow_existing_receipts:
+            raise LegacyWriteError("Uma ou mais contribuicoes nao pertencem a pessoa selecionada ou estao inativas.")
+        raise LegacyWriteError("Uma ou mais contribuicoes ja estao em recibo ativo ou nao pertencem a pessoa selecionada.")
+    return rows
+
+
+def _cancel_active_receipts_for_contribution_ids(
+    conn: sqlite3.Connection,
+    contribution_ids: list[int],
+    *,
+    actor: str = "",
+    reason: str = "",
+) -> list[int]:
+    clean_ids = _unique_ints([value for value in contribution_ids if int(value or 0)])
+    if not clean_ids:
+        return []
+    placeholders = ",".join("?" for _ in clean_ids)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT r.id, r.organizacao_id
+          FROM recibos r
+          JOIN recibo_itens ri ON ri.recibo_id = r.id
+         WHERE ri.contribuicao_id IN ({placeholders})
+           AND r.status <> 'cancelado'
+           AND r.cancelado_em IS NULL
+        """,
+        tuple(clean_ids),
+    ).fetchall()
+    cancelled_ids: list[int] = []
+    note = normalize_query(reason) or "Recibo cancelado por reemissao automatica."
+    for row in rows:
+        receipt_id = moneyless_int(row["id"])
+        current = get_receipt(conn, receipt_id)
+        if current is None:
+            continue
+        conn.execute(
+            """
+            UPDATE recibos
+               SET status = 'cancelado',
+                   cancelado_em = CURRENT_TIMESTAMP,
+                   observacoes = TRIM(COALESCE(observacoes, '') || CASE WHEN COALESCE(observacoes, '') <> '' THEN CHAR(10) ELSE '' END || ?)
+             WHERE id = ?
             """,
-            (*contribution_ids, person_id),
-        ).fetchall()
-        if len(rows) != len(contribution_ids):
-            raise LegacyWriteError("Uma ou mais contribuicoes ja estao em recibo ativo ou nao pertencem a pessoa selecionada.")
-        total = round(sum(float(row["valor"] or 0) for row in rows), 2)
-        period_start = min(str(row["data_recebimento"]) for row in rows)
-        period_end = max(str(row["data_recebimento"]) for row in rows)
-        receipt_number = next_receipt_number(conn, organization_id, emission_date)
+            (note, receipt_id),
+        )
+        after = dict(get_receipt(conn, receipt_id) or {})
+        after["cancelamento_motivo"] = note
+        write_audit_log(
+            conn,
+            moneyless_int(row["organizacao_id"]),
+            "cancelar_recibo_django",
+            "recibos",
+            receipt_id,
+            dict(current),
+            after,
+            actor=actor,
+        )
+        cancelled_ids.append(receipt_id)
+    return cancelled_ids
+
+
+def _mark_receipt_dispatches_cancelled(receipt_ids: list[int], *, actor: str = "", reason: str = "") -> None:
+    clean_ids = _unique_ints(receipt_ids)
+    if not clean_ids:
+        return
+    try:
+        from power_church_django.services.receipt_delivery import mark_receipt_dispatches_cancelled
+
+        mark_receipt_dispatches_cancelled(clean_ids, actor=actor, reason=reason)
+    except Exception:
+        return
+
+
+def _create_receipt_record(
+    conn: sqlite3.Connection,
+    *,
+    person_id: int,
+    organization_id: int,
+    rows: list[sqlite3.Row],
+    emission_date: str,
+    notes: str,
+    actor: str = "",
+    audit_action: str = "gerar_recibo_django",
+) -> int:
+    total = round(sum(float(row["valor"] or 0) for row in rows), 2)
+    period_start = min(str(row["data_recebimento"]) for row in rows)
+    period_end = max(str(row["data_recebimento"]) for row in rows)
+    receipt_number = next_receipt_number(conn, organization_id, emission_date)
+    cursor = conn.execute(
+        """
+        INSERT INTO recibos (
+            organizacao_id, pessoa_id, numero, data_emissao, periodo_inicio, periodo_fim,
+            valor_total, status, arquivo_path, observacoes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'emitido', NULL, ?)
+        """,
+        (organization_id, person_id, receipt_number, emission_date, period_start, period_end, total, notes),
+    )
+    receipt_id = moneyless_int(cursor.lastrowid)
+    contribution_ids: list[int] = []
+    for row in rows:
+        contribution_ids.append(moneyless_int(row["id"]))
+        conn.execute(
+            "INSERT INTO recibo_itens (recibo_id, contribuicao_id, valor) VALUES (?, ?, ?)",
+            (receipt_id, row["id"], row["valor"]),
+        )
+    after = dict(get_receipt(conn, receipt_id) or {})
+    after["contribuicoes"] = contribution_ids
+    write_audit_log(conn, organization_id, audit_action, "recibos", receipt_id, None, after, actor=actor)
+    return receipt_id
+
+
+def issue_receipt_for_contribution_ids(
+    *,
+    person_id: int,
+    contribution_ids: list[int],
+    emission_date: str,
+    notes: str,
+    actor: str = "",
+    replace_existing: bool = False,
+    audit_action: str = "gerar_recibo_django",
+) -> int:
+    person_id = moneyless_int(person_id)
+    if not person_id:
+        raise LegacyWriteError("Escolha uma pessoa valida para gerar o recibo.")
+    emission_date = normalize_query(emission_date) or date.today().isoformat()
+    notes = normalize_query(notes)
+    with connect_legacy_write() as conn:
+        person = get_person(conn, person_id)
+        if person is None:
+            raise LegacyWriteError("Escolha uma pessoa valida para gerar o recibo.")
+        organization_id = moneyless_int(person["organizacao_id"])
+        rows = _receipt_rows_for_person(
+            conn,
+            person_id=person_id,
+            contribution_ids=contribution_ids,
+            allow_existing_receipts=replace_existing,
+        )
+        cancelled_ids: list[int] = []
         try:
             with conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO recibos (
-                        organizacao_id, pessoa_id, numero, data_emissao, periodo_inicio, periodo_fim,
-                        valor_total, status, arquivo_path, observacoes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'emitido', NULL, ?)
-                    """,
-                    (organization_id, person_id, receipt_number, emission_date, period_start, period_end, total, notes),
-                )
-                receipt_id = moneyless_int(cursor.lastrowid)
-                for row in rows:
-                    conn.execute(
-                        "INSERT INTO recibo_itens (recibo_id, contribuicao_id, valor) VALUES (?, ?, ?)",
-                        (receipt_id, row["id"], row["valor"]),
+                if replace_existing:
+                    cancelled_ids = _cancel_active_receipts_for_contribution_ids(
+                        conn,
+                        [moneyless_int(row["id"]) for row in rows],
+                        actor=actor,
+                        reason="Recibo anterior cancelado para reemissao consolidada.",
                     )
-                after = dict(get_receipt(conn, receipt_id) or {})
-                after["contribuicoes"] = contribution_ids
-                write_audit_log(conn, organization_id, "gerar_recibo_django", "recibos", receipt_id, None, after, actor=actor)
-                return receipt_id
+                receipt_id = _create_receipt_record(
+                    conn,
+                    person_id=person_id,
+                    organization_id=organization_id,
+                    rows=rows,
+                    emission_date=emission_date,
+                    notes=notes,
+                    actor=actor,
+                    audit_action=audit_action,
+                )
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel gerar o recibo: {exc}") from exc
+    if cancelled_ids:
+        _mark_receipt_dispatches_cancelled(
+            cancelled_ids,
+            actor=actor,
+            reason="Recibo cancelado por reemissao consolidada.",
+        )
+    return receipt_id
+
+
+def issue_period_receipts(
+    *,
+    person_id: int,
+    competences: list[str],
+    emission_date: str,
+    notes: str,
+    actor: str = "",
+    replace_existing: bool = False,
+) -> list[int]:
+    person_id = moneyless_int(person_id)
+    clean_competences = [normalize_query(value) for value in competences if normalize_query(value)]
+    if not person_id or not clean_competences:
+        raise LegacyWriteError("Selecione pelo menos uma competencia para gerar recibos.")
+    with connect_legacy_write() as conn:
+        person = get_person(conn, person_id)
+        if person is None:
+            raise LegacyWriteError("Pessoa selecionada para recibo nao foi encontrada.")
+        rows = conn.execute(
+            f"""
+            SELECT id, competencia
+              FROM contribuicoes
+             WHERE ativo = 1
+               AND pessoa_id = ?
+               AND COALESCE(competencia, '') IN ({','.join('?' for _ in clean_competences)})
+             ORDER BY competencia_ordem DESC, competencia DESC, data_recebimento, id
+            """,
+            (person_id, *clean_competences),
+        ).fetchall()
+    grouped: dict[str, list[int]] = {}
+    for row in rows:
+        grouped.setdefault(normalize_query(row["competencia"]), []).append(moneyless_int(row["id"]))
+    receipt_ids: list[int] = []
+    for competence in clean_competences:
+        ids = grouped.get(competence) or []
+        if not ids:
+            continue
+        receipt_ids.append(
+            issue_receipt_for_contribution_ids(
+                person_id=person_id,
+                contribution_ids=ids,
+                emission_date=emission_date,
+                notes=notes,
+                actor=actor,
+                replace_existing=replace_existing,
+                audit_action="gerar_recibo_por_competencia_django",
+            )
+        )
+    if not receipt_ids:
+        raise LegacyWriteError("Nao ha contribuicoes ativas para as competencias selecionadas.")
+    return receipt_ids
+
+
+def issue_receipts_for_event_contributions(
+    contribution_ids: list[int],
+    *,
+    emission_date: str,
+    notes: str,
+    actor: str = "",
+    replace_existing: bool = False,
+) -> list[int]:
+    clean_ids = _unique_ints(contribution_ids)
+    if not clean_ids:
+        return []
+    with connect_legacy_write() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, pessoa_id
+              FROM contribuicoes
+             WHERE ativo = 1
+               AND id IN ({','.join('?' for _ in clean_ids)})
+               AND pessoa_id IS NOT NULL
+             ORDER BY pessoa_id, data_recebimento, id
+            """,
+            tuple(clean_ids),
+        ).fetchall()
+    grouped: dict[int, list[int]] = {}
+    for row in rows:
+        grouped.setdefault(moneyless_int(row["pessoa_id"]), []).append(moneyless_int(row["id"]))
+    receipt_ids: list[int] = []
+    for person_id, person_contribution_ids in grouped.items():
+        receipt_ids.append(
+            issue_receipt_for_contribution_ids(
+                person_id=person_id,
+                contribution_ids=person_contribution_ids,
+                emission_date=emission_date,
+                notes=notes,
+                actor=actor,
+                replace_existing=replace_existing,
+                audit_action="gerar_recibo_por_evento_django",
+            )
+        )
+    return receipt_ids
+
+
+def _auto_issue_event_receipts(contribution_ids: list[int], *, actor: str = "") -> None:
+    clean_ids = _unique_ints(contribution_ids)
+    if not clean_ids:
+        return
+    try:
+        from power_church_django.services.receipt_delivery import schedule_automatic_receipts_for_events
+
+        schedule_automatic_receipts_for_events(clean_ids, actor=actor)
+    except Exception:
+        return
+
+
+def create_receipt(payload: Any, actor: str = "") -> int:
+    person_id = moneyless_int(_form_value(payload, "pessoa_id"))
+    getter = getattr(payload, "getlist", None)
+    raw_ids = getter("contribuicao_id") if getter else payload.get("contribuicao_id", [])
+    if isinstance(raw_ids, str):
+        raw_ids = [raw_ids]
+    contribution_ids = _unique_ints([moneyless_int(value) for value in raw_ids if moneyless_int(value)])
+    emission_date = normalize_query(_form_value(payload, "data_emissao", date.today().isoformat()))
+    if not emission_date:
+        emission_date = date.today().isoformat()
+    notes = normalize_query(_form_value(payload, "observacoes"))
+    return issue_receipt_for_contribution_ids(
+        person_id=person_id,
+        contribution_ids=contribution_ids,
+        emission_date=emission_date,
+        notes=notes,
+        actor=actor,
+    )
 
 
 def _slugify_filename_text(value: object, fallback: str = "arquivo") -> str:

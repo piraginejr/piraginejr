@@ -280,7 +280,7 @@ def dashboard_summary() -> dict[str, Any]:
     }
 
 
-def list_people(q: str = "", status: str = "", limit: int = 300) -> dict[str, Any]:
+def list_people(q: str = "", status: str = "", limit: int | None = None) -> dict[str, Any]:
     q = (q or "").strip()
     status = (status or "").strip()
     clauses = ["ativo = 1"]
@@ -307,6 +307,9 @@ def list_people(q: str = "", status: str = "", limit: int = 300) -> dict[str, An
     where = " AND ".join(clauses)
     with connect_legacy() as conn:
         total = int(scalar(conn, f"SELECT COUNT(*) FROM pessoas WHERE {where}", tuple(params)) or 0)
+        limit_value = moneyless_int(limit) if limit is not None else 0
+        limit_clause = "LIMIT ?" if limit_value > 0 else ""
+        row_params: tuple[Any, ...] = (*params, limit_value) if limit_value > 0 else tuple(params)
         rows = conn.execute(
             f"""
             SELECT id, codigo_interno, nome, cpf, status, ativo, arquivo_morto,
@@ -314,9 +317,9 @@ def list_people(q: str = "", status: str = "", limit: int = 300) -> dict[str, An
               FROM pessoas
              WHERE {where}
              ORDER BY nome COLLATE NOCASE ASC, id ASC
-             LIMIT ?
+             {limit_clause}
             """,
-            (*params, limit),
+            row_params,
         ).fetchall()
         status_options = [
             {"value": row["status"], "label": format_status(row["status"]), "count": int(row["total"] or 0)}
@@ -352,7 +355,7 @@ def list_people(q: str = "", status: str = "", limit: int = 300) -> dict[str, An
         "q": q,
         "status": status,
         "status_options": status_options,
-        "limit": limit,
+        "limit": limit_value or total,
     }
 
 
@@ -844,6 +847,14 @@ def _family_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "photo_url": member_photo_url(row["id"], row["cpf"], row["nome"]),
         "complemento": row["complemento"] or "",
         "endereco": _format_address_line(row),
+        "cep": row["cep"] or "",
+        "logradouro": row["logradouro"] or "",
+        "numero": row["numero"] or "",
+        "bairro": row["bairro"] or "",
+        "cidade": row["cidade"] or "",
+        "uf": row["uf"] or "",
+        "exact_key": family_address_key(row),
+        "base_key": family_base_address_key(row),
     }
 
 
@@ -895,9 +906,249 @@ def _family_group_missing_relationships(
     return missing
 
 
-def family_nuclei_dashboard(cep: str = "", mode: str = "all", limit: int = 120) -> dict[str, Any]:
+def _digits_only(value: object) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _family_query_matches(query_key: str, digits: str, text_values: list[object], digit_values: list[object]) -> bool:
+    if query_key:
+        haystack = normalize_match_name(" ".join(str(value or "") for value in text_values))
+        if query_key in haystack:
+            return True
+    if digits:
+        digit_blob = " ".join(_digits_only(value) for value in digit_values if value)
+        if digits in digit_blob:
+            return True
+    return not query_key and not digits
+
+
+def _family_group_matches_query(payload: dict[str, Any], query_key: str, digits: str) -> bool:
+    people = payload.get("people") or []
+    text_values: list[object] = [payload.get("label"), payload.get("address"), payload.get("reason"), payload.get("confidence")]
+    digit_values: list[object] = [payload.get("cep")]
+    for person in people:
+        text_values.extend(
+            [
+                person.get("nome"),
+                person.get("codigo"),
+                person.get("cpf"),
+                person.get("status"),
+                person.get("endereco"),
+            ]
+        )
+        digit_values.extend([person.get("codigo"), person.get("cpf"), person.get("cep"), person.get("numero")])
+    return _family_query_matches(query_key, digits, text_values, digit_values)
+
+
+def _pick_primary_person_rows(rows: list[sqlite3.Row]) -> dict[int, sqlite3.Row]:
+    picked: dict[int, sqlite3.Row] = {}
+    for row in rows:
+        person_id = moneyless_int(row["id"])
+        if person_id and person_id not in picked:
+            picked[person_id] = row
+    return picked
+
+
+def _family_person_financial_payload(
+    person_id: int,
+    contribution_index: dict[int, dict[str, Any]],
+    contributor_index: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    contribution = contribution_index.get(person_id, {})
+    contributor = contributor_index.get(person_id, {})
+    contributions = moneyless_int(contribution.get("count"))
+    total_value = float(contribution.get("total_value") or 0)
+    last_date_raw = contribution.get("last_date") or ""
+    linked_contributors = moneyless_int(contributor.get("count"))
+    if contributions > 0:
+        if last_date_raw:
+            summary = f"{contributions} contribuicao(oes), {_money(total_value)}, ultima em {br_date(last_date_raw)}"
+        else:
+            summary = f"{contributions} contribuicao(oes), {_money(total_value)}"
+    elif linked_contributors > 0:
+        summary = f"{linked_contributors} contribuinte(s) vinculado(s) sem lancamentos ativos"
+    else:
+        summary = ""
+    return {
+        "contributions": contributions,
+        "total_value": total_value,
+        "total_fmt": _money(total_value),
+        "last_date_raw": last_date_raw,
+        "last_date": br_date(last_date_raw),
+        "linked_contributors": linked_contributors,
+        "linked_names": contributor.get("names", ""),
+        "has_activity": contributions > 0 or linked_contributors > 0,
+        "summary": summary,
+    }
+
+
+def _family_financial_summary(people: list[dict[str, Any]]) -> dict[str, Any]:
+    financial_people = [person for person in people if person.get("financial", {}).get("has_activity")]
+    contribution_people = [person for person in people if person.get("financial", {}).get("contributions", 0) > 0]
+    linked_people = [person for person in people if person.get("financial", {}).get("linked_contributors", 0) > 0]
+    total_value = sum(float(person.get("financial", {}).get("total_value") or 0) for person in people)
+    last_date_raw = max(
+        (str(person.get("financial", {}).get("last_date_raw") or "") for person in contribution_people),
+        default="",
+    )
+    notes: list[str] = []
+    for person in financial_people:
+        summary = person.get("financial", {}).get("summary") or ""
+        if summary:
+            notes.append(f"{person['nome']}: {summary}")
+    return {
+        "people": financial_people,
+        "active_people": len(financial_people),
+        "contributing_people": len(contribution_people),
+        "linked_people": len(linked_people),
+        "linked_contributors": sum(moneyless_int(person.get("financial", {}).get("linked_contributors")) for person in linked_people),
+        "total_value": total_value,
+        "total_fmt": _money(total_value),
+        "last_date_raw": last_date_raw,
+        "last_date": br_date(last_date_raw),
+        "note": " | ".join(notes[:6]),
+    }
+
+
+def _family_alignment_payload(people: list[dict[str, Any]]) -> dict[str, Any]:
+    address_lines = [str(person.get("endereco") or "") for person in people if person.get("endereco")]
+    unique_addresses = sorted(dict.fromkeys(address_lines))
+    exact_keys = {str(person.get("exact_key") or "") for person in people if person.get("exact_key")}
+    base_keys = {str(person.get("base_key") or "") for person in people if person.get("base_key")}
+    missing_address = any(not person.get("exact_key") for person in people)
+    representative = next((person for person in people if person.get("exact_key")), people[0] if people else {})
+    if len(exact_keys) == 1 and not missing_address:
+        status = "alinhado"
+        badge = "Endereco alinhado"
+        reason = "Todos os membros seguem o mesmo endereco completo."
+        label = family_group_label(representative, representative.get("complemento", ""))
+    elif len(base_keys) == 1 and base_keys:
+        status = "complemento"
+        badge = "Auditar complemento"
+        reason = "Mesmo domicilio base, mas ha complemento divergente, incompleto ou ausente."
+        label = family_group_label(representative, "")
+    elif missing_address and len(exact_keys) <= 1:
+        status = "sem_endereco"
+        badge = "Auditar endereco"
+        reason = "Ha membro sem endereco cadastrado ou sem endereco principal consistente."
+        label = family_group_label(representative, representative.get("complemento", "")) if representative else "Nucleo familiar"
+    else:
+        status = "divergente"
+        badge = "Auditar domicilio"
+        reason = "O vinculo domiciliar esta ativo, mas os enderecos atuais do nucleo divergem."
+        surname = _organized_family_surname_label(people) or "Nucleo familiar"
+        label = f"Nucleo {surname}"
+    if unique_addresses:
+        address_preview = unique_addresses[0]
+        if len(unique_addresses) > 1:
+            address_preview = f"{address_preview} (+{len(unique_addresses) - 1} variacao(oes))"
+    else:
+        address_preview = "Sem endereco principal cadastrado."
+    return {
+        "status": status,
+        "badge": badge,
+        "needs_review": status != "alinhado",
+        "reason": reason,
+        "label": label,
+        "address_preview": address_preview,
+        "addresses": unique_addresses,
+    }
+
+
+def _organized_family_surname_label(people: list[dict[str, Any]]) -> str:
+    broad_counts: dict[str, int] = defaultdict(int)
+    nuclear_counts: dict[str, int] = defaultdict(int)
+    for person in people:
+        keys = contributor_family_keys(person.get("nome"))
+        if keys.get("broad"):
+            broad_counts[keys["broad"]] += 1
+        if keys.get("nuclear"):
+            nuclear_counts[keys["nuclear"]] += 1
+    if nuclear_counts:
+        key = sorted(nuclear_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        return key.title()
+    if broad_counts:
+        key = sorted(broad_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        return key.title()
+    return ""
+
+
+def _organized_family_payload(
+    person_ids: list[int],
+    person_rows: dict[int, sqlite3.Row],
+    contribution_index: dict[int, dict[str, Any]],
+    contributor_index: dict[int, dict[str, Any]],
+) -> dict[str, Any] | None:
+    unique_people: list[dict[str, Any]] = []
+    for person_id in sorted(set(moneyless_int(value) for value in person_ids if moneyless_int(value))):
+        row = person_rows.get(person_id)
+        if row is None:
+            continue
+        person = _family_person_from_row(row)
+        person["financial"] = _family_person_financial_payload(person_id, contribution_index, contributor_index)
+        unique_people.append(person)
+    unique_people.sort(key=lambda item: normalize_match_name(item["nome"]))
+    if len(unique_people) < 2:
+        return None
+    alignment = _family_alignment_payload(unique_people)
+    financial = _family_financial_summary(unique_people)
+    surname_label = _organized_family_surname_label(unique_people)
+    member_names = ", ".join(person["nome"] for person in unique_people)
+    return {
+        "label": alignment["label"],
+        "surname_label": surname_label,
+        "people": unique_people,
+        "member_count": len(unique_people),
+        "member_names": member_names,
+        "status_summary": _family_status_summary(unique_people),
+        "alignment_status": alignment["status"],
+        "alignment_badge": alignment["badge"],
+        "needs_review": alignment["needs_review"],
+        "review_reason": alignment["reason"],
+        "address": alignment["address_preview"],
+        "addresses": alignment["addresses"],
+        "person_ids": ",".join(str(person["id"]) for person in unique_people),
+        "financial_summary": financial,
+        "has_financial_member": financial["active_people"] > 0,
+    }
+
+
+def _organized_family_matches_query(payload: dict[str, Any], query_key: str, digits: str) -> bool:
+    people = payload.get("people") or []
+    text_values: list[object] = [
+        payload.get("label"),
+        payload.get("surname_label"),
+        payload.get("review_reason"),
+        payload.get("address"),
+        payload.get("member_names"),
+        payload.get("financial_summary", {}).get("note"),
+    ]
+    digit_values: list[object] = []
+    for person in people:
+        text_values.extend(
+            [
+                person.get("nome"),
+                person.get("codigo"),
+                person.get("cpf"),
+                person.get("endereco"),
+                person.get("financial", {}).get("summary"),
+            ]
+        )
+        digit_values.extend([person.get("codigo"), person.get("cpf"), person.get("cep"), person.get("numero")])
+    return _family_query_matches(query_key, digits, text_values, digit_values)
+
+
+def family_nuclei_dashboard(
+    cep: str = "",
+    mode: str = "all",
+    q: str = "",
+    limit: int | None = None,
+) -> dict[str, Any]:
     cep_filter = "".join(ch for ch in str(cep or "") if ch.isdigit())
     mode = normalize_query(mode) or "all"
+    query = normalize_query(q)
+    query_key = normalize_match_name(query)
+    digits = _digits_only(query)
     with connect_legacy() as conn:
         rows = conn.execute(
             """
@@ -982,33 +1233,264 @@ def family_nuclei_dashboard(cep: str = "", mode: str = "all", limit: int = 120) 
         if payload["missing_relationships"] > 0:
             hypothesis_payloads.append(payload)
 
+    total_exact_payloads = list(exact_payloads)
+    total_hypothesis_payloads = list(hypothesis_payloads)
+    if query_key or digits:
+        exact_payloads = [payload for payload in exact_payloads if _family_group_matches_query(payload, query_key, digits)]
+        hypothesis_payloads = [payload for payload in hypothesis_payloads if _family_group_matches_query(payload, query_key, digits)]
+
     exact_payloads.sort(key=lambda item: (-item["status_summary"]["total"], item["label"]))
     hypothesis_payloads.sort(key=lambda item: (-item["status_summary"]["total"], item["label"]))
     selected_groups = []
     if mode == "all":
-        half_limit = max(1, limit // 2)
-        selected_groups = exact_payloads[:half_limit] + hypothesis_payloads[: limit - half_limit]
+        selected_groups = exact_payloads + hypothesis_payloads
     elif mode in {"automaticos", "alta"}:
         selected_groups.extend(exact_payloads)
     elif mode in {"hipoteses", "auditoria"}:
         selected_groups.extend(hypothesis_payloads)
-    selected_groups = selected_groups[:limit]
-    exact_people_ids = {person["id"] for group in exact_payloads for person in group["people"]}
-    hypothesis_people_ids = {person["id"] for group in hypothesis_payloads for person in group["people"]}
+    limit_value = moneyless_int(limit) if limit is not None else 0
+    if limit_value > 0:
+        selected_groups = selected_groups[:limit_value]
+    exact_people_ids = {person["id"] for group in total_exact_payloads for person in group["people"]}
+    hypothesis_people_ids = {person["id"] for group in total_hypothesis_payloads for person in group["people"]}
     all_people = [person for group in selected_groups for person in group["people"]]
     return {
         "cep": cep,
         "mode": mode,
+        "q": query,
         "groups": selected_groups,
         "automatic_groups": exact_payloads,
         "hypothesis_groups": hypothesis_payloads,
         "summary": {
-            "automatic_groups": len(exact_payloads),
+            "automatic_groups": len(total_exact_payloads),
             "automatic_people": len(exact_people_ids),
-            "hypothesis_groups": len(hypothesis_payloads),
+            "hypothesis_groups": len(total_hypothesis_payloads),
             "hypothesis_people": len(hypothesis_people_ids),
             "shown_groups": len(selected_groups),
             "shown_status": _family_status_summary(all_people),
+            "filtered_automatic_groups": len(exact_payloads),
+            "filtered_hypothesis_groups": len(hypothesis_payloads),
+        },
+    }
+
+
+def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> dict[str, Any]:
+    query = normalize_query(q)
+    query_key = normalize_match_name(query)
+    digits = _digits_only(query)
+    cep_filter = _digits_only(cep)
+    review = normalize_query(review) or "all"
+    with connect_legacy() as conn:
+        person_rows = conn.execute(
+            """
+            SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                   e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+              FROM pessoas p
+              LEFT JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+             WHERE p.ativo = 1
+             ORDER BY p.id, COALESCE(e.principal, 0) DESC, e.id
+            """
+        ).fetchall()
+        relationship_rows = conn.execute(
+            """
+            SELECT pessoa_id, pessoa_relacionada_id
+              FROM pessoa_relacionamentos
+             WHERE ativo = 1
+               AND tipo_relacionamento = 'nucleo_familiar'
+            """
+        ).fetchall()
+        contribution_rows = conn.execute(
+            """
+            SELECT pessoa_id,
+                   COUNT(*) AS quantidade,
+                   COALESCE(SUM(valor), 0) AS total_valor,
+                   MAX(COALESCE(data_recebimento, '')) AS ultima_data
+              FROM contribuicoes
+             WHERE ativo = 1
+               AND pessoa_id IS NOT NULL
+             GROUP BY pessoa_id
+            """
+        ).fetchall()
+        contributor_rows = conn.execute(
+            """
+            SELECT pessoa_id,
+                   COUNT(*) AS quantidade,
+                   GROUP_CONCAT(COALESCE(nome, ''), ' / ') AS nomes
+              FROM contribuintes
+             WHERE ativo = 1
+               AND pessoa_id IS NOT NULL
+             GROUP BY pessoa_id
+            """
+        ).fetchall()
+    primary_rows = _pick_primary_person_rows(person_rows)
+    contribution_index = {
+        moneyless_int(row["pessoa_id"]): {
+            "count": moneyless_int(row["quantidade"]),
+            "total_value": float(row["total_valor"] or 0),
+            "last_date": row["ultima_data"] or "",
+        }
+        for row in contribution_rows
+    }
+    contributor_index = {
+        moneyless_int(row["pessoa_id"]): {
+            "count": moneyless_int(row["quantidade"]),
+            "names": row["nomes"] or "",
+        }
+        for row in contributor_rows
+    }
+    graph: dict[int, set[int]] = defaultdict(set)
+    for row in relationship_rows:
+        left_id = moneyless_int(row["pessoa_id"])
+        right_id = moneyless_int(row["pessoa_relacionada_id"])
+        if not left_id or not right_id:
+            continue
+        if left_id not in primary_rows or right_id not in primary_rows:
+            continue
+        graph[left_id].add(right_id)
+        graph[right_id].add(left_id)
+    seen: set[int] = set()
+    nuclei: list[dict[str, Any]] = []
+    for node in sorted(graph):
+        if node in seen:
+            continue
+        stack = [node]
+        component_ids: list[int] = []
+        seen.add(node)
+        while stack:
+            current = stack.pop()
+            component_ids.append(current)
+            for next_id in graph[current]:
+                if next_id not in seen:
+                    seen.add(next_id)
+                    stack.append(next_id)
+        payload = _organized_family_payload(component_ids, primary_rows, contribution_index, contributor_index)
+        if payload is None:
+            continue
+        nuclei.append(payload)
+    total_groups = len(nuclei)
+    total_people = len({person["id"] for group in nuclei for person in group["people"]})
+    total_review = sum(1 for group in nuclei if group["needs_review"])
+    if cep_filter:
+        nuclei = [
+            group
+            for group in nuclei
+            if any(cep_filter in _digits_only(person.get("cep")) for person in group["people"])
+        ]
+    if query_key or digits:
+        nuclei = [group for group in nuclei if _organized_family_matches_query(group, query_key, digits)]
+    if review == "audit":
+        nuclei = [group for group in nuclei if group["needs_review"]]
+    elif review == "alinhados":
+        nuclei = [group for group in nuclei if not group["needs_review"]]
+    nuclei.sort(
+        key=lambda item: (
+            0 if item["needs_review"] else 1,
+            -moneyless_int(item["member_count"]),
+            normalize_match_name(item["label"]),
+        )
+    )
+    return {
+        "items": nuclei,
+        "total": total_groups,
+        "shown": len(nuclei),
+        "review_groups": total_review,
+        "total_people": total_people,
+        "q": query,
+        "cep": cep,
+        "review": review,
+    }
+
+
+def extended_family_clusters(nuclei: list[dict[str, Any]], q: str = "", review: str = "all") -> dict[str, Any]:
+    query = normalize_query(q)
+    query_key = normalize_match_name(query)
+    digits = _digits_only(query)
+    review = normalize_query(review) or "all"
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for nucleus in nuclei:
+        key = normalize_match_name(nucleus.get("surname_label") or "")
+        if not key:
+            continue
+        grouped[key].append(nucleus)
+    clusters: list[dict[str, Any]] = []
+    for key, members in grouped.items():
+        label = (members[0].get("surname_label") or key.title()).title()
+        filtered_members = list(members)
+        if review == "audit":
+            filtered_members = [member for member in filtered_members if member["needs_review"]]
+        elif review == "alinhados":
+            filtered_members = [member for member in filtered_members if not member["needs_review"]]
+        if not filtered_members:
+            continue
+        text_values: list[object] = [label]
+        digit_values: list[object] = []
+        for nucleus in filtered_members:
+            text_values.extend([nucleus.get("label"), nucleus.get("member_names"), nucleus.get("address"), nucleus.get("review_reason")])
+            for person in nucleus.get("people") or []:
+                text_values.extend([person.get("nome"), person.get("codigo"), person.get("cpf"), person.get("endereco")])
+                digit_values.extend([person.get("codigo"), person.get("cpf"), person.get("cep"), person.get("numero")])
+        if query_key or digits:
+            if not _family_query_matches(query_key, digits, text_values, digit_values):
+                continue
+        if not query and len(filtered_members) < 2:
+            continue
+        filtered_members.sort(
+            key=lambda item: (
+                0 if item["needs_review"] else 1,
+                normalize_match_name(item["label"]),
+            )
+        )
+        clusters.append(
+            {
+                "label": label,
+                "key": key,
+                "nuclei": filtered_members,
+                "nuclei_count": len(filtered_members),
+                "people_count": len({person["id"] for nucleus in filtered_members for person in nucleus["people"]}),
+                "review_count": sum(1 for nucleus in filtered_members if nucleus["needs_review"]),
+                "household_names": " | ".join(nucleus["label"] for nucleus in filtered_members[:6]),
+            }
+        )
+    clusters.sort(key=lambda item: (-item["nuclei_count"], normalize_match_name(item["label"])))
+    return {
+        "items": clusters,
+        "total": len(clusters),
+        "shown": len(clusters),
+        "review": review,
+        "q": query,
+    }
+
+
+def family_registry_dashboard(
+    q: str = "",
+    cep: str = "",
+    section: str = "organized",
+    mode: str = "all",
+    review: str = "all",
+) -> dict[str, Any]:
+    section = normalize_query(section) or "organized"
+    if section not in {"organized", "audit", "extended"}:
+        section = "organized"
+    audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q)
+    organized = organized_family_nuclei(q=q, cep=cep, review=review)
+    extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all")["items"], q=q, review=review)
+    return {
+        "section": section,
+        "q": normalize_query(q),
+        "cep": cep,
+        "mode": mode,
+        "review": review,
+        "audit": audit,
+        "organized": organized,
+        "extended": extended,
+        "summary": {
+            "audit_groups": audit["summary"]["automatic_groups"] + audit["summary"]["hypothesis_groups"],
+            "audit_people": audit["summary"]["automatic_people"] + audit["summary"]["hypothesis_people"],
+            "organized_groups": organized["total"],
+            "organized_people": organized["total_people"],
+            "organized_review_groups": organized["review_groups"],
+            "extended_groups": extended["total"],
+            "extended_nuclei": sum(cluster["nuclei_count"] for cluster in extended["items"]),
         },
     }
 
@@ -1351,7 +1833,7 @@ def list_competencias() -> list[str]:
         ]
 
 
-def list_contributions(q: str = "", competencia: str = "", status: str = "", limit: int = 300) -> dict[str, Any]:
+def list_contributions(q: str = "", competencia: str = "", status: str = "", limit: int | None = None) -> dict[str, Any]:
     q = (q or "").strip()
     competencia = (competencia or "").strip()
     status = (status or "").strip()
@@ -1408,6 +1890,9 @@ def list_contributions(q: str = "", competencia: str = "", status: str = "", lim
             )
             or 0
         )
+        limit_value = moneyless_int(limit) if limit is not None else 0
+        limit_clause = "LIMIT ?" if limit_value > 0 else ""
+        row_params: tuple[Any, ...] = (*params, limit_value) if limit_value > 0 else tuple(params)
         rows = conn.execute(
             f"""
             SELECT co.id, co.data_recebimento, co.competencia, co.valor,
@@ -1432,9 +1917,9 @@ def list_contributions(q: str = "", competencia: str = "", status: str = "", lim
                       COALESCE(co.data_recebimento, '') ASC,
                       COALESCE(co.competencia_ordem, 0) ASC,
                       co.id ASC
-             LIMIT ?
+             {limit_clause}
             """,
-            (*params, min(max(total, limit), 20000)),
+            row_params,
         ).fetchall()
         status_options = [
             {"value": row["status_operacional"], "count": int(row["total"] or 0)}
@@ -1481,7 +1966,8 @@ def list_contributions(q: str = "", competencia: str = "", status: str = "", lim
             moneyless_int(item["id"]),
         )
     )
-    items = items[:limit]
+    if limit_value > 0:
+        items = items[:limit_value]
     return {
         "items": items,
         "total": total,
@@ -1493,7 +1979,7 @@ def list_contributions(q: str = "", competencia: str = "", status: str = "", lim
         "status": status,
         "competencias": list_competencias(),
         "status_options": status_options,
-        "limit": limit,
+        "limit": limit_value or total,
     }
 
 
@@ -2086,7 +2572,7 @@ def _envelope_tables_ready(conn: sqlite3.Connection) -> bool:
     return table_exists(conn, "envelope_lotes") and table_exists(conn, "envelopes") and table_exists(conn, "envelope_itens")
 
 
-def list_envelopes(q: str = "", competencia: str = "", limit: int = 300) -> dict[str, Any]:
+def list_envelopes(q: str = "", competencia: str = "", limit: int | None = None) -> dict[str, Any]:
     with connect_legacy() as conn:
         if not _envelope_tables_ready(conn):
             return {
@@ -2118,6 +2604,9 @@ def list_envelopes(q: str = "", competencia: str = "", limit: int = 300) -> dict
             clauses.append("e.competencia = ?")
             params.append(competencia)
         where = " AND ".join(clauses)
+        limit_value = moneyless_int(limit) if limit is not None else 0
+        limit_clause = "LIMIT ?" if limit_value > 0 else ""
+        row_params: tuple[Any, ...] = (*params, limit_value) if limit_value > 0 else tuple(params)
         total_row = conn.execute(
             f"""
             SELECT COUNT(*) AS qtd,
@@ -2140,9 +2629,9 @@ def list_envelopes(q: str = "", competencia: str = "", limit: int = 300) -> dict
               LEFT JOIN formas_recebimento fr ON fr.id = e.forma_recebimento_id
              WHERE {where}
              ORDER BY e.competencia_ordem DESC, l.id DESC, e.data_recebimento DESC, e.id DESC
-             LIMIT ?
+             {limit_clause}
             """,
-            (*params, limit),
+            row_params,
         ).fetchall()
         competencias = [
             row["competencia"]
@@ -2224,6 +2713,11 @@ def list_envelopes(q: str = "", competencia: str = "", limit: int = 300) -> dict
                     if str(row["status"] or "") == "aguardando_digitacao"
                     else ""
                 ),
+                "edit_url": (
+                    f"/contributions/envelopes/{moneyless_int(row['id'])}/edit/"
+                    if str(row["status"] or "") == "lancado"
+                    else ""
+                ),
             }
         )
     return {
@@ -2233,6 +2727,7 @@ def list_envelopes(q: str = "", competencia: str = "", limit: int = 300) -> dict
         "total_value_fmt": _money(total_row["total"] if total_row else 0),
         "competencias": competencias,
         "lots": lots,
+        "limit": limit_value or (int(total_row["qtd"] or 0) if total_row else 0),
     }
 
 
@@ -2851,12 +3346,54 @@ def person_statement_data(
     }
 
 
+def search_receipt_people(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    query = normalize_query(q)
+    digits = "".join(ch for ch in query if ch.isdigit())
+    if len(query) < 2 and len(digits) < 2:
+        return []
+    limit = max(1, min(moneyless_int(limit) or 20, 80))
+    like = f"%{query}%"
+    digit_like = f"%{digits or query}%"
+    with connect_legacy() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
+              FROM pessoas
+             WHERE ativo = 1
+               AND (
+                    nome LIKE ?
+                    OR COALESCE(nome_social, '') LIKE ?
+                    OR COALESCE(codigo_interno, '') LIKE ?
+                    OR COALESCE(cpf, '') LIKE ?
+                    OR COALESCE(email_principal, '') LIKE ?
+                    OR COALESCE(telefone_principal, '') LIKE ?
+               )
+             ORDER BY nome COLLATE NOCASE ASC, id ASC
+             LIMIT ?
+            """,
+            (like, like, like, digit_like, like, like, limit),
+        ).fetchall()
+    return [
+        {
+            "id": moneyless_int(row["id"]),
+            "nome": row["nome"] or "",
+            "codigo": row["codigo_interno"] or "",
+            "cpf": format_cpf(row["cpf"]),
+            "status": format_status(row["status"]),
+            "sigla": status_sigla(row["status"], True),
+            "email": row["email_principal"] or "",
+            "telefone": row["telefone_principal"] or "",
+        }
+        for row in rows
+    ]
+
+
 def receipt_new_context(person_id: int, date_start: str = "", date_end: str = "") -> dict[str, Any] | None:
     date_start = normalize_query(date_start)
     date_end = normalize_query(date_end)
     with connect_legacy() as conn:
         person = conn.execute(
-            "SELECT id, codigo_interno, nome, cpf, status FROM pessoas WHERE id = ?",
+            "SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal FROM pessoas WHERE id = ?",
             (person_id,),
         ).fetchone()
         if person is None:
@@ -2873,20 +3410,19 @@ def receipt_new_context(person_id: int, date_start: str = "", date_end: str = ""
             f"""
             SELECT co.id, co.data_recebimento, co.competencia, co.valor,
                    t.nome AS tipo_nome, f.nome AS forma_nome
-              FROM contribuicoes co
+             FROM contribuicoes co
               JOIN tipos_contribuicao t ON t.id = co.tipo_contribuicao_id
               LEFT JOIN formas_recebimento f ON f.id = co.forma_recebimento_id
              WHERE {' AND '.join(clauses)}
                AND NOT EXISTS (
                     SELECT 1
                       FROM recibo_itens ri
-                      JOIN recibos r ON r.id = ri.recibo_id
+                     JOIN recibos r ON r.id = ri.recibo_id
                      WHERE ri.contribuicao_id = co.id
                        AND r.status <> 'cancelado'
                        AND r.cancelado_em IS NULL
                )
              ORDER BY co.data_recebimento, co.id
-             LIMIT 300
             """,
             tuple(params),
         ).fetchall()
@@ -2899,6 +3435,8 @@ def receipt_new_context(person_id: int, date_start: str = "", date_end: str = ""
             "cpf": format_cpf(person["cpf"]),
             "status": format_status(person["status"]),
             "sigla": status_sigla(person["status"], True),
+            "email": person["email_principal"] or "",
+            "telefone": person["telefone_principal"] or "",
         },
         "items": [
             {
@@ -2916,7 +3454,7 @@ def receipt_new_context(person_id: int, date_start: str = "", date_end: str = ""
     }
 
 
-def list_receipts(q: str = "", person_id: int = 0, date_start: str = "", date_end: str = "", limit: int = 200) -> dict[str, Any]:
+def list_receipts(q: str = "", person_id: int = 0, date_start: str = "", date_end: str = "", limit: int | None = None) -> dict[str, Any]:
     q = normalize_query(q)
     date_start = normalize_query(date_start)
     date_end = normalize_query(date_end)
@@ -2938,6 +3476,9 @@ def list_receipts(q: str = "", person_id: int = 0, date_start: str = "", date_en
         params.append(date_end)
     where = " AND ".join(clauses)
     with connect_legacy() as conn:
+        limit_value = moneyless_int(limit) if limit is not None else 0
+        limit_clause = "LIMIT ?" if limit_value > 0 else ""
+        row_params: tuple[Any, ...] = (*params, limit_value) if limit_value > 0 else tuple(params)
         rows = conn.execute(
             f"""
             SELECT r.*, p.nome AS pessoa_nome, p.codigo_interno, p.cpf
@@ -2945,9 +3486,9 @@ def list_receipts(q: str = "", person_id: int = 0, date_start: str = "", date_en
               JOIN pessoas p ON p.id = r.pessoa_id
              WHERE {where}
              ORDER BY r.data_emissao DESC, r.id DESC
-             LIMIT ?
+             {limit_clause}
             """,
-            (*params, limit),
+            row_params,
         ).fetchall()
         summary = conn.execute(
             f"""
@@ -2991,7 +3532,7 @@ def get_receipt_detail(receipt_id: int) -> dict[str, Any] | None:
         receipt = conn.execute(
             """
             SELECT r.*, o.nome AS organizacao_nome, o.nome_fantasia AS organizacao_fantasia,
-                   p.nome AS pessoa_nome, p.codigo_interno, p.cpf
+                   p.nome AS pessoa_nome, p.codigo_interno, p.cpf, p.email_principal, p.telefone_principal
               FROM recibos r
               JOIN pessoas p ON p.id = r.pessoa_id
               JOIN organizacoes o ON o.id = r.organizacao_id
@@ -3019,16 +3560,31 @@ def get_receipt_detail(receipt_id: int) -> dict[str, Any] | None:
             "id": moneyless_int(receipt["id"]),
             "numero": receipt["numero"] or "",
             "status": receipt["status"] or "",
+            "organization_id": moneyless_int(receipt["organizacao_id"]),
             "organizacao": receipt["organizacao_fantasia"] or receipt["organizacao_nome"] or "",
             "person_id": moneyless_int(receipt["pessoa_id"]),
             "person_name": receipt["pessoa_nome"] or "",
             "person_code": receipt["codigo_interno"] or "",
             "person_cpf": format_cpf(receipt["cpf"]),
+            "person_email": receipt["email_principal"] or "",
+            "person_phone": receipt["telefone_principal"] or "",
             "data": br_date(receipt["data_emissao"]),
+            "data_raw": receipt["data_emissao"] or "",
             "periodo_inicio": br_date(receipt["periodo_inicio"]),
+            "periodo_inicio_raw": receipt["periodo_inicio"] or "",
             "periodo_fim": br_date(receipt["periodo_fim"]),
+            "periodo_fim_raw": receipt["periodo_fim"] or "",
             "valor_fmt": _money(receipt["valor_total"]),
+            "valor_total": round(float(receipt["valor_total"] or 0), 2),
             "observacoes": receipt["observacoes"] or "",
+        },
+        "person": {
+            "id": moneyless_int(receipt["pessoa_id"]),
+            "nome": receipt["pessoa_nome"] or "",
+            "codigo": receipt["codigo_interno"] or "",
+            "cpf": format_cpf(receipt["cpf"]),
+            "email": receipt["email_principal"] or "",
+            "telefone": receipt["telefone_principal"] or "",
         },
         "items": [
             {
@@ -3239,7 +3795,7 @@ def list_contributors(
     mode: str = "todos",
     tags: list[str] | tuple[str, ...] | set[str] | None = None,
     section: str = "",
-    limit: int = 300,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     q = (q or "").strip()
     status = (status or "").strip()
@@ -3447,7 +4003,8 @@ def list_contributors(
         )
     )
 
-    limited_items = filtered[:limit]
+    limit_value = moneyless_int(limit) if limit is not None else 0
+    limited_items = filtered[:limit_value] if limit_value > 0 else list(filtered)
     family_groups = build_contributor_family_groups(filtered)
     family_links = build_contributor_family_links(filtered, people_rows)
     summary_source = operational_items
@@ -3493,7 +4050,7 @@ def list_contributors(
             "family_links": len(family_links),
             "family_groups": len(family_groups),
         },
-        "limit": limit,
+        "limit": limit_value or len(filtered),
     }
 
 

@@ -5,10 +5,11 @@
     <div>
       <p class="badge">Recibos emitidos</p>
       <h1>Recibos</h1>
-      <p>Consulta dos recibos gerados a partir das contribuicoes ja registradas e auditadas.</p>
+      <p>Consulta os recibos emitidos, permite consolidacao manual por periodo ou competencia e mantem o envio automatico por evento de lancamento.</p>
+      <p class="muted"><strong>Envio automatico</strong> por evento fica ativo para quem tem e-mail cadastrado, com possibilidade de reenvio manual.</p>
     </div>
     <div class="actions no-print">
-      <a class="button secondary" href="/people/">Escolher pessoa</a>
+      <a class="button secondary" href="#busca-pessoa-recibo">Buscar pessoa para recibo</a>
       <button type="button" onclick="window.print()">Imprimir lista</button>
     </div>
   </section>
@@ -20,6 +21,64 @@
       <div class="card"><span class="label">Pessoas</span><strong>{{ receipts.summary.pessoas }}</strong></div>
       <div class="card"><span class="label">Ultima emissao</span><strong style="font-size:20px">{{ receipts.summary.ultima_data|default:"-" }}</strong></div>
     </section>
+  {% endif %}
+
+  <section class="panel no-print">
+    <div class="section-head">
+      <div>
+        <h2 id="busca-pessoa-recibo">Gerar recibo por pessoa</h2>
+        <p class="muted">Pesquise por nome, CPF, codigo, e-mail ou telefone. Depois selecione a pessoa para abrir o gerador no mesmo painel.</p>
+      </div>
+      {% if receipt_form %}
+        <span class="badge">{{ receipt_form.person.sigla }} · {{ receipt_form.person.status }}</span>
+      {% endif %}
+    </div>
+    <form class="toolbar" method="get">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="person_id" value="{{ person_id }}">
+      <input type="hidden" name="date_start" value="{{ date_start }}">
+      <input type="hidden" name="date_end" value="{{ date_end }}">
+      <input type="hidden" name="selected_person_id" value="{{ selected_person_id }}">
+      <input type="hidden" name="form_date_start" value="{{ form_date_start }}">
+      <input type="hidden" name="form_date_end" value="{{ form_date_end }}">
+      <label class="wide">
+        Pessoa para gerar recibo
+        <input name="person_lookup" value="{{ person_lookup }}" placeholder="Ex.: Maria, 12345678901, 00123, email ou telefone">
+      </label>
+      <button type="submit">Pesquisar pessoa</button>
+      <a class="button secondary" href="/receipts/?q={{ q|urlencode }}&person_id={{ person_id }}&date_start={{ date_start|urlencode }}&date_end={{ date_end|urlencode }}{% if selected_person_id %}&selected_person_id={{ selected_person_id }}{% endif %}{% if form_date_start %}&form_date_start={{ form_date_start|urlencode }}{% endif %}{% if form_date_end %}&form_date_end={{ form_date_end|urlencode }}{% endif %}">Limpar busca</a>
+    </form>
+
+    {% if receipt_people %}
+      <div class="section-head" style="margin-top:18px;">
+        <h3>Resultados da busca</h3>
+        <span class="badge">{{ receipt_people|length }} encontrado(s)</span>
+      </div>
+      <div class="person-strip">
+        {% for person in receipt_people %}
+          <div class="person-card">
+            <span class="person-photo-placeholder">{{ person.sigla }}</span>
+            <span>
+              <strong>{{ person.nome }}</strong>
+              <span class="muted small">{{ person.codigo|default:"sem codigo" }} · CPF {{ person.cpf|default:"nao informado" }}</span>
+              <span class="muted small">{{ person.status }}{% if person.telefone %} · {{ person.telefone }}{% endif %}</span>
+              <span class="muted small">{% if person.email %}{{ person.email }}{% else %}sem e-mail{% endif %}</span>
+              <span class="actions" style="margin-top:8px">
+                <a class="badge" href="/receipts/?q={{ q|urlencode }}&person_id={{ person_id }}&date_start={{ date_start|urlencode }}&date_end={{ date_end|urlencode }}&selected_person_id={{ person.id }}&person_lookup={{ person_lookup|urlencode }}{% if form_date_start %}&form_date_start={{ form_date_start|urlencode }}{% endif %}{% if form_date_end %}&form_date_end={{ form_date_end|urlencode }}{% endif %}#gerar-recibo">Selecionar para recibo</a>
+                <a class="badge" href="/people/{{ person.id }}/">Abrir ficha</a>
+                <a class="badge" href="/contributions/statements/{{ person.id }}/">Extrato</a>
+              </span>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% elif person_lookup %}
+      <p class="muted" style="margin-top:18px;">Nenhuma pessoa encontrada para esta busca.</p>
+    {% endif %}
+  </section>
+
+  {% if receipt_form %}
+    {% include "power_church_django/receipts/_generator.html" %}
   {% endif %}
 
   <section class="panel no-print">
@@ -37,8 +96,12 @@
         Ate
         <input type="date" name="date_end" value="{{ date_end }}">
       </label>
+      {% if selected_person_id %}<input type="hidden" name="selected_person_id" value="{{ selected_person_id }}">{% endif %}
+      {% if person_lookup %}<input type="hidden" name="person_lookup" value="{{ person_lookup }}">{% endif %}
+      {% if form_date_start %}<input type="hidden" name="form_date_start" value="{{ form_date_start }}">{% endif %}
+      {% if form_date_end %}<input type="hidden" name="form_date_end" value="{{ form_date_end }}">{% endif %}
       <button type="submit">Filtrar</button>
-      <a class="button secondary" href="/receipts/">Limpar</a>
+      <a class="button secondary" href="/receipts/{% if selected_person_id or person_lookup or form_date_start or form_date_end %}?{% endif %}{% if selected_person_id %}selected_person_id={{ selected_person_id }}{% endif %}{% if selected_person_id and person_lookup %}&{% endif %}{% if person_lookup %}person_lookup={{ person_lookup|urlencode }}{% endif %}{% if selected_person_id or person_lookup %}{% if form_date_start or form_date_end %}&{% endif %}{% endif %}{% if form_date_start %}form_date_start={{ form_date_start|urlencode }}{% endif %}{% if form_date_start and form_date_end %}&{% endif %}{% if form_date_end %}form_date_end={{ form_date_end|urlencode }}{% endif %}">Limpar</a>
     </form>
   </section>
 

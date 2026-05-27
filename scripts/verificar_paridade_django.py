@@ -127,6 +127,7 @@ with connect_legacy() as conn:
     statement_movement = conn.execute("SELECT id FROM extrato_movimentos ORDER BY id DESC LIMIT 1").fetchone()
     pix_movement = conn.execute("SELECT id FROM pix_movimentos ORDER BY id DESC LIMIT 1").fetchone()
     people_lot = conn.execute("SELECT id FROM import_lotes ORDER BY id DESC LIMIT 1").fetchone()
+    receipt_row = conn.execute("SELECT id FROM recibos ORDER BY id DESC LIMIT 1").fetchone()
 
 if summary["people_total"] != people_total:
     raise AssertionError("dashboard Django nao bate total de pessoas")
@@ -138,16 +139,27 @@ if bank_zero:
     raise AssertionError(f"existem {bank_zero} contribuicoes bancarias ativas com valor <= 0")
 emit("Dashboard", "OK", f"{people_total} pessoas, {contributors_total} contribuintes, {contributions_total} contribuicoes")
 
-assert_html("/people/", ["Pessoas", "Importar pessoas", "Nova pessoa", "Exportar XLSX", "Exportar CSV"])
+assert_html("/people/", ["Pessoas", "Importar pessoas", "Nova pessoa", "Exportar XLSX", "Exportar CSV", "Exportacao dinamica de pessoas", "Familias e votacao"])
 csv_body = get("/people/export/?format=csv")
 xlsx_body = get("/people/export/?q=Maria&format=xlsx")
+dynamic_csv_body = get("/people/export/?preset=familias_votacao&column=nome&column=familia_domiciliar&column=familia_tem_contribuinte&format=csv")
 if b"Nome" not in csv_body or len(csv_body) < 200:
     raise AssertionError("exportacao CSV de pessoas invalida")
 if not xlsx_body.startswith(b"PK") or len(xlsx_body) < 2000:
     raise AssertionError("exportacao XLSX de pessoas invalida")
+if b"Familia domiciliar" not in dynamic_csv_body or b"Familia tem contribuinte" not in dynamic_csv_body:
+    raise AssertionError("exportacao dinamica CSV de pessoas nao trouxe colunas familiares")
 assert_html(
     "/people/families/",
-    ["Familias domiciliares", "Hipoteses para auditoria", "Membros ativos na lista", "Aplicacao em lote", "Ignorar sugestoes selecionadas"],
+    ["Familias domiciliares", "Nucleos organizados", "Fila de auditoria", "Familias estendidas", "Contribuicao na familia"],
+)
+assert_html(
+    "/people/families/?section=audit",
+    ["Fila de auditoria", "Aplicacao em lote", "Hipoteses para auditoria", "Ignorar sugestoes selecionadas"],
+)
+assert_html(
+    "/people/families/?section=extended",
+    ["Familias estendidas", "Nucleo domiciliar", "Financeiro", "Situacao"],
 )
 assert_html(
     f"/people/{person_id}/",
@@ -164,7 +176,7 @@ assert_html(
 assert_html("/people/imports/", ["Importacao de pessoas", "Subir planilha Excel", "Lotes recentes de pessoas"])
 if people_lot:
     assert_html(f"/people/imports/{people_lot[0]}/", ["Lote de pessoas", "Linhas importadas"])
-emit("Pessoas e importacao de pessoas", "OK", "lista, ficha com vinculos familiares, edicao e auditoria de importacao no Django")
+emit("Pessoas e importacao de pessoas", "OK", "lista, familias organizadas/auditoria, ficha com vinculos familiares, edicao e auditoria de importacao no Django")
 
 contributors_all = list_contributors(limit=10000)
 contributors_pf = list_contributors(tags=["pf"], section="contributors", limit=10000)
@@ -239,9 +251,32 @@ assert_html(f"/contributions/new/?person_id={contribution_person_id}", ["Lancame
 assert_html(f"/contributions/statements/{contribution_person_id}/", ["Extrato de contribuicoes", "Imprimir extrato"])
 emit("Contribuicoes", "OK", f"{latest_competence}: {period_data['total']} lancamentos completos e alfabeticos")
 
-assert_html("/receipts/", ["Recibos", "Pesquisar recibos", "Lista de recibos"])
-assert_html(f"/receipts/new/?person_id={contribution_person_id}", ["Gerar recibo individual", "Contribuicoes selecionaveis"])
-emit("Recibos", "OK", "lista, emissao individual e detalhe/impressao disponiveis no Django")
+assert_html("/receipts/", ["Recibos", "Gerar recibo por pessoa", "Pesquisar recibos", "Lista de recibos", "Envio automatico"])
+assert_html(
+    f"/receipts/?selected_person_id={contribution_person_id}",
+    [
+        "Gerar recibos para",
+        "Varios recibos por competencia",
+        "Recibo consolidado do periodo filtrado",
+        "E-mail do recibo",
+        "Salvar somente o padrao",
+        "Gerar e enviar consolidado",
+    ],
+)
+legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")
+if legacy_receipt_redirect.status_code not in {301, 302}:
+    raise AssertionError("rota legada /receipts/new/ nao redirecionou para a central de recibos")
+if f"/receipts/?selected_person_id={contribution_person_id}" not in legacy_receipt_redirect.headers.get("Location", ""):
+    raise AssertionError("rota legada /receipts/new/ redirecionou para destino inesperado")
+if receipt_row:
+    assert_html(
+        f"/receipts/{receipt_row[0]}/",
+        ["Logo do cliente", "Enviar ou reenviar por e-mail", "Abrir PDF", "Contribuicoes do recibo"],
+    )
+    receipt_pdf_body = get(f"/receipts/{receipt_row[0]}/pdf/")
+    if not receipt_pdf_body.startswith(b"%PDF") or len(receipt_pdf_body) < 1200:
+        raise AssertionError("PDF proprio de recibo invalido")
+emit("Recibos", "OK", "lista, central de emissao por pessoa e detalhe/impressao disponiveis no Django")
 
 assert_html("/imports/", ["Importar extrato bancario", "Sicoob PIX historico", "Sicoob Extrato Completo", "Criar lote", "Motor de leitura PDF", "Comparar Swift x PyMuPDF"])
 assert_html("/imports/rules/", ["Regras por centavos", "Mapa atual", "Salvar regra"])

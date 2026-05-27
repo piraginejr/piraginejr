@@ -153,6 +153,27 @@
       align-items: end;
       margin-top: 18px;
     }
+    .subnav-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .subnav-tab {
+      border: 1px solid #decfb9;
+      border-radius: 999px;
+      background: #fffaf1;
+      color: var(--brand);
+      font-weight: 900;
+      padding: 10px 14px;
+    }
+    .subnav-tab.active {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: white;
+    }
+    .subnav-tab:hover {
+      background: #fff2da;
+    }
     label {
       display: grid;
       gap: 6px;
@@ -844,6 +865,7 @@
         <a href="/reports/">Relatorios</a>
         <a href="/audit/">Auditoria</a>
         <a href="/accounts/">Usuarios</a>
+        <button class="button secondary no-print" type="button" onclick="window.print()">Imprimir</button>
         {% if request.user.is_authenticated %}
           <form method="post" action="/accounts/logout/" style="display:inline">{% csrf_token %}<button class="button secondary" type="submit">{{ request.user.username }} · sair</button></form>
         {% else %}

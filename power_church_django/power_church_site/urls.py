@@ -3,7 +3,14 @@ from __future__ import annotations
 from django.contrib import admin
 from django.urls import include, path
 
-from power_church_django.apps.contributions.views import contributor_detail, contributors, receipt_detail, receipt_new, receipts
+from power_church_django.apps.contributions.views import (
+    contributor_detail,
+    contributors,
+    receipt_detail,
+    receipt_new,
+    receipt_pdf_view,
+    receipts,
+)
 from power_church_django.apps.imports.views import dashboard
 from power_church_site.views import brand_logo
 
@@ -19,6 +26,7 @@ urlpatterns = [
     path("contributions/", include("power_church_django.apps.contributions.urls")),
     path("receipts/", receipts, name="receipts"),
     path("receipts/new/", receipt_new, name="receipt_new"),
+    path("receipts/<int:receipt_id>/pdf/", receipt_pdf_view, name="receipt_pdf"),
     path("receipts/<int:receipt_id>/", receipt_detail, name="receipt_detail"),
     path("imports/", include("power_church_django.apps.imports.urls")),
     path("audit/", include("power_church_django.apps.audit.urls")),

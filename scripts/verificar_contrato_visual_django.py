@@ -62,7 +62,7 @@ def build_checks(db_path: Path) -> list[Check]:
     from django.conf import settings
     from django.test import Client
 
-    from power_church_django.services.legacy import connect_legacy, list_contributions, list_contributors
+    from power_church_django.services.legacy import connect_legacy, list_contributions, list_contributors, list_envelopes, list_people
 
     if "testserver" not in settings.ALLOWED_HOSTS:
         settings.ALLOWED_HOSTS.append("testserver")
@@ -74,6 +74,9 @@ def build_checks(db_path: Path) -> list[Check]:
             "GROUP BY competencia ORDER BY MAX(COALESCE(competencia_ordem, 0)) DESC, competencia DESC LIMIT 1"
         ).fetchone()[0]
         statement_lot = conn.execute("SELECT id FROM extrato_lotes ORDER BY id DESC LIMIT 1").fetchone()
+        contribution_person_id = conn.execute(
+            "SELECT pessoa_id FROM contribuicoes WHERE ativo = 1 AND pessoa_id IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
 
     def get(path: str) -> str:
         response = client.get(path)
@@ -155,6 +158,75 @@ def build_checks(db_path: Path) -> list[Check]:
             "checkboxes usam layout compacto",
         )
     )
+    people_data = list_people()
+    people_html = get("/people/")
+    ok, detail = _contains_all(
+        people_html,
+        [
+            "Imprimir lista",
+            "Exportacao dinamica de pessoas",
+            "Cadastro basico",
+            "Contatos",
+            "Familias e votacao",
+            "Selecionar tudo",
+            f"Mostrando {people_data['total']} de {people_data['total']} registros",
+        ],
+    )
+    checks.append(Check("Pessoas exibem lista completa com exportacao dinamica", "OK" if ok else "FALHA", detail))
+    families_html = get("/people/families/")
+    ok, detail = _contains_all(
+        families_html,
+        [
+            "Nucleos organizados",
+            "Fila de auditoria",
+            "Familias estendidas",
+            "Situacao do domicilio",
+            "Contribuicao na familia",
+            "Imprimir lista",
+        ],
+    )
+    checks.append(Check("Familias organizadas exibem consulta imprimivel", "OK" if ok else "FALHA", detail))
+    families_audit_html = get("/people/families/?section=audit")
+    ok, detail = _contains_all(
+        families_audit_html,
+        [
+            "Fila de auditoria",
+            "Aplicacao em lote",
+            "Criar familias selecionadas",
+            "Ignorar sugestoes selecionadas",
+        ],
+    )
+    checks.append(Check("Familias preservam fila de auditoria", "OK" if ok else "FALHA", detail))
+    families_extended_html = get("/people/families/?section=extended")
+    ok, detail = _contains_all(
+        families_extended_html,
+        [
+            "Familias estendidas",
+            "Nucleo domiciliar",
+            "Financeiro",
+            "Situacao",
+        ],
+    )
+    checks.append(Check("Familias estendidas agrupam sobrenomes e nucleos", "OK" if ok else "FALHA", detail))
+    contributions_data = list_contributions()
+    contributions_html = get("/contributions/")
+    ok, detail = _contains_all(
+        contributions_html,
+        [
+            "Central de envelopes",
+            "Lancamentos",
+            "Envelopes",
+            "Envelopes ativos",
+            "Total lancado",
+            "Lotes recentes",
+            "Subir lote",
+            "Subir envelope",
+            "Abrir lista completa",
+            "Imprimir lista filtrada",
+            f"Mostrando {contributions_data['total']} de {contributions_data['total']} lancamentos",
+        ],
+    )
+    checks.append(Check("Contribuicoes exibem lista completa e hub de envelopes", "OK" if ok else "FALHA", detail))
     period_data = list_contributions(competencia=latest_competence, limit=10000)
     period_items = period_data["items"]
     period_order = [
@@ -209,6 +281,64 @@ def build_checks(db_path: Path) -> list[Check]:
     if 'value="None"' in envelope_html or ">None<" in envelope_html:
         ok, detail = False, "formulario exibiu None em campo de rastreabilidade"
     checks.append(Check("Envelopes mantem auditoria documental", "OK" if ok else "FALHA", detail))
+    envelopes_data = list_envelopes()
+    envelopes_html = get("/contributions/envelopes/")
+    ok, detail = _contains_all(
+        envelopes_html,
+        [
+            "Central de envelopes",
+            "Lancamentos",
+            "Envelopes",
+            "Envelopes ativos",
+            "Abrir lista completa",
+            "Subir lote",
+            "Subir envelope",
+            "Imprimir lista",
+            f"Mostrando {envelopes_data['total']} de {envelopes_data['total']} envelope(s)",
+        ],
+    )
+    checks.append(Check("Lista de envelopes centraliza operacao e impressao", "OK" if ok else "FALHA", detail))
+    receipts_html = get("/receipts/")
+    ok, detail = _contains_all(
+        receipts_html,
+        [
+            "Gerar recibo por pessoa",
+            "Pesquisar pessoa",
+            "Pesquisar recibos",
+            "Lista de recibos",
+            "Imprimir lista",
+            "Envio automatico",
+        ],
+    )
+    checks.append(Check("Recibos exibem busca central e impressao", "OK" if ok else "FALHA", detail))
+    receipt_generator_html = get(f"/receipts/?selected_person_id={contribution_person_id}")
+    ok, detail = _contains_all(
+        receipt_generator_html,
+        [
+            "Gerar recibos para",
+            "Varios recibos por competencia",
+            "Recibo consolidado do periodo filtrado",
+            "E-mail do recibo",
+            "Salvar somente o padrao",
+            "Gerar e enviar consolidado",
+        ],
+    )
+    checks.append(Check("Recibos centralizam geracao na mesma tela", "OK" if ok else "FALHA", detail))
+    latest_receipt_row = None
+    with connect_legacy() as conn:
+        latest_receipt_row = conn.execute("SELECT id FROM recibos ORDER BY id DESC LIMIT 1").fetchone()
+    if latest_receipt_row:
+        receipt_detail_html = get(f"/receipts/{latest_receipt_row[0]}/")
+        ok, detail = _contains_all(
+            receipt_detail_html,
+            [
+                "Logo do cliente",
+                "Enviar ou reenviar por e-mail",
+                "Abrir PDF",
+                "Contribuicoes do recibo",
+            ],
+        )
+        checks.append(Check("Detalhe do recibo inclui logo, PDF e reenvio", "OK" if ok else "FALHA", detail))
     envelope_lot_html = get("/contributions/envelopes/lots/new/")
     ok, detail = _contains_all(
         envelope_lot_html,
@@ -238,7 +368,7 @@ def build_checks(db_path: Path) -> list[Check]:
     )
 
     base_html = (ROOT / "power_church_django" / "templates" / "power_church_django" / "base.html").read_text(encoding="utf-8")
-    ok, detail = _contains_all(base_html, ["compact-marker-grid", "compact-button", "remittance-cell", "fit-table", "imports-table", "lot-movements-table", "lot-audit-actions", "report-summary-strip", "summary-pill", "report-table", "remittance-chip", "contributions-table", "@media (max-width: 780px)"])
+    ok, detail = _contains_all(base_html, ["compact-marker-grid", "compact-button", "remittance-cell", "fit-table", "imports-table", "lot-movements-table", "lot-audit-actions", "report-summary-strip", "summary-pill", "report-table", "remittance-chip", "contributions-table", "subnav-tabs", "subnav-tab", 'onclick="window.print()"', "@media (max-width: 780px)"])
     checks.append(Check("CSS base contem ajustes visuais", "OK" if ok else "FALHA", detail))
     trash_template = (ROOT / "power_church_django" / "templates" / "power_church_django" / "people" / "trash.html").read_text(encoding="utf-8")
     purge_template = (ROOT / "power_church_django" / "templates" / "power_church_django" / "people" / "purge_confirm.html").read_text(encoding="utf-8")

@@ -1,0 +1,219 @@
+<section id="gerar-recibo" class="panel">
+  <div class="section-head">
+    <div>
+      <h2>Gerar recibos para {{ receipt_form.person.nome }}</h2>
+      <p class="muted">
+        {{ receipt_form.person.codigo|default:"sem codigo" }} · CPF {{ receipt_form.person.cpf|default:"nao informado" }} · {{ receipt_form.person.status }}
+        {% if receipt_form.person.email %} · {{ receipt_form.person.email }}{% endif %}
+      </p>
+    </div>
+    <div class="actions no-print" style="margin-top:0">
+      <a class="button secondary" href="/people/{{ receipt_form.person.id }}/">Abrir ficha</a>
+      <a class="button secondary" href="/contributions/statements/{{ receipt_form.person.id }}/">Extrato</a>
+      <a class="button secondary" href="/receipts/?q={{ q|urlencode }}&person_id={{ receipt_form.person.id }}&date_start={{ date_start|urlencode }}&date_end={{ date_end|urlencode }}&selected_person_id={{ receipt_form.person.id }}&person_lookup={{ person_lookup|urlencode }}&form_date_start={{ form_date_start|urlencode }}&form_date_end={{ form_date_end|urlencode }}">Ver recibos desta pessoa</a>
+      <a class="button secondary" href="/receipts/?q={{ q|urlencode }}&person_id={{ person_id }}&date_start={{ date_start|urlencode }}&date_end={{ date_end|urlencode }}">Fechar gerador</a>
+    </div>
+  </div>
+
+  <section class="grid">
+    <div class="card"><span class="label">Contribuicoes disponiveis</span><strong>{{ receipt_form.items|length }}</strong></div>
+    <div class="card"><span class="label">Total disponivel</span><strong>{{ receipt_form.total_fmt }}</strong></div>
+    <div class="card"><span class="label">Competencias</span><strong>{{ receipt_form.period_options|length }}</strong></div>
+    <div class="card"><span class="label">Envio automatico</span><strong style="font-size:20px">Por evento</strong></div>
+  </section>
+
+  <section class="panel no-print" style="margin-top:18px; margin-bottom:18px;">
+    <h3>Filtrar contribuicoes disponiveis</h3>
+    <form class="toolbar" method="get">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="person_id" value="{{ person_id }}">
+      <input type="hidden" name="date_start" value="{{ date_start }}">
+      <input type="hidden" name="date_end" value="{{ date_end }}">
+      <input type="hidden" name="selected_person_id" value="{{ receipt_form.person.id }}">
+      <input type="hidden" name="person_lookup" value="{{ person_lookup }}">
+      <label>
+        De
+        <input type="date" name="form_date_start" value="{{ form_date_start }}">
+      </label>
+      <label>
+        Ate
+        <input type="date" name="form_date_end" value="{{ form_date_end }}">
+      </label>
+      <button type="submit">Atualizar lista</button>
+      <a class="button secondary" href="/receipts/?q={{ q|urlencode }}&person_id={{ person_id }}&date_start={{ date_start|urlencode }}&date_end={{ date_end|urlencode }}&selected_person_id={{ receipt_form.person.id }}&person_lookup={{ person_lookup|urlencode }}">Limpar periodo</a>
+    </form>
+  </section>
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="pessoa_id" value="{{ receipt_form.person.id }}">
+    <input type="hidden" name="return_q" value="{{ q }}">
+    <input type="hidden" name="return_person_id" value="{{ person_id }}">
+    <input type="hidden" name="return_date_start" value="{{ date_start }}">
+    <input type="hidden" name="return_date_end" value="{{ date_end }}">
+    <input type="hidden" name="return_selected_person_id" value="{{ receipt_form.person.id }}">
+    <input type="hidden" name="return_person_lookup" value="{{ person_lookup }}">
+    <input type="hidden" name="return_form_date_start" value="{{ form_date_start }}">
+    <input type="hidden" name="return_form_date_end" value="{{ form_date_end }}">
+
+    <section class="panel no-print" style="margin-bottom:18px;">
+      <div class="section-head">
+        <div>
+          <h3>1. Varios recibos por competencia</h3>
+          <p class="muted">Use esta opcao quando quiser um recibo por competencia selecionada. Ideal para reemissao em lote da mesma pessoa.</p>
+        </div>
+        <span class="badge">{{ receipt_form.period_options|length }} competencia(s)</span>
+      </div>
+      <div class="person-strip">
+        {% for option in receipt_form.period_options %}
+          <label class="person-card" style="align-items:flex-start">
+            <span>
+              <input type="checkbox" name="competencia_key" value="{{ option.competencia_key }}" {% if option.selected %}checked{% endif %}>
+            </span>
+            <span>
+              <strong>{{ option.competencia }}</strong>
+              <span class="muted small">{{ option.periodo_inicio }} a {{ option.periodo_fim }}</span>
+              <span class="muted small">{{ option.quantidade }} contribuicao(oes) · {{ option.total_fmt }}</span>
+              {% if option.active_receipt %}
+                <span class="muted small">Recibo atual: {{ option.active_receipt.numero }} em {{ option.active_receipt.data }}</span>
+              {% endif %}
+            </span>
+          </label>
+        {% empty %}
+          <p class="muted">Nenhuma competencia disponivel para esta pessoa.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel no-print" style="margin-bottom:18px;">
+      <div class="section-head">
+        <div>
+          <h3>2. Recibo consolidado do periodo filtrado</h3>
+          <p class="muted">As linhas abaixo entram no mesmo recibo e a soma delas compoe o valor total do documento.</p>
+        </div>
+        <span class="badge">{{ receipt_form.items|length }} linha(s)</span>
+      </div>
+      <div class="form-grid">
+        <label>
+          Data de emissao
+          <input type="date" name="data_emissao" value="{% now "Y-m-d" %}">
+        </label>
+        <label class="wide">
+          Observacoes do recibo
+          <textarea name="observacoes" placeholder="Opcional. Ex.: recibo solicitado pelo contribuinte ou observacoes sobre o rateio."></textarea>
+        </label>
+      </div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead>
+            <tr>
+              <th class="no-print">Selecionar</th>
+              <th>Data</th>
+              <th>Competencia</th>
+              <th>Tipo</th>
+              <th>Forma</th>
+              <th class="num">Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in receipt_form.items %}
+              <tr>
+                <td class="no-print"><input type="checkbox" name="contribuicao_id" value="{{ item.id }}" checked></td>
+                <td>{{ item.data }}</td>
+                <td>{{ item.competencia|default:"-" }}</td>
+                <td>{{ item.tipo }}</td>
+                <td>{{ item.forma|default:"-" }}</td>
+                <td class="num">{{ item.valor_fmt }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6">Nao ha contribuicoes disponiveis para recibo nesta pessoa ou periodo.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel no-print" style="margin-bottom:18px;">
+      <div class="section-head">
+        <div>
+          <h3>3. E-mail do recibo</h3>
+          <p class="muted">O destinatario pode ser ajustado neste envio. Se marcar para salvar, este assunto e esta mensagem viram o novo padrao antes das proximas importacoes.</p>
+        </div>
+        <span class="badge">Padrao editavel</span>
+      </div>
+      <div class="form-grid">
+        <label>
+          Destinatario deste envio
+          <input type="email" name="email_to" value="{{ receipt_form.email_to_default }}" placeholder="email@destino.com">
+        </label>
+        <label>
+          Remetente padrao
+          <input type="email" name="email_default_from" value="{{ receipt_form.email_default_from }}" placeholder="recebimento@dominio.com">
+        </label>
+        <label>
+          Responder para
+          <input type="email" name="email_reply_to" value="{{ receipt_form.email_reply_to }}" placeholder="Opcional">
+        </label>
+        <label class="wide">
+          Assunto padrao
+          <input name="email_subject" value="{{ receipt_form.email_template_subject }}" placeholder="Assunto do e-mail">
+        </label>
+        <label class="wide">
+          Corpo padrao do e-mail
+          <textarea name="email_body" rows="8" placeholder="Mensagem enviada ao contribuinte.">{{ receipt_form.email_template_body }}</textarea>
+        </label>
+      </div>
+      <label class="muted" style="display:flex; gap:8px; align-items:center; margin-top:12px;">
+        <input type="checkbox" name="save_as_default" value="1">
+        Salvar este assunto e esta mensagem como novo padrao do sistema
+      </label>
+      <div class="actions" style="margin-top:12px;">
+        <button type="submit" name="action" value="save_email_template">Salvar somente o padrao</button>
+      </div>
+    </section>
+
+    <div class="actions no-print">
+      <button type="submit" name="action" value="generate_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar varios recibos por competencia</button>
+      <button type="submit" name="action" value="generate_and_send_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar e enviar por competencia</button>
+      <button type="submit" name="action" value="generate_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar recibo consolidado</button>
+      <button type="submit" name="action" value="generate_and_send_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar e enviar consolidado</button>
+    </div>
+  </form>
+
+  {% if receipt_form.dispatch_history %}
+    <section class="panel" style="margin-top:18px;">
+      <div class="section-head">
+        <h3>Historico recente de envio</h3>
+        <span class="badge">{{ receipt_form.dispatch_history|length }} item(ns)</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Periodo</th>
+              <th>Recibo</th>
+              <th>Status</th>
+              <th>Destino</th>
+              <th>Origem</th>
+              <th>Data</th>
+              <th>Erro</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in receipt_form.dispatch_history %}
+              <tr>
+                <td>{{ item.period_label|default:"-" }}</td>
+                <td>{{ item.receipt_number|default:"-" }}</td>
+                <td><span class="badge">{{ item.status }}</span></td>
+                <td>{{ item.email_to|default:"-" }}</td>
+                <td>{{ item.trigger }}</td>
+                <td>{{ item.sent_at|default:item.updated_at }}</td>
+                <td>{{ item.last_error|default:"-" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+</section>

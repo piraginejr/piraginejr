@@ -7,6 +7,8 @@
       <h1>Familias domiciliares</h1>
       {% if families.section == "audit" %}
         <p>Fila de auditoria para sugestoes de mesmo domicilio. Aqui o operador cria familias domiciliares, ignora falsos positivos e imprime a lista filtrada.</p>
+      {% elif families.section == "broad" %}
+        <p>Lista por criterio amplo de endereco-base. Ela apoia o refino manual para consolidar pessoas como familias domiciliares sem perder grupos ja alinhados.</p>
       {% elif families.section == "extended" %}
         <p>Consulta por sobrenome para descobrir quantos nucleos domiciliares existem em cada familia estendida e quais deles merecem auditoria.</p>
       {% else %}
@@ -35,11 +37,11 @@
       <strong>{{ families.summary.extended_groups }}</strong>
       <div class="muted small">{{ families.summary.extended_nuclei }} nucleo(s)</div>
     </a>
-    <div class="card">
-      <span class="label">Nucleos que pedem revisao</span>
-      <strong>{{ families.summary.organized_review_groups }}</strong>
-      <div class="muted small">enderecos divergentes ou incompletos</div>
-    </div>
+    <a class="card" href="/people/families/?section=broad{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}">
+      <span class="label">Criterio amplo</span>
+      <strong>{{ families.summary.broad_groups }}</strong>
+      <div class="muted small">{{ families.summary.broad_pending_groups }} pedem consolidacao manual</div>
+    </a>
   </section>
 
   {% include "power_church_django/people/_family_tabs.html" %}
@@ -71,6 +73,15 @@
             {% for item in families.audit.smart_summary %}
               <option value="{{ item.key }}" {% if category == item.key %}selected{% endif %}>{{ item.label }} ({{ item.count }})</option>
             {% endfor %}
+          </select>
+        </label>
+      {% elif families.section == "broad" %}
+        <label>
+          Situacao do grupo
+          <select name="review">
+            <option value="all" {% if review == "all" %}selected{% endif %}>Todos</option>
+            <option value="audit" {% if review == "audit" %}selected{% endif %}>Somente consolidaveis</option>
+            <option value="alinhados" {% if review == "alinhados" %}selected{% endif %}>Somente ja alinhados</option>
           </select>
         </label>
       {% else %}
@@ -106,10 +117,12 @@
       <div class="muted small">
         {% if families.section == "audit" %}
           Fila de auditoria
+        {% elif families.section == "broad" %}
+          Criterio amplo
         {% elif families.section == "extended" %}
           Familias estendidas
         {% else %}
-          Nucleos organizados
+          Todos os domicilios
         {% endif %}
         {% if q %} · busca {{ q }}{% endif %}
         {% if cep %} · CEP {{ cep }}{% endif %}
@@ -121,6 +134,8 @@
     <section class="panel"><h2>Erro ao carregar familias</h2><p>{{ error }}</p></section>
   {% elif families.section == "audit" %}
     {% include "power_church_django/people/_family_audit.html" %}
+  {% elif families.section == "broad" %}
+    {% include "power_church_django/people/_family_broad.html" %}
   {% elif families.section == "extended" %}
     {% include "power_church_django/people/_family_extended.html" %}
   {% else %}

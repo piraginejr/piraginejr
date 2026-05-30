@@ -315,6 +315,7 @@ def dashboard_summary() -> dict[str, Any]:
             ).fetchall()
         ]
     household_summary = organized_family_nuclei(q="", cep="", review="all", household_kind="all")
+    household_broad = broad_family_candidates(q="", cep="", review="all")
 
     return {
         "people_total": people_total,
@@ -336,6 +337,8 @@ def dashboard_summary() -> dict[str, Any]:
         "household_family_groups": household_summary["family_groups"],
         "household_single_groups": household_summary["single_groups"],
         "household_review_groups": household_summary["review_groups"],
+        "household_broad_groups": household_broad["total"],
+        "household_broad_pending": household_broad["pending_groups"],
         "months": months,
         "people_statuses": statuses,
     }
@@ -1432,6 +1435,113 @@ def family_nuclei_dashboard(
     }
 
 
+def broad_family_candidates(q: str = "", cep: str = "", review: str = "all") -> dict[str, Any]:
+    query = normalize_query(q)
+    query_key = normalize_match_name(query)
+    digits = _digits_only(query)
+    cep_filter = _digits_only(cep)
+    review = normalize_query(review) or "all"
+    with connect_legacy() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                   p.data_nascimento,
+                   e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+              FROM pessoas p
+              JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+             WHERE p.ativo = 1
+             ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
+            """
+        ).fetchall()
+        relationship_pairs: set[tuple[int, int]] = set()
+        suppressed_pairs: set[tuple[int, int]] = set()
+        if table_exists(conn, "pessoa_relacionamentos"):
+            relationship_rows = conn.execute(
+                """
+                SELECT pessoa_id, pessoa_relacionada_id
+                  FROM pessoa_relacionamentos
+                 WHERE ativo = 1
+                """
+            ).fetchall()
+            relationship_pairs = {
+                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                for row in relationship_rows
+            }
+            suppressed_rows = conn.execute(
+                """
+                SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
+                  FROM pessoa_relacionamentos
+                 WHERE ativo = 0
+                """
+            ).fetchall()
+            suppressed_pairs = {
+                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                for row in suppressed_rows
+                if row["tipo_relacionamento"] == "nucleo_familiar"
+                and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
+            }
+    if cep_filter:
+        rows = [
+            row for row in rows
+            if cep_filter in "".join(ch for ch in str(row["cep"] or "") if ch.isdigit())
+        ]
+
+    base_groups: dict[tuple[str, ...], list[sqlite3.Row]] = defaultdict(list)
+    for row in rows:
+        base_key = family_base_address_key(row)
+        if base_key:
+            base_groups[base_key].append(row)
+
+    payloads: list[dict[str, Any]] = []
+    for key, group_rows in base_groups.items():
+        if len({moneyless_int(row["id"]) for row in group_rows}) < 2:
+            continue
+        payload = _family_group_payload(
+            key,
+            group_rows,
+            confidence="Criterio amplo",
+            reason="Mesmo CEP, logradouro e numero no criterio amplo. Esta lista serve para refinamento manual e consolidacao assistida.",
+            include_complement=True,
+        )
+        payload["smart_audit"] = classify_family_audit_group([person.get("complemento") for person in payload.get("people") or []])
+        payload["missing_relationships"] = _family_group_missing_relationships(payload, relationship_pairs, suppressed_pairs)
+        payload["is_consolidated"] = payload["missing_relationships"] <= 0
+        payload["can_consolidate"] = payload["missing_relationships"] > 0
+        payloads.append(payload)
+
+    total_groups = len(payloads)
+    total_people = len({person["id"] for group in payloads for person in group["people"]})
+    total_pending = sum(1 for group in payloads if group["can_consolidate"])
+    total_consolidated = sum(1 for group in payloads if group["is_consolidated"])
+    if query_key or digits:
+        payloads = [payload for payload in payloads if _family_group_matches_query(payload, query_key, digits)]
+    if review == "audit":
+        payloads = [payload for payload in payloads if payload["can_consolidate"]]
+    elif review == "alinhados":
+        payloads = [payload for payload in payloads if payload["is_consolidated"]]
+    payloads.sort(
+        key=lambda item: (
+            0 if item["can_consolidate"] else 1,
+            -item["status_summary"]["total"],
+            item["label"],
+        )
+    )
+    shown_people = [person for group in payloads for person in group["people"]]
+    return {
+        "q": query,
+        "cep": cep,
+        "review": review,
+        "items": payloads,
+        "total": total_groups,
+        "shown": len(payloads),
+        "total_people": total_people,
+        "pending_groups": total_pending,
+        "consolidated_groups": total_consolidated,
+        "smart_summary": summarize_smart_audit(payloads),
+        "shown_status": _family_status_summary(shown_people),
+    }
+
+
 def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all", household_kind: str = "all") -> dict[str, Any]:
     query = normalize_query(q)
     query_key = normalize_match_name(query)
@@ -1646,10 +1756,11 @@ def family_registry_dashboard(
     household_kind: str = "all",
 ) -> dict[str, Any]:
     section = normalize_query(section) or "organized"
-    if section not in {"organized", "audit", "extended"}:
+    if section not in {"organized", "audit", "extended", "broad"}:
         section = "organized"
     audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q, category=category)
     organized = organized_family_nuclei(q=q, cep=cep, review=review, household_kind=household_kind)
+    broad = broad_family_candidates(q=q, cep=cep, review=review)
     extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all", household_kind="all")["items"], q=q, review=review)
     return {
         "section": section,
@@ -1661,6 +1772,7 @@ def family_registry_dashboard(
         "household_kind": household_kind,
         "audit": audit,
         "organized": organized,
+        "broad": broad,
         "extended": extended,
         "summary": {
             "audit_groups": audit["summary"]["automatic_groups"] + audit["summary"]["hypothesis_groups"],
@@ -1670,6 +1782,8 @@ def family_registry_dashboard(
             "organized_review_groups": organized["review_groups"],
             "organized_family_groups": organized["family_groups"],
             "organized_single_groups": organized["single_groups"],
+            "broad_groups": broad["total"],
+            "broad_pending_groups": broad["pending_groups"],
             "extended_groups": extended["total"],
             "extended_nuclei": sum(cluster["nuclei_count"] for cluster in extended["items"]),
         },

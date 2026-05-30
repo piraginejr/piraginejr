@@ -166,6 +166,9 @@ if int(families_audit_data["audit"]["summary"]["shown_groups"] or 0) != expected
     )
 if not families_audit_data["audit"].get("smart_summary"):
     raise AssertionError("auditoria de familias ficou sem resumo inteligente")
+broad_families_data = family_registry_dashboard(section="broad")
+if int(broad_families_data["broad"]["shown"] or 0) != int(broad_families_data["broad"]["total"] or 0):
+    raise AssertionError("criterio amplo de familias ainda esta limitado")
 access = access_control_snapshot()
 if not access["installed"]:
     raise AssertionError("permissoes Power Church nao instaladas no Django")
@@ -301,6 +304,7 @@ paths = [
     "/people/?status=membro_ativo&city=Niteroi",
     "/people/new/",
     "/people/families/",
+    "/people/families/?section=broad",
     "/people/families/?section=audit",
     "/people/families/?section=extended",
     f"/people/{person_id}/",
@@ -441,7 +445,7 @@ for path in paths:
     if path == "/" and "/contributions/envelopes/new/" not in content:
         raise AssertionError("dashboard nao incluiu botao direto para subir envelope")
     if path == "/":
-        for snippet in ["Domicilios da base", "Quorum em Niteroi"]:
+        for snippet in ["Domicilios da base", "Familias domiciliares", "Unipessoais", "Criterio amplo", "Quorum em Niteroi"]:
             if snippet not in content:
                 raise AssertionError(f"dashboard sem indicador estrategico: {snippet}")
     if path == "/people/":
@@ -509,6 +513,15 @@ for path in paths:
         ]:
             if snippet not in content:
                 raise AssertionError(f"familias domiciliares Django sem trecho esperado: {snippet}")
+    if path == "/people/families/?section=broad":
+        for snippet in [
+            "Criterio amplo",
+            "Padrao inteligente do criterio amplo",
+            "Consolidar familias selecionadas",
+            "Consolidacao manual",
+        ]:
+            if snippet not in content:
+                raise AssertionError(f"criterio amplo de familias sem trecho esperado: {snippet}")
     if path == "/people/families/?section=audit":
         for snippet in [
             "Fila de auditoria",

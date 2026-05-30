@@ -92,6 +92,9 @@ def build_checks(db_path: Path) -> list[Check]:
         [
             "Dashboard operacional",
             "Domicilios da base",
+            "Familias domiciliares",
+            "Unipessoais",
+            "Criterio amplo",
             "Quorum em Niteroi",
         ],
     )
@@ -222,6 +225,17 @@ def build_checks(db_path: Path) -> list[Check]:
         ],
     )
     checks.append(Check("Familias preservam fila de auditoria", "OK" if ok else "FALHA", detail))
+    families_broad_html = get("/people/families/?section=broad")
+    ok, detail = _contains_all(
+        families_broad_html,
+        [
+            "Criterio amplo",
+            "Consolidar familias selecionadas",
+            "Padrao inteligente do criterio amplo",
+            "Consolidacao manual",
+        ],
+    )
+    checks.append(Check("Familias exibem criterio amplo para consolidacao manual", "OK" if ok else "FALHA", detail))
     families_extended_html = get("/people/families/?section=extended")
     ok, detail = _contains_all(
         families_extended_html,

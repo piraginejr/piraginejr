@@ -25,6 +25,21 @@
         <strong>{{ summary.household_total }}</strong>
         <span class="muted">{{ summary.household_family_groups }} familias e {{ summary.household_single_groups }} unipessoais</span>
       </a>
+      <a class="card" href="/people/families/?section=organized&household_kind=familiar">
+        <span class="label">Familias domiciliares</span>
+        <strong>{{ summary.household_family_groups }}</strong>
+        <span class="muted">nucleos com 2 ou mais pessoas</span>
+      </a>
+      <a class="card" href="/people/families/?section=organized&household_kind=unipessoal">
+        <span class="label">Unipessoais</span>
+        <strong>{{ summary.household_single_groups }}</strong>
+        <span class="muted">domicilios com uma so pessoa</span>
+      </a>
+      <a class="card" href="/people/families/?section=broad">
+        <span class="label">Criterio amplo</span>
+        <strong>{{ summary.household_broad_groups }}</strong>
+        <span class="muted">{{ summary.household_broad_pending }} pedem consolidacao manual</span>
+      </a>
       <a class="card" href="/people/?status=membro_ativo&city=Niteroi">
         <span class="label">Quorum em Niteroi</span>
         <strong>{{ summary.active_members_niteroi }}</strong>

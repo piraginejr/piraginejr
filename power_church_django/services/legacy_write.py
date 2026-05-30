@@ -185,6 +185,58 @@ def validate_person_email_for_form(value: object) -> dict[str, object]:
     return {"ok": True, "message": "E-mail com formato valido.", "normalized": email_value}
 
 
+def update_person_email_from_manual_delivery(
+    person_id: int,
+    *,
+    email_value: object,
+    reason: object,
+    actor: str = "",
+    source: str = "envio_manual_recibo",
+) -> bool:
+    person_id = moneyless_int(person_id)
+    if not person_id:
+        raise LegacyWriteError("Pessoa invalida para atualizar o e-mail.")
+    email_db = _manual_email_or_error(email_value)
+    if not email_db:
+        return False
+    reason_text = normalize_query(reason)
+    with connect_legacy_write() as conn:
+        person = get_person(conn, person_id)
+        if person is None:
+            raise LegacyWriteError("Pessoa nao encontrada para atualizar o e-mail.")
+        if not int(person["ativo"] or 0):
+            raise LegacyWriteError("A ficha desta pessoa nao esta ativa para atualizacao de e-mail.")
+        current_email = normalize_query(person["email_principal"]).lower()
+        if current_email == email_db:
+            return False
+        if not reason_text:
+            raise LegacyWriteError("Informe o motivo da alteracao de e-mail antes de atualizar a ficha.")
+        organization_id = moneyless_int(person["organizacao_id"])
+        before = person_snapshot(conn, person_id)
+        before["motivo_alteracao_email"] = ""
+        before["origem_alteracao_email"] = source
+        with conn:
+            conn.execute(
+                "UPDATE pessoas SET email_principal = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?",
+                (email_db, person_id),
+            )
+            update_primary_contact(conn, organization_id, person_id, "email", email_db)
+            after = person_snapshot(conn, person_id)
+            after["motivo_alteracao_email"] = reason_text
+            after["origem_alteracao_email"] = source
+            write_audit_log(
+                conn,
+                organization_id,
+                "atualizar_email_manual_django",
+                "pessoas",
+                person_id,
+                before,
+                after,
+                actor=actor,
+            )
+    return True
+
+
 def _form_value(data: Any, key: str, default: str = "") -> str:
     getter = getattr(data, "get", None)
     value = getter(key, default) if getter else default
@@ -1713,6 +1765,88 @@ def _document_digits(value: object) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
 
 
+def _upsert_contributor_identifier(
+    conn: sqlite3.Connection,
+    *,
+    organization_id: int,
+    contributor_id: int,
+    person_id: int | None,
+    kind: str,
+    value: str,
+    note: str,
+) -> None:
+    normalized_value = normalize_query(value)
+    if not normalized_value:
+        return
+    existing = conn.execute(
+        """
+        SELECT id
+          FROM contribuintes_identificadores
+         WHERE contribuinte_id = ?
+           AND tipo = ?
+           AND valor = ?
+           AND ativo = 1
+         ORDER BY principal DESC, id
+         LIMIT 1
+        """,
+        (contributor_id, kind, normalized_value),
+    ).fetchone()
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE contribuintes_identificadores
+               SET pessoa_id = COALESCE(?, pessoa_id),
+                   principal = CASE WHEN principal = 1 THEN 1 ELSE 0 END,
+                   atualizado_em = CURRENT_TIMESTAMP
+             WHERE id = ?
+            """,
+            (person_id, existing["id"]),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO contribuintes_identificadores (
+            organizacao_id, pessoa_id, contribuinte_id, tipo, valor, principal, ativo, observacoes
+        ) VALUES (?, ?, ?, ?, ?, 0, 1, ?)
+        """,
+        (organization_id, person_id, contributor_id, kind, normalized_value, note),
+    )
+
+
+def _sync_contributor_envelope_contact_hints(
+    conn: sqlite3.Connection,
+    *,
+    organization_id: int,
+    contributor_id: int,
+    person_id: int | None,
+    phone_value: str,
+    address_value: str,
+) -> None:
+    phone_text = normalize_query(phone_value)
+    phone_digits = _digits_only(phone_text)
+    address_text = normalize_query(address_value)
+    if phone_text:
+        _upsert_contributor_identifier(
+            conn,
+            organization_id=organization_id,
+            contributor_id=contributor_id,
+            person_id=person_id,
+            kind="telefone",
+            value=phone_digits or phone_text,
+            note="Telefone capturado em envelope/manual para futura conciliacao.",
+        )
+    if address_text:
+        _upsert_contributor_identifier(
+            conn,
+            organization_id=organization_id,
+            contributor_id=contributor_id,
+            person_id=person_id,
+            kind="endereco",
+            value=address_text,
+            note="Endereco capturado em envelope/manual para futura conciliacao.",
+        )
+
+
 def link_contributor_to_person(
     conn: sqlite3.Connection,
     contributor_id: int,
@@ -1873,40 +2007,125 @@ def create_frequentador_from_contributor(contributor_id: int, family_person_id: 
             notes.append(f"Referencia familiar: {family_person['nome']} (pessoa #{family_person_id}).")
         try:
             with conn:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO pessoas (
-                        organizacao_id, unidade_preferencial_id, codigo_interno, nome, cpf, rg, data_nascimento,
-                        sexo, estado_civil, email_principal, telefone_principal, whatsapp_principal, status,
-                        arquivo_morto, observacoes, import_lote_id, ativo, atualizado_em
-                    ) VALUES (?, NULL, '', ?, ?, '', '', '', '', '', '', '', 'frequentador', 0, ?, NULL, 1, CURRENT_TIMESTAMP)
-                    """,
-                    (organization_id, name, cpf_db, " ".join(notes)),
-                )
-                person_id = moneyless_int(cursor.lastrowid)
-                snapshot = person_snapshot(conn, person_id)
-                snapshot["criado_do_contribuinte_id"] = contributor_id
-                if family_person is not None:
-                    snapshot["referencia_familiar_id"] = family_person_id
-                    snapshot["referencia_familiar_nome"] = family_person["nome"]
-                write_audit_log(
+                person_id = _create_frequentador_from_contributor_on_connection(
                     conn,
-                    organization_id,
-                    "criar_frequentador_por_contribuinte_django",
-                    "pessoas",
-                    person_id,
-                    None,
-                    snapshot,
+                    contributor_id=contributor_id,
+                    family_person_id=family_person_id,
                     actor=actor,
                 )
-                note = "Frequentador criado automaticamente a partir do contribuinte auxiliar pela central Django."
-                if family_person is not None:
-                    note += f" Referencia familiar: {family_person['nome']}."
-                if not link_contributor_to_person(conn, contributor_id, person_id, note=note, actor=actor):
-                    raise LegacyWriteError("A ficha foi criada, mas o vinculo financeiro nao pode ser aplicado.")
                 return person_id
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel criar frequentador: {exc}") from exc
+
+
+def _create_frequentador_from_contributor_on_connection(
+    conn: sqlite3.Connection,
+    *,
+    contributor_id: int,
+    family_person_id: int = 0,
+    phone_value: str = "",
+    address_value: str = "",
+    actor: str = "",
+) -> int:
+    contributor_id = moneyless_int(contributor_id)
+    family_person_id = moneyless_int(family_person_id)
+    contributor = get_contributor(conn, contributor_id)
+    if contributor is None:
+        raise LegacyWriteError("Contribuinte nao encontrado.")
+    if moneyless_int(contributor["pessoa_id"]):
+        return moneyless_int(contributor["pessoa_id"])
+    organization_id = moneyless_int(contributor["organizacao_id"])
+    name = normalize_query(contributor["nome"])
+    if not name:
+        raise LegacyWriteError("O contribuinte nao tem nome suficiente para criar uma ficha.")
+    family_person = None
+    if family_person_id:
+        family_person = get_person(conn, family_person_id)
+        if family_person is None:
+            raise LegacyWriteError("A pessoa de referencia familiar nao foi encontrada.")
+        if moneyless_int(family_person["organizacao_id"]) != organization_id:
+            raise LegacyWriteError("A referencia familiar pertence a outra organizacao.")
+    document_value = normalize_query(contributor["documento_principal"])
+    document_type = normalize_query(contributor["documento_tipo"]).lower()
+    document_digits = _document_digits(document_value)
+    cpf_db = None
+    if document_type == "cpf" and "*" not in document_value and len(document_digits) == 11:
+        existing = conn.execute(
+            """
+            SELECT id, nome
+              FROM pessoas
+             WHERE organizacao_id = ? AND cpf = ? AND ativo = 1
+             LIMIT 1
+            """,
+            (organization_id, document_digits),
+        ).fetchone()
+        if existing is not None:
+            raise LegacyWriteError(f"Ja existe uma pessoa com esse CPF: {existing['nome']}. Use o vinculo existente.")
+        cpf_db = document_digits
+    notes = [
+        f"Criado a partir do contribuinte auxiliar #{contributor_id}: {name}.",
+        f"Origem financeira preservada: {name} | {document_value or 'sem documento principal'}.",
+    ]
+    if contributor["tipo"] == "pj":
+        notes.append("A identidade financeira original estava classificada como PJ / empresa.")
+    if family_person is not None:
+        notes.append(f"Referencia familiar: {family_person['nome']} (pessoa #{family_person_id}).")
+    if normalize_query(phone_value):
+        notes.append(f"Telefone importado do envelope/manual: {normalize_query(phone_value)}.")
+    if normalize_query(address_value):
+        notes.append("Endereco importado do envelope/manual para conciliacao cadastral.")
+    cursor = conn.execute(
+        """
+        INSERT INTO pessoas (
+            organizacao_id, unidade_preferencial_id, codigo_interno, nome, cpf, rg, data_nascimento,
+            sexo, estado_civil, email_principal, telefone_principal, whatsapp_principal, status,
+            arquivo_morto, observacoes, import_lote_id, ativo, atualizado_em
+        ) VALUES (?, NULL, '', ?, ?, '', '', '', '', '', ?, ?, 'frequentador', 0, ?, NULL, 1, CURRENT_TIMESTAMP)
+        """,
+        (
+            organization_id,
+            name,
+            cpf_db,
+            normalize_query(phone_value),
+            normalize_query(phone_value),
+            " ".join(notes),
+        ),
+    )
+    person_id = moneyless_int(cursor.lastrowid)
+    if normalize_query(phone_value):
+        update_primary_contact(conn, organization_id, person_id, "telefone", normalize_query(phone_value))
+        update_primary_contact(conn, organization_id, person_id, "whatsapp", normalize_query(phone_value))
+    if normalize_query(address_value):
+        update_primary_address(conn, organization_id, person_id, {"logradouro": normalize_query(address_value)})
+    snapshot = person_snapshot(conn, person_id)
+    snapshot["criado_do_contribuinte_id"] = contributor_id
+    if family_person is not None:
+        snapshot["referencia_familiar_id"] = family_person_id
+        snapshot["referencia_familiar_nome"] = family_person["nome"]
+    write_audit_log(
+        conn,
+        organization_id,
+        "criar_frequentador_por_contribuinte_django",
+        "pessoas",
+        person_id,
+        None,
+        snapshot,
+        actor=actor,
+    )
+    note = "Frequentador criado automaticamente a partir do contribuinte auxiliar pela central Django."
+    if family_person is not None:
+        note += f" Referencia familiar: {family_person['nome']}."
+    if not link_contributor_to_person(conn, contributor_id, person_id, note=note, actor=actor):
+        raise LegacyWriteError("A ficha foi criada, mas o vinculo financeiro nao pode ser aplicado.")
+    _sync_contributor_envelope_contact_hints(
+        conn,
+        organization_id=organization_id,
+        contributor_id=contributor_id,
+        person_id=person_id,
+        phone_value=phone_value,
+        address_value=address_value,
+    )
+    return person_id
 
 
 def reconcile_contributors_for_person(
@@ -2715,6 +2934,66 @@ def _resolve_envelope_participant_reference(
     document = document_match.group(1) if document_match else ""
     name = re.split(r"\s+·\s+|\s+-\s+", text, maxsplit=1)[0].strip()
     return 0, 0, name or text, document
+
+
+def _resolve_primary_envelope_identity(
+    conn: sqlite3.Connection,
+    organization_id: int,
+    payload: Any,
+    actor: str = "",
+) -> dict[str, object]:
+    participant_ref = _form_value(payload, "participante_principal_ref")
+    ref_person_id, ref_contributor_id, ref_name, ref_document = _resolve_envelope_participant_reference(
+        conn,
+        organization_id,
+        participant_ref,
+    )
+    main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or ref_person_id or _reference_id(_form_value(payload, "pessoa_ref")) or None
+    if main_person_id and get_person(conn, main_person_id) is None:
+        raise LegacyWriteError("Pessoa principal do envelope invalida.")
+    main_contributor_id = (
+        moneyless_int(_form_value(payload, "contribuinte_id"))
+        or ref_contributor_id
+        or _reference_id(_form_value(payload, "contribuinte_ref"))
+        or None
+    )
+    if main_contributor_id:
+        main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+    inferred_name = normalize_query(ref_name)
+    stored_name = normalize_query(_form_value(payload, "nome_informado")) or inferred_name
+    if not main_person_id and not main_contributor_id and inferred_name:
+        main_contributor_id = ensure_manual_contributor(
+            conn,
+            organization_id,
+            inferred_name,
+            ref_document,
+            source="envelope_manual_django",
+        ) or None
+    phone_value = normalize_query(_form_value(payload, "telefone_informado"))
+    address_value = normalize_query(_form_value(payload, "endereco_informado"))
+    if main_contributor_id:
+        _sync_contributor_envelope_contact_hints(
+            conn,
+            organization_id=organization_id,
+            contributor_id=moneyless_int(main_contributor_id),
+            person_id=moneyless_int(main_person_id) or None,
+            phone_value=phone_value,
+            address_value=address_value,
+        )
+        if not main_person_id and (phone_value or address_value):
+            main_person_id = _create_frequentador_from_contributor_on_connection(
+                conn,
+                contributor_id=moneyless_int(main_contributor_id),
+                phone_value=phone_value,
+                address_value=address_value,
+                actor=actor,
+            )
+    return {
+        "person_id": moneyless_int(main_person_id) or None,
+        "contributor_id": moneyless_int(main_contributor_id) or None,
+        "stored_name": stored_name,
+        "participant_ref": normalize_query(participant_ref),
+    }
 
 
 def _optional_money_value(value: object) -> float | None:
@@ -3936,16 +4215,9 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
         traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
-        main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
-        if main_person_id and get_person(conn, main_person_id) is None:
-            raise LegacyWriteError("Pessoa principal do envelope invalida.")
-        main_contributor_id = (
-            moneyless_int(_form_value(payload, "contribuinte_id"))
-            or _reference_id(_form_value(payload, "contribuinte_ref"))
-            or None
-        )
-        if main_contributor_id:
-            main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        main_identity = _resolve_primary_envelope_identity(conn, organization_id, payload, actor=actor)
+        main_person_id = moneyless_int(main_identity["person_id"]) or None
+        main_contributor_id = moneyless_int(main_identity["contributor_id"]) or None
         apply_phone_immediately = (
             normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
         )
@@ -4000,7 +4272,7 @@ def create_envelope_contribution_batch(payload: Any, upload: Any, actor: str = "
                         received_on,
                         expected_total,
                         total,
-                        normalize_query(_form_value(payload, "nome_informado")),
+                        main_identity["stored_name"],
                         normalize_query(_form_value(payload, "telefone_informado")),
                         normalize_query(_form_value(payload, "endereco_informado")),
                         main_person_id,
@@ -4232,16 +4504,9 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
         traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
-        main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
-        if main_person_id and get_person(conn, main_person_id) is None:
-            raise LegacyWriteError("Pessoa principal do envelope invalida.")
-        main_contributor_id = (
-            moneyless_int(_form_value(payload, "contribuinte_id"))
-            or _reference_id(_form_value(payload, "contribuinte_ref"))
-            or None
-        )
-        if main_contributor_id:
-            main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        main_identity = _resolve_primary_envelope_identity(conn, organization_id, payload, actor=actor)
+        main_person_id = moneyless_int(main_identity["person_id"]) or None
+        main_contributor_id = moneyless_int(main_identity["contributor_id"]) or None
         apply_phone_immediately = (
             normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
         )
@@ -4296,7 +4561,7 @@ def launch_pending_envelope(envelope_id: int, payload: Any, actor: str = "") -> 
                         received_on,
                         expected_total,
                         total,
-                        normalize_query(_form_value(payload, "nome_informado")),
+                        main_identity["stored_name"],
                         normalize_query(_form_value(payload, "telefone_informado")),
                         normalize_query(_form_value(payload, "endereco_informado")),
                         main_person_id,
@@ -4506,16 +4771,9 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
         if expected_total <= 0:
             raise LegacyWriteError("Informe o total do envelope.")
         traceability = _envelope_traceability_payload(payload, conn=conn, form_id=moneyless_int(form_id), expected_total=expected_total)
-        main_person_id = moneyless_int(_form_value(payload, "pessoa_id")) or _reference_id(_form_value(payload, "pessoa_ref")) or None
-        if main_person_id and get_person(conn, main_person_id) is None:
-            raise LegacyWriteError("Pessoa principal do envelope invalida.")
-        main_contributor_id = (
-            moneyless_int(_form_value(payload, "contribuinte_id"))
-            or _reference_id(_form_value(payload, "contribuinte_ref"))
-            or None
-        )
-        if main_contributor_id:
-            main_contributor_id = _validated_contributor(conn, organization_id, main_contributor_id) or None
+        main_identity = _resolve_primary_envelope_identity(conn, organization_id, payload, actor=actor)
+        main_person_id = moneyless_int(main_identity["person_id"]) or None
+        main_contributor_id = moneyless_int(main_identity["contributor_id"]) or None
         apply_phone_immediately = (
             normalize_query(_form_value(payload, "aplicar_telefone_na_ficha")).lower() in {"1", "on", "true", "sim"}
         )
@@ -4621,7 +4879,7 @@ def update_launched_envelope(envelope_id: int, payload: Any, actor: str = "") ->
                         received_on,
                         expected_total,
                         total,
-                        normalize_query(_form_value(payload, "nome_informado")),
+                        main_identity["stored_name"],
                         normalize_query(_form_value(payload, "telefone_informado")),
                         normalize_query(_form_value(payload, "endereco_informado")),
                         main_person_id,

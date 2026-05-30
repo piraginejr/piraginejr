@@ -11,10 +11,139 @@
       <a class="button secondary" href="/audit/">Auditoria do cadastro</a>
       <a class="button secondary" href="/audit/?modo=tecnica">Eventos tecnicos</a>
       <a class="button secondary" href="/audit/?modo=django">Eventos Django</a>
+      <a class="button secondary" href="/audit/?modo=emails">E-mails do sistema</a>
     </div>
   </section>
 
-  {% if mode == "django" %}
+  {% if mode == "emails" %}
+    {% if email_audit %}
+      <section class="grid">
+        <div class="card"><span class="label">E-mails auditados</span><strong>{{ email_audit.total }}</strong></div>
+        <div class="card"><span class="label">Pagina</span><strong>{{ email_audit.page }}/{{ email_audit.total_pages }}</strong></div>
+        <div class="card"><span class="label">Exibidos</span><strong>{{ email_audit.shown }}</strong></div>
+      </section>
+
+      <section class="panel">
+        <h2>Relatorio de e-mails enviados</h2>
+        <p class="muted">Consolida recibos e extratos enviados pelo sistema, com origem, data, destinatario, assunto e conteudo da mensagem para auditoria operacional.</p>
+        <form class="toolbar" method="get">
+          <input type="hidden" name="modo" value="emails">
+          <label class="wide">
+            Pessoa
+            <input name="person_lookup" value="{{ person_lookup }}" placeholder="Pesquisar pessoa por nome, ficha, CPF ou e-mail">
+          </label>
+          {% if selected_person_id %}
+            <input type="hidden" name="selected_person_id" value="{{ selected_person_id }}">
+          {% endif %}
+          <label>
+            Tipo
+            <select name="email_kind">
+              <option value="">Todos</option>
+              {% for item in email_audit.kinds %}
+                <option value="{{ item }}" {% if item == email_kind %}selected{% endif %}>{{ item|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Status
+            <select name="email_status">
+              <option value="">Todos</option>
+              {% for item in email_audit.statuses %}
+                <option value="{{ item }}" {% if item == email_status %}selected{% endif %}>{{ item|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide">
+            Busca
+            <input name="q" value="{{ q }}" placeholder="Pessoa, destino, assunto ou conteudo">
+          </label>
+          <label>
+            Por pagina
+            <select name="page_size">
+              <option value="120" {% if email_audit.page_size == 120 %}selected{% endif %}>120</option>
+              <option value="300" {% if email_audit.page_size == 300 %}selected{% endif %}>300</option>
+              <option value="500" {% if email_audit.page_size == 500 %}selected{% endif %}>500</option>
+            </select>
+          </label>
+          <button type="submit">Filtrar</button>
+          <a class="button secondary" href="/audit/?modo=emails">Limpar</a>
+        </form>
+        {% if email_people %}
+          <div class="summary-grid" style="margin-top:12px;">
+            {% for person in email_people %}
+              <a class="card" href="/audit/?modo=emails&selected_person_id={{ person.id }}&person_lookup={{ person_lookup|urlencode }}{% if email_kind %}&email_kind={{ email_kind|urlencode }}{% endif %}{% if email_status %}&email_status={{ email_status|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}">
+                <span class="label">{{ person.sigla }} · {{ person.status }}</span>
+                <strong>{{ person.nome }}</strong>
+                <div class="muted small">{{ person.codigo|default:"sem codigo" }} · {{ person.cpf|default:"sem CPF" }}</div>
+              </a>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if selected_person_id %}
+          <p class="muted" style="margin-top:12px;">Filtro ativo: somente a pessoa #{{ selected_person_id }}. <a href="/audit/?modo=emails{% if email_kind %}&email_kind={{ email_kind|urlencode }}{% endif %}{% if email_status %}&email_status={{ email_status|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if person_lookup %}&person_lookup={{ person_lookup|urlencode }}{% endif %}">Remover filtro de pessoa</a></p>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <div class="legend no-print">
+          {% if email_audit.has_previous %}<a class="button secondary" href="/audit/?{{ email_audit.previous_query }}">Pagina anterior</a>{% endif %}
+          {% if email_audit.has_next %}<a class="button secondary" href="/audit/?{{ email_audit.next_query }}">Proxima pagina</a>{% endif %}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Data</th><th>Tipo</th><th>Origem</th><th>Status</th><th>Pessoa</th><th>Destino</th><th>Assunto</th><th>Conteudo</th><th>Anexo</th><th>Ref.</th><th>Operador</th><th>Acao</th></tr></thead>
+            <tbody>
+              {% for item in email_audit.items %}
+                <tr>
+                  <td>{{ item.data }}</td>
+                  <td><span class="badge">{{ item.tipo }}</span></td>
+                  <td>{{ item.origem }}</td>
+                  <td><span class="badge {% if item.status_key == 'falhou' %}danger{% elif item.status_key == 'enviado' %}ok{% endif %}">{{ item.status }}</span></td>
+                  <td>{{ item.pessoa|default:"-" }}</td>
+                  <td>{{ item.destino|default:"-" }}</td>
+                  <td>{{ item.assunto|default:"-" }}</td>
+                  <td style="min-width:280px;">
+                    {% if item.corpo %}
+                      <details>
+                        <summary>Ver conteudo</summary>
+                        <pre style="white-space:pre-wrap; margin:8px 0 0; max-height:180px; overflow:auto">{{ item.corpo }}</pre>
+                      </details>
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                  <td>{{ item.anexo|default:"-" }}</td>
+                  <td>{{ item.referencia|default:"-" }}</td>
+                  <td>{{ item.operador|default:"-" }}</td>
+                  <td>
+                    {% if item.can_resend %}
+                      <form method="post" action="/audit/emails/resend/">
+                        {% csrf_token %}
+                        <input type="hidden" name="delivery_kind" value="{{ item.kind_key }}">
+                        <input type="hidden" name="delivery_id" value="{{ item.row_id }}">
+                        <input type="hidden" name="return_email_kind" value="{{ email_kind }}">
+                        <input type="hidden" name="return_email_status" value="{{ email_status }}">
+                        <input type="hidden" name="return_q" value="{{ q }}">
+                        <input type="hidden" name="return_selected_person_id" value="{{ selected_person_id }}">
+                        <input type="hidden" name="return_person_lookup" value="{{ person_lookup }}">
+                        <input type="hidden" name="return_page" value="{{ email_audit.page }}">
+                        <input type="hidden" name="return_page_size" value="{{ email_audit.page_size }}">
+                        <button type="submit" class="button secondary compact-button">Reenviar</button>
+                      </form>
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="12">Nenhum e-mail auditado encontrado.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  {% elif mode == "django" %}
     {% if django_audit %}
       <section class="grid">
         <div class="card"><span class="label">Eventos Django</span><strong>{{ django_audit.total }}</strong></div>

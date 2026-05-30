@@ -139,7 +139,12 @@
           <h3>3. E-mail do recibo</h3>
           <p class="muted">O destinatario pode ser ajustado neste envio. Se marcar para salvar, este assunto e esta mensagem viram o novo padrao antes das proximas importacoes.</p>
         </div>
-        <span class="badge">Padrao editavel</span>
+        <span class="badge">{{ receipt_form.person.email|default:"sem e-mail na ficha" }}</span>
+      </div>
+      <div class="card" style="margin-bottom:12px;">
+        <span class="label">E-mail atual da ficha</span>
+        <strong>{{ receipt_form.person.email|default:"Sem e-mail cadastrado" }}</strong>
+        <p class="small muted" style="margin:8px 0 0;">Se o destinatario deste envio for novo ou estiver corrigido, voce pode atualizar a ficha agora e registrar o motivo.</p>
       </div>
       <div class="form-grid">
         <label>
@@ -161,6 +166,14 @@
         <label class="wide">
           Corpo padrao do e-mail
           <textarea name="email_body" rows="8" placeholder="Mensagem enviada ao contribuinte.">{{ receipt_form.email_template_body }}</textarea>
+        </label>
+        <label class="wide muted" style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" name="update_person_email" value="1">
+          Atualizar a ficha desta pessoa com o destinatario informado acima
+        </label>
+        <label class="wide">
+          Motivo da alteracao de e-mail na ficha
+          <input name="email_update_reason" placeholder="Ex.: contribuinte confirmou novo e-mail no atendimento">
         </label>
       </div>
       <label class="muted" style="display:flex; gap:8px; align-items:center; margin-top:12px;">

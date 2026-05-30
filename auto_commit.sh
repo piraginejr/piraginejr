@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 # Vai automaticamente para a pasta do projeto
 cd "/Users/piraginejr/Documents/New project/Teste/Power Church" || exit
 
@@ -30,8 +32,27 @@ echo ""
 
 # Commit automático
 git add .
-git commit -m "$MSG"
-git push
+if git diff --cached --quiet; then
+    echo "Nenhuma alteração rastreável para commit."
+    exit 0
+fi
+
+if ! git commit -m "$MSG"; then
+    echo ""
+    echo "======================================"
+    echo " Falha ao criar o commit automático"
+    echo "======================================"
+    exit 1
+fi
+
+if ! git push; then
+    echo ""
+    echo "======================================"
+    echo " Push bloqueado ou com falha"
+    echo " O backup local foi criado, mas nao foi enviado ao GitHub"
+    echo "======================================"
+    exit 1
+fi
 
 echo ""
 echo "======================================"

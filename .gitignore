@@ -1,5 +1,10 @@
 .env
 .env.local
+.env.power_church_django.local
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 node_modules
 dist
 build

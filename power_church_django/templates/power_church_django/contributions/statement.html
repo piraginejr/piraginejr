@@ -11,6 +11,7 @@
       <div class="actions no-print">
         <a class="button secondary" href="/people/{{ statement.person.id }}/">Abrir ficha</a>
         <a class="button secondary" href="/receipts/?selected_person_id={{ statement.person.id }}#gerar-recibo">Gerar recibo</a>
+        <a class="button secondary" href="/contributions/statements/{{ statement.person.id }}/pdf/{% if statement.filters.year or statement.filters.competencia or statement.filters.date_start or statement.filters.date_end or statement.filters.type_ids %}?{% if statement.filters.year %}year={{ statement.filters.year|urlencode }}&{% endif %}{% if statement.filters.competencia %}competencia={{ statement.filters.competencia|urlencode }}&{% endif %}{% if statement.filters.date_start %}date_start={{ statement.filters.date_start|urlencode }}&{% endif %}{% if statement.filters.date_end %}date_end={{ statement.filters.date_end|urlencode }}&{% endif %}{% for item in statement.filters.type_ids %}tipo_id={{ item }}&{% endfor %}{% endif %}">Gerar PDF</a>
         <button type="button" onclick="window.print()">Imprimir extrato</button>
       </div>
     </section>
@@ -67,6 +68,55 @@
               </label>
             {% endfor %}
           </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel no-print" style="margin-top:18px;">
+      <div class="section-head">
+        <div>
+          <h2>Enviar extrato por e-mail</h2>
+          <p class="muted">Use esta opcao quando o historico detalhado ajudar a esclarecer divergencias de origem, finalidade ou lancamentos do periodo.</p>
+        </div>
+        <span class="badge">{{ statement.person.email|default:"sem e-mail na ficha" }}</span>
+      </div>
+      <div class="card" style="margin-bottom:12px;">
+        <span class="label">E-mail atual da ficha</span>
+        <strong>{{ statement.person.email|default:"Sem e-mail cadastrado" }}</strong>
+        <p class="small muted" style="margin:8px 0 0;">Se o destinatario informado abaixo estiver novo ou corrigido, a ficha pode ser atualizada agora com motivo auditavel.</p>
+      </div>
+      <form method="post" class="form-grid">
+        {% csrf_token %}
+        <label>
+          Destinatario deste envio
+          <input type="email" name="email_to" value="{{ statement_email.email_to }}" placeholder="email@destino.com">
+        </label>
+        <label>
+          Remetente padrao
+          <input type="email" name="email_default_from" value="{{ statement_email.default_from_email }}" placeholder="recebimento@dominio.com">
+        </label>
+        <label>
+          Responder para
+          <input type="email" name="email_reply_to" value="{{ statement_email.reply_to_email }}" placeholder="Opcional">
+        </label>
+        <label class="wide">
+          Assunto
+          <input name="email_subject" value="{{ statement_email.subject }}" placeholder="Assunto do e-mail">
+        </label>
+        <label class="wide">
+          Corpo do e-mail
+          <textarea name="email_body" rows="8">{{ statement_email.body }}</textarea>
+        </label>
+        <label class="wide muted" style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" name="update_person_email" value="1">
+          Atualizar a ficha desta pessoa com o destinatario informado acima
+        </label>
+        <label class="wide">
+          Motivo da alteracao de e-mail na ficha
+          <input name="email_update_reason" placeholder="Ex.: contribuinte confirmou novo e-mail no atendimento">
+        </label>
+        <div class="wide actions">
+          <button type="submit">Enviar extrato agora</button>
         </div>
       </form>
     </section>

@@ -178,6 +178,9 @@ def build_checks(db_path: Path) -> list[Check]:
         families_html,
         [
             "Nucleos organizados",
+            "Nome automatico:",
+            "Cabeca da familia",
+            "Salvar identidade familiar",
             "Fila de auditoria",
             "Familias estendidas",
             "Situacao do domicilio",
@@ -185,7 +188,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Imprimir lista",
         ],
     )
-    checks.append(Check("Familias organizadas exibem consulta imprimivel", "OK" if ok else "FALHA", detail))
+    checks.append(Check("Familias organizadas exibem consulta imprimivel e identidade nominal", "OK" if ok else "FALHA", detail))
     families_audit_html = get("/people/families/?section=audit")
     ok, detail = _contains_all(
         families_audit_html,
@@ -269,9 +272,9 @@ def build_checks(db_path: Path) -> list[Check]:
             "lupa de leitura manuscrita",
             "Envelope digitalizado",
             "Envelope conferido manualmente; imagem anexada para auditoria.",
-            "numero da ficha/codigo interno",
+            "Funciona como no rateio",
             "Rateio em cartoes por pessoa, contribuinte e destinacao",
-            "Pessoa, contribuinte ou novo nome",
+            "Pessoa, contribuinte ou nome lido no envelope",
             "Salvar agora e lancar",
             "Salvar envelope e lancar contribuicoes",
         ],
@@ -324,6 +327,19 @@ def build_checks(db_path: Path) -> list[Check]:
         ],
     )
     checks.append(Check("Recibos centralizam geracao na mesma tela", "OK" if ok else "FALHA", detail))
+    statement_html = get(f"/contributions/statements/{contribution_person_id}/")
+    ok, detail = _contains_all(
+        statement_html,
+        [
+            "Extrato de contribuicoes",
+            "Gerar PDF",
+            "Enviar extrato por e-mail",
+            "E-mail atual da ficha",
+            "Atualizar a ficha desta pessoa com o destinatario informado acima",
+            "Motivo da alteracao de e-mail na ficha",
+        ],
+    )
+    checks.append(Check("Extrato individual permite PDF e envio auditavel", "OK" if ok else "FALHA", detail))
     latest_receipt_row = None
     with connect_legacy() as conn:
         latest_receipt_row = conn.execute("SELECT id FROM recibos ORDER BY id DESC LIMIT 1").fetchone()
@@ -339,6 +355,21 @@ def build_checks(db_path: Path) -> list[Check]:
             ],
         )
         checks.append(Check("Detalhe do recibo inclui logo, PDF e reenvio", "OK" if ok else "FALHA", detail))
+    email_audit_html = get("/audit/?modo=emails")
+    ok, detail = _contains_all(
+        email_audit_html,
+        [
+            "Relatorio de e-mails enviados",
+            "Consolida recibos e extratos enviados pelo sistema",
+            "Pessoa",
+            "Destino",
+            "Assunto",
+            "Conteudo",
+            "E-mails do sistema",
+            "Reenviar",
+        ],
+    )
+    checks.append(Check("Auditoria de e-mails exibe relatorio consolidado com filtro e reenvio", "OK" if ok else "FALHA", detail))
     envelope_lot_html = get("/contributions/envelopes/lots/new/")
     ok, detail = _contains_all(
         envelope_lot_html,

@@ -26,6 +26,7 @@ urlpatterns = [
     path("envelopes/<int:envelope_id>/", views.envelope_detail, name="envelope_detail"),
     path("envelopes/<int:envelope_id>/image/", views.envelope_image, name="envelope_image"),
     path("statements/<int:person_id>/", views.person_statement, name="person_statement"),
+    path("statements/<int:person_id>/pdf/", views.person_statement_pdf_view, name="person_statement_pdf"),
     path("<int:contribution_id>/split/", views.split, name="split"),
     path("<int:contribution_id>/", views.detail, name="detail"),
 ]

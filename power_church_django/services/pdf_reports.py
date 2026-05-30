@@ -371,6 +371,159 @@ def contribution_destination_pdf_filename(report: dict[str, Any]) -> str:
     return f"contribuicoes_por_destino_{suffix}.pdf"
 
 
+def person_statement_pdf(statement: dict[str, Any]) -> bytes:
+    pages: list[list[str]] = []
+    current: list[str] = []
+    y = 800
+
+    def new_page() -> None:
+        nonlocal current, y
+        if current:
+            pages.append(current)
+        current = ["0.12 0.16 0.22 rg"]
+        y = 800
+
+    def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        font = "F2" if bold else "F1"
+        current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
+
+    def text(x: int, value: object, size: int = 9, bold: bool = False) -> None:
+        text_at(x, y, value, size=size, bold=bold)
+
+    def line(value: object, size: int = 9, bold: bool = False, x: int = 42, advance: int = 14) -> None:
+        nonlocal y
+        if y < 54:
+            new_page()
+        text(x, value, size=size, bold=bold)
+        y -= advance
+
+    def rule() -> None:
+        nonlocal y
+        current.append(f"0.86 0.83 0.78 RG 0.8 w 42 {y} m 553 {y} l S")
+        y -= 12
+
+    def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
+        current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
+
+    def summary_boxes(summary: dict[str, Any]) -> None:
+        nonlocal y
+        boxes = [
+            ("Total geral", summary.get("total_fmt")),
+            ("Lancamentos", summary.get("lancamentos")),
+            ("Competencias", summary.get("competencias")),
+        ]
+        width = 120
+        gap = 10
+        top = y
+        for index, (label, value) in enumerate(boxes):
+            x = 42 + (index * (width + gap))
+            fill_rect(x, top - 34, width, 34)
+            current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
+            text_at(x + 7, top - 14, label, size=7, bold=True)
+            text_at(x + 7, top - 28, value, size=10, bold=True)
+        y -= 46
+
+    def table_header() -> None:
+        nonlocal y
+        if y < 90:
+            new_page()
+        fill_rect(42, y - 15, 511, 18, "0.95 0.91 0.84")
+        text_at(48, y - 10, "Data", size=8, bold=True)
+        text_at(102, y - 10, "Competencia", size=8, bold=True)
+        text_at(182, y - 10, "Tipo", size=8, bold=True)
+        text_at(258, y - 10, "Forma", size=8, bold=True)
+        text_at(324, y - 10, "Historico / observacoes", size=8, bold=True)
+        text_at(506, y - 10, "Valor", size=8, bold=True)
+        y -= 24
+
+    def row_separator() -> None:
+        current.append(f"0.90 0.86 0.80 RG 0.4 w 42 {y + 3} m 553 {y + 3} l S")
+
+    def wrapped_entry_lines(entry: dict[str, Any]) -> list[str]:
+        observation = normalize_query(entry.get("observacoes") or "-")
+        return _wrap(observation, 34) or ["-"]
+
+    person = statement.get("person") or {}
+    summary = statement.get("summary") or {}
+    filters = statement.get("filters") or {}
+    filter_chunks: list[str] = []
+    if filters.get("year"):
+        filter_chunks.append(f"Ano: {filters['year']}")
+    if filters.get("competencia"):
+        filter_chunks.append(f"Competencia: {filters['competencia']}")
+    if filters.get("date_start") or filters.get("date_end"):
+        filter_chunks.append(f"Periodo: {br_date(filters.get('date_start')) or '-'} a {br_date(filters.get('date_end')) or '-'}")
+    filter_label = " | ".join(filter_chunks) if filter_chunks else "Todos os lancamentos da pessoa"
+
+    new_page()
+    line("Extrato de contribuicoes", size=18, bold=True, advance=22)
+    line(f"Emitido em {br_date(date.today().isoformat())} | {filter_label}", size=9, advance=18)
+    rule()
+    line(f"Pessoa: {person.get('nome') or ''}", size=11, bold=True, advance=16)
+    line(
+        f"Ficha {person.get('codigo') or 'sem codigo'} | CPF {person.get('cpf') or 'nao informado'} | {person.get('status') or ''}",
+        size=9,
+        advance=14,
+    )
+    if person.get("email"):
+        line(f"E-mail: {person.get('email')}", size=9, advance=14)
+    rule()
+    summary_boxes(summary)
+    table_header()
+    for entry in statement.get("entries", []):
+        if entry.get("kind") == "subtotal":
+            if y < 70:
+                new_page()
+                table_header()
+            fill_rect(42, y - 12, 511, 16, "0.97 0.96 0.93")
+            text_at(48, y - 8, f"Subtotal {entry.get('competencia') or 'Sem competencia'}", size=8, bold=True)
+            text_at(470, y - 8, entry.get("subtotal_fmt"), size=8, bold=True)
+            y -= 20
+            row_separator()
+            continue
+        notes = wrapped_entry_lines(entry)
+        type_lines = _wrap(entry.get("tipo"), 12) or ["-"]
+        form_lines = _wrap(entry.get("forma"), 10) or ["-"]
+        row_lines = max(1, len(notes), len(type_lines), len(form_lines))
+        row_height = 10 + (row_lines * 11)
+        if y - row_height < 48:
+            new_page()
+            table_header()
+        start_y = y
+        text_at(48, start_y, entry.get("data"), size=8)
+        text_at(102, start_y, entry.get("competencia") or "-", size=8)
+        for index, value in enumerate(type_lines):
+            text_at(182, start_y - (index * 11), value, size=8, bold=index == 0)
+        for index, value in enumerate(form_lines):
+            text_at(258, start_y - (index * 11), value or "-", size=8)
+        for index, value in enumerate(notes):
+            text_at(324, start_y - (index * 11), value, size=8)
+        text_at(506, start_y, entry.get("valor_fmt"), size=8, bold=True)
+        y -= row_height
+        row_separator()
+    if not statement.get("entries"):
+        line("Nenhum lancamento encontrado para os filtros informados.", size=10)
+    if current:
+        pages.append(current)
+    for index, page in enumerate(pages, start=1):
+        page.append(f"0.40 0.44 0.50 rg BT /F1 8 Tf 1 0 0 1 500 24 Tm (Pagina {index}/{len(pages)}) Tj ET")
+    return _build_pdf(pages)
+
+
+def person_statement_pdf_filename(statement: dict[str, Any]) -> str:
+    person = statement.get("person") or {}
+    filters = statement.get("filters") or {}
+    person_slug = "".join(ch if ch.isalnum() else "_" for ch in normalize_query(person.get("nome")).lower()).strip("_") or "pessoa"
+    if filters.get("competencia"):
+        competence = "".join(ch if ch.isalnum() else "_" for ch in normalize_query(filters.get("competencia")).lower()).strip("_")
+        return f"extrato_{person_slug}_{competence or 'competencia'}.pdf"
+    if filters.get("date_start") or filters.get("date_end"):
+        start = str(filters.get("date_start") or "inicio").replace("-", "")
+        end = str(filters.get("date_end") or "hoje").replace("-", "")
+        return f"extrato_{person_slug}_{start}_{end}.pdf"
+    return f"extrato_{person_slug}.pdf"
+
+
 def receipt_pdf(detail: dict[str, Any]) -> bytes:
     receipt = detail.get("receipt") or {}
     person = detail.get("person") or {}

@@ -12,6 +12,7 @@ from power_church_django.services.data_exchange import (
     people_export_form_context,
 )
 from power_church_django.services.django_audit import record_django_audit_event
+from power_church_django.services.family_profiles import update_household_profile
 from power_church_django.services.legacy import (
     LegacyDatabaseError,
     family_registry_dashboard,
@@ -183,6 +184,51 @@ def search(request: HttpRequest) -> JsonResponse:
 
 def families(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
+        section = request.POST.get("section", "audit")
+        cep = request.POST.get("cep", "")
+        mode = request.POST.get("mode", "all")
+        q = request.POST.get("q", "")
+        review = request.POST.get("review", "all")
+        if request.POST.get("family_profile_action") == "update_household_profile":
+            try:
+                families_data = family_registry_dashboard(
+                    q=q,
+                    cep=cep,
+                    section=section,
+                    mode=mode,
+                    review=review,
+                )
+                person_ids_blob = str(request.POST.get("person_ids") or "")
+                target_group = next(
+                    (
+                        group
+                        for group in families_data.get("organized", {}).get("items", [])
+                        if str(group.get("person_ids") or "") == person_ids_blob
+                    ),
+                    None,
+                )
+                if not target_group:
+                    raise LegacyWriteError("Nao foi possivel localizar o nucleo domiciliar para atualizar a identidade da familia.")
+                profile = update_household_profile(
+                    person_ids=[int(value) for value in person_ids_blob.split(",") if value.strip().isdigit()],
+                    people=target_group.get("people") or [],
+                    head_person_id=int(request.POST.get("head_person_id") or 0),
+                    display_name_override=request.POST.get("display_name_override", ""),
+                    actor=_actor_label(request),
+                )
+                messages.success(request, f"Identidade familiar atualizada para {profile['display_name_effective']}.")
+            except (LegacyDatabaseError, LegacyWriteError, ValueError) as exc:
+                messages.error(request, str(exc))
+            query = urlencode(
+                {
+                    "section": section,
+                    "cep": cep,
+                    "mode": mode,
+                    "q": q,
+                    "review": review,
+                }
+            )
+            return redirect(f"/people/families/?{query}")
         selected_groups = []
         action = request.POST.get("bulk_action") or "create"
         single_group = request.POST.get("single_person_ids", "") or request.POST.get("single_suppress_person_ids", "")
@@ -214,11 +260,6 @@ def families(request: HttpRequest) -> HttpResponse:
                     request,
                     f"Familia domiciliar criada: {changed} relacao(oes) nova(s) em {len(selected_groups)} grupo(s).",
                 )
-        section = request.POST.get("section", "audit")
-        cep = request.POST.get("cep", "")
-        mode = request.POST.get("mode", "all")
-        q = request.POST.get("q", "")
-        review = request.POST.get("review", "all")
         query = urlencode(
             {
                 "section": section,

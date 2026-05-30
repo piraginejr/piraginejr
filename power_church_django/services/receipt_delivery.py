@@ -25,12 +25,16 @@ from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_fi
 
 DEFAULT_TEMPLATE_KEY = "receipt_default"
 DEFAULT_TEMPLATE_NAME = "Recibo mensal de contribuicoes"
-DEFAULT_SUBJECT_TEMPLATE = "Recibo de contribuicoes - {person_name} - {period_label}"
+DEFAULT_SUBJECT_TEMPLATE = "[TESTE] Recibo de contribuicoes - {person_name} - {period_label}"
 DEFAULT_BODY_TEMPLATE = """Prezado(a) {person_name},
 
 Segue em anexo o recibo de contribuicoes referente a {period_label}, no valor total de {total_fmt}.
 
-Em caso de duvida, responda este e-mail para que a equipe possa conferir.
+Esta operacao ainda esta em fase de teste e implantacao gradual, lote a lote.
+
+Se houver qualquer divergencia, por favor entre em contato com a tesouraria para conferencia.
+
+Estamos implantando este processo por etapas e, quando a validacao estiver concluida, cada nova contribuicao passara a gerar um novo recibo automaticamente.
 
 Atenciosamente,
 Tesouraria / Recebimento

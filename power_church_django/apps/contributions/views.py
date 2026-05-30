@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib import messages
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from pathlib import Path
 from urllib.parse import urlencode
 
+from power_church_core.normalization import normalize_query
+from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.legacy_write import (
     LegacyWriteError,
     apply_envelope_profile_update,
@@ -22,6 +25,7 @@ from power_church_django.services.legacy_write import (
     launch_pending_envelope,
     link_contributor_to_person_by_id,
     split_contribution,
+    update_person_email_from_manual_delivery,
     update_contribution,
     update_launched_envelope,
 )
@@ -50,6 +54,7 @@ from power_church_django.services.legacy import (
     split_contribution_context,
 )
 from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_filename
+from power_church_django.services.pdf_reports import person_statement_pdf, person_statement_pdf_filename
 from power_church_django.services.receipt_delivery import (
     enrich_receipt_form,
     queue_receipt_dispatches,
@@ -57,6 +62,7 @@ from power_church_django.services.receipt_delivery import (
     issue_and_optionally_send_receipts,
     update_receipt_email_template,
 )
+from power_church_django.services.mail_dispatch import MailAttachment, send_email_message
 
 
 def _actor(request: HttpRequest) -> str:
@@ -163,14 +169,36 @@ def _receipt_hub_redirect(query: str = "") -> HttpResponse:
 def _receipt_message_fields(payload: object) -> dict[str, str]:
     getter = getattr(payload, "get", None)
     if getter is None:
-        return {"email_to": "", "subject": "", "body": "", "default_from_email": "", "reply_to_email": ""}
+        return {
+            "email_to": "",
+            "subject": "",
+            "body": "",
+            "default_from_email": "",
+            "reply_to_email": "",
+            "update_person_email": "",
+            "email_update_reason": "",
+        }
     return {
         "email_to": str(getter("email_to", "") or "").strip(),
         "subject": str(getter("email_subject", "") or "").strip(),
         "body": str(getter("email_body", "") or "").strip(),
         "default_from_email": str(getter("email_default_from", "") or "").strip(),
         "reply_to_email": str(getter("email_reply_to", "") or "").strip(),
+        "update_person_email": str(getter("update_person_email", "") or "").strip(),
+        "email_update_reason": str(getter("email_update_reason", "") or "").strip(),
     }
+
+
+def _maybe_update_person_email_for_manual_receipt(*, person_id: int, fields: dict[str, str], actor: str) -> bool:
+    if str(fields.get("update_person_email") or "") not in {"1", "on", "true", "sim"}:
+        return False
+    return update_person_email_from_manual_delivery(
+        person_id,
+        email_value=fields.get("email_to", ""),
+        reason=fields.get("email_update_reason", ""),
+        actor=actor,
+        source="envio_manual_recibo",
+    )
 
 
 def _maybe_save_receipt_template(payload: object, *, actor: str) -> None:
@@ -203,6 +231,84 @@ def _receipt_return_query(payload: object, fallback_selected_person_id: int = 0)
         form_date_start=getter("return_form_date_start", ""),
         form_date_end=getter("return_form_date_end", ""),
     )
+
+
+def _statement_query(
+    *,
+    year: str = "",
+    competencia: str = "",
+    date_start: str = "",
+    date_end: str = "",
+    type_ids: list[int] | None = None,
+) -> str:
+    params: list[tuple[str, str]] = []
+    if str(year or "").strip():
+        params.append(("year", str(year).strip()))
+    if str(competencia or "").strip():
+        params.append(("competencia", str(competencia).strip()))
+    if str(date_start or "").strip():
+        params.append(("date_start", str(date_start).strip()))
+    if str(date_end or "").strip():
+        params.append(("date_end", str(date_end).strip()))
+    for item in type_ids or []:
+        if int(item or 0):
+            params.append(("tipo_id", str(int(item))))
+    return urlencode(params)
+
+
+def _statement_email_defaults(statement: dict[str, object]) -> dict[str, str]:
+    person = statement.get("person") or {}
+    filters = statement.get("filters") or {}
+    person_name = str(person.get("nome") or "")
+    period_label = ""
+    if filters.get("competencia"):
+        period_label = str(filters.get("competencia") or "")
+    elif filters.get("date_start") or filters.get("date_end"):
+        period_label = f"{filters.get('date_start') or '-'} a {filters.get('date_end') or '-'}"
+    elif filters.get("year"):
+        period_label = f"Ano {filters.get('year')}"
+    else:
+        period_label = "historico completo"
+    subject = f"Extrato de contribuicoes - {person_name} - {period_label}".strip(" -")
+    body = (
+        f"Prezado(a) {person_name},\n\n"
+        f"Segue em anexo o extrato de contribuicoes referente a {period_label}.\n\n"
+        "Este documento apresenta o historico detalhado dos lancamentos registrados no periodo, "
+        "incluindo origem, tipo, forma e observacoes quando houver.\n\n"
+        "Se identificar qualquer divergencia, por favor entre em contato com a tesouraria para conferencia.\n\n"
+        "Atenciosamente,\n"
+        "Tesouraria / Recebimento"
+    )
+    return {
+        "email_to": str(person.get("email") or ""),
+        "subject": subject,
+        "body": body,
+        "default_from_email": getattr(settings, "DEFAULT_FROM_EMAIL", ""),
+        "reply_to_email": getattr(settings, "POWER_CHURCH_RECEIPT_REPLY_TO", ""),
+    }
+
+
+def _statement_message_fields(payload: object) -> dict[str, str]:
+    getter = getattr(payload, "get", None)
+    if getter is None:
+        return {
+            "email_to": "",
+            "subject": "",
+            "body": "",
+            "default_from_email": "",
+            "reply_to_email": "",
+            "update_person_email": "",
+            "email_update_reason": "",
+        }
+    return {
+        "email_to": str(getter("email_to", "") or "").strip(),
+        "subject": str(getter("email_subject", "") or "").strip(),
+        "body": str(getter("email_body", "") or "").strip(),
+        "default_from_email": str(getter("email_default_from", "") or "").strip(),
+        "reply_to_email": str(getter("email_reply_to", "") or "").strip(),
+        "update_person_email": str(getter("update_person_email", "") or "").strip(),
+        "email_update_reason": str(getter("email_update_reason", "") or "").strip(),
+    }
 
 
 def index(request: HttpRequest) -> HttpResponse:
@@ -557,7 +663,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
         "type_ids": [int(value) for value in request.GET.getlist("tipo_id") if str(value).isdigit()],
     }
     try:
-        context["statement"] = person_statement_data(
+        statement = person_statement_data(
             person_id,
             year=context["year"],
             competencia=context["competencia"],
@@ -565,9 +671,99 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
             date_end=context["date_end"],
             type_ids=context["type_ids"],
         )
+        context["statement"] = statement
+        if statement:
+            context["statement_email"] = _statement_email_defaults(statement)
+        if request.method == "POST":
+            if not statement:
+                raise LegacyWriteError("Extrato nao encontrado para envio.")
+            fields = _statement_message_fields(request.POST)
+            if str(fields.get("update_person_email") or "") in {"1", "on", "true", "sim"}:
+                updated = update_person_email_from_manual_delivery(
+                    person_id,
+                    email_value=fields.get("email_to", ""),
+                    reason=fields.get("email_update_reason", ""),
+                    actor=_actor(request),
+                    source="envio_manual_extrato",
+                )
+                if updated:
+                    messages.info(request, "E-mail da ficha atualizado durante o envio manual do extrato.")
+                    statement = person_statement_data(
+                        person_id,
+                        year=context["year"],
+                        competencia=context["competencia"],
+                        date_start=context["date_start"],
+                        date_end=context["date_end"],
+                        type_ids=context["type_ids"],
+                    )
+                    context["statement"] = statement
+            payload = person_statement_pdf(context["statement"])
+            filename = person_statement_pdf_filename(context["statement"])
+            from_email = normalize_query(fields["default_from_email"]) or getattr(settings, "DEFAULT_FROM_EMAIL", "") or "recebimento@localhost"
+            reply_to = [value for value in [fields["reply_to_email"]] if normalize_query(value)]
+            result = send_email_message(
+                subject=fields["subject"] or context["statement_email"]["subject"],
+                body=fields["body"] or context["statement_email"]["body"],
+                from_email=from_email,
+                to_emails=[fields["email_to"] or context["statement_email"]["email_to"]],
+                reply_to=reply_to,
+                attachments=[MailAttachment(filename=filename, content=payload, content_type="application/pdf")],
+            )
+            record_django_audit_event(
+                actor=_actor(request),
+                action="enviar_extrato_email_django",
+                table_name="pessoas",
+                record_id=int(person_id or 0),
+                source="statement_email",
+                summary=f"Extrato enviado por e-mail para {fields['email_to'] or context['statement_email']['email_to']}",
+                after={
+                    "person_id": int(person_id or 0),
+                    "person_name": (context["statement"].get("person") or {}).get("nome") or "",
+                    "email_to": fields["email_to"] or context["statement_email"]["email_to"],
+                    "from_email": from_email,
+                    "reply_to": reply_to,
+                    "subject": fields["subject"] or context["statement_email"]["subject"],
+                    "body": fields["body"] or context["statement_email"]["body"],
+                    "provider": result.provider,
+                    "filename": filename,
+                    "query": _statement_query(
+                        year=context["year"],
+                        competencia=context["competencia"],
+                        date_start=context["date_start"],
+                        date_end=context["date_end"],
+                        type_ids=context["type_ids"],
+                    ),
+                },
+            )
+            messages.success(request, "Extrato processado para envio manual.")
+            return redirect(
+                f"/contributions/statements/{person_id}/"
+                + (f"?{_statement_query(year=context['year'], competencia=context['competencia'], date_start=context['date_start'], date_end=context['date_end'], type_ids=context['type_ids'])}" if _statement_query(year=context['year'], competencia=context['competencia'], date_start=context['date_start'], date_end=context['date_end'], type_ids=context['type_ids']) else "")
+            )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
+    except LegacyWriteError as exc:
+        messages.error(request, str(exc))
+    except Exception as exc:
+        messages.error(request, f"Nao foi possivel enviar o extrato: {exc}")
     return render(request, "power_church_django/contributions/statement.html", context)
+
+
+def person_statement_pdf_view(request: HttpRequest, person_id: int) -> HttpResponse:
+    statement = person_statement_data(
+        person_id,
+        year=request.GET.get("year", ""),
+        competencia=request.GET.get("competencia", ""),
+        date_start=request.GET.get("date_start", ""),
+        date_end=request.GET.get("date_end", ""),
+        type_ids=[int(value) for value in request.GET.getlist("tipo_id") if str(value).isdigit()],
+    )
+    if not statement:
+        raise Http404("Extrato nao encontrado.")
+    payload = person_statement_pdf(statement)
+    response = HttpResponse(payload, content_type="application/pdf")
+    response["Content-Disposition"] = f'inline; filename="{person_statement_pdf_filename(statement)}"'
+    return response
 
 
 def receipts(request: HttpRequest) -> HttpResponse:
@@ -592,6 +788,13 @@ def receipts(request: HttpRequest) -> HttpResponse:
                 competences = [value for value in request.POST.getlist("competencia_key") if str(value).strip()]
                 if not competences:
                     raise LegacyWriteError("Selecione pelo menos uma competencia para gerar os recibos.")
+                email_updated = False
+                if action == "generate_and_send_competence":
+                    email_updated = _maybe_update_person_email_for_manual_receipt(
+                        person_id=person_id,
+                        fields=fields,
+                        actor=actor,
+                    )
                 result = issue_and_optionally_send_receipts(
                     person_id=person_id,
                     competences=competences,
@@ -603,10 +806,17 @@ def receipts(request: HttpRequest) -> HttpResponse:
                     actor=actor,
                     send_now=action == "generate_and_send_competence",
                 )
+                if email_updated:
+                    messages.info(request, "E-mail da ficha atualizado durante o envio manual dos recibos.")
                 messages.success(request, f"{len(result['receipt_ids'])} recibo(s) gerado(s) por competencia.")
                 return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
             receipt_id = create_receipt(request.POST, actor=actor)
             if action == "generate_and_send_consolidated":
+                email_updated = _maybe_update_person_email_for_manual_receipt(
+                    person_id=person_id,
+                    fields=fields,
+                    actor=actor,
+                )
                 queue_receipt_dispatches(
                     [receipt_id],
                     email_to=fields["email_to"],
@@ -615,6 +825,8 @@ def receipts(request: HttpRequest) -> HttpResponse:
                     actor=actor,
                     send_now=True,
                 )
+                if email_updated:
+                    messages.info(request, "E-mail da ficha atualizado durante o envio manual do recibo.")
                 messages.success(request, f"Recibo #{receipt_id} gerado e processado para envio.")
             else:
                 messages.success(request, f"Recibo #{receipt_id} gerado com auditoria.")
@@ -685,6 +897,12 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
         try:
             fields = _receipt_message_fields(request.POST)
             _maybe_save_receipt_template(request.POST, actor=_actor(request))
+            person_id = int((get_receipt_detail(receipt_id) or {}).get("receipt", {}).get("person_id") or 0)
+            email_updated = _maybe_update_person_email_for_manual_receipt(
+                person_id=person_id,
+                fields=fields,
+                actor=_actor(request),
+            )
             queue_receipt_dispatches(
                 [receipt_id],
                 email_to=fields["email_to"],
@@ -693,6 +911,8 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
                 actor=_actor(request),
                 send_now=True,
             )
+            if email_updated:
+                messages.info(request, "E-mail da ficha atualizado durante o reenvio manual do recibo.")
             messages.success(request, "Recibo processado para envio manual.")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))

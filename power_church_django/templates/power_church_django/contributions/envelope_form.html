@@ -36,7 +36,7 @@
         </datalist>
         <datalist id="envelope-participant-options">
           {% for option in form_data.participant_options %}
-            <option value="{{ option.value }}">{{ option.label }}</option>
+            <option value="{{ option.value }}" data-kind="{{ option.kind|default:'' }}">{{ option.label }}</option>
           {% endfor %}
         </datalist>
         <div class="envelope-entry-grid">
@@ -90,19 +90,10 @@
                 Total do envelope
                 <input name="valor_total" value="{{ form_data.default_total|default:'' }}" required placeholder="Ex.: 454,00" data-envelope-total>
               </label>
-              <label>
-                Pessoa principal, se identificada
-                <input name="pessoa_ref" list="envelope-people-options" value="{{ form_data.selected_person_ref }}" placeholder="Digite nome, CPF ou ID">
-                <span class="small muted">As sugestoes mostram tambem o numero da ficha/codigo interno para diferenciar pessoas parecidas.</span>
-              </label>
-              <label>
-                Contribuinte auxiliar principal
-                <input name="contribuinte_ref" list="envelope-contributor-options" value="{{ form_data.selected_contributor_ref }}" placeholder="Digite nome, documento ou ID">
-              </label>
-              <label>
-                Nome lido no envelope
-                <input name="nome_informado" value="{{ form_data.default_nome_informado }}" placeholder="Opcional, se for diferente do cadastro">
-                <span class="small muted">Se a pessoa principal ja foi encontrada, nao precisa repetir o nome aqui.</span>
+              <label class="wide">
+                Pessoa, contribuinte ou nome lido no envelope
+                <input name="participante_principal_ref" list="envelope-participant-options" value="{{ form_data.selected_primary_ref }}" placeholder="Digite nome, CPF/CNPJ, ficha ou novo nome">
+                <span class="small muted">Funciona como no rateio: pode escolher pessoa, contribuinte auxiliar ou apenas digitar o nome lido no envelope. O sistema tenta reaproveitar o cadastro quando reconhecer a sugestao.</span>
               </label>
               <label>
                 Telefone lido
@@ -431,8 +422,8 @@
         const addressInput = document.querySelector("[data-envelope-address]");
         const hintsBox = document.querySelector("[data-envelope-hints]");
         const hintsContent = document.querySelector("[data-envelope-hints-content]");
-        const personRefInput = document.querySelector("[name='pessoa_ref']");
-        const peopleOptions = document.querySelector("#envelope-people-options");
+        const personRefInput = document.querySelector("[name='participante_principal_ref']");
+        const peopleOptions = document.querySelector("#envelope-participant-options");
         const phoneWarning = document.querySelector("[data-envelope-phone-warning]");
         const phoneApplyLabel = document.querySelector("[data-envelope-phone-apply]");
         const phoneApplyInput = phoneApplyLabel ? phoneApplyLabel.querySelector("input[name='aplicar_telefone_na_ficha']") : null;
@@ -461,7 +452,7 @@
                 cpf +
                 matched +
                 "<div class='actions compact-actions'>" +
-                  "<button type='button' class='button secondary' data-person-label='" + escapeHtml(item.label) + "'>Usar na pessoa principal</button>" +
+                  "<button type='button' class='button secondary' data-person-label='" + escapeHtml(item.label) + "'>Usar na identificacao principal</button>" +
                 "</div>" +
               "</div>"
             );
@@ -526,6 +517,13 @@
             return item.value === personLabel;
           });
           if (!option) {
+            phoneWarning.hidden = true;
+            phoneWarning.textContent = "";
+            if (phoneApplyLabel) phoneApplyLabel.hidden = true;
+            if (phoneApplyInput) phoneApplyInput.checked = false;
+            return;
+          }
+          if ((option.dataset.kind || "") !== "pessoa") {
             phoneWarning.hidden = true;
             phoneWarning.textContent = "";
             if (phoneApplyLabel) phoneApplyLabel.hidden = true;

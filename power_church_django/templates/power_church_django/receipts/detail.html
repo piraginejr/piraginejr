@@ -48,6 +48,11 @@
         </div>
         <span class="badge">{{ receipt_form.person.email|default:"sem e-mail" }}</span>
       </div>
+      <div class="card" style="margin-bottom:12px;">
+        <span class="label">E-mail atual da ficha</span>
+        <strong>{{ receipt_form.person.email|default:"Sem e-mail cadastrado" }}</strong>
+        <p class="small muted" style="margin:8px 0 0;">Se este reenvio usar um e-mail novo ou corrigido, a ficha pode ser atualizada aqui com motivo auditavel.</p>
+      </div>
       <form method="post">
         {% csrf_token %}
         <div class="form-grid">
@@ -70,6 +75,14 @@
           <label class="wide">
             Corpo do e-mail
             <textarea name="email_body" rows="8">{{ receipt_form.email_template_body }}</textarea>
+          </label>
+          <label class="wide muted" style="display:flex; gap:8px; align-items:center;">
+            <input type="checkbox" name="update_person_email" value="1">
+            Atualizar a ficha desta pessoa com o destinatario informado acima
+          </label>
+          <label class="wide">
+            Motivo da alteracao de e-mail na ficha
+            <input name="email_update_reason" placeholder="Ex.: contribuinte confirmou novo e-mail no atendimento">
           </label>
         </div>
         <label class="muted" style="display:flex; gap:8px; align-items:center; margin-top:12px;">

@@ -9,5 +9,5 @@ app_name = "audit"
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("emails/resend/", views.email_resend, name="email_resend"),
 ]
-

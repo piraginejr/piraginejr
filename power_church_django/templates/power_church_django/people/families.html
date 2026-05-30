@@ -10,7 +10,7 @@
       {% elif families.section == "extended" %}
         <p>Consulta por sobrenome para descobrir quantos nucleos domiciliares existem em cada familia estendida e quais deles merecem auditoria.</p>
       {% else %}
-        <p>Consulta imprimivel dos nucleos domiciliares ja organizados, com busca por pessoa, endereco, sobrenome e sinalizacao financeira dentro da familia.</p>
+        <p>Consulta imprimivel dos nucleos domiciliares ja organizados, com busca ampla por pessoa, ficha, endereco completo, sobrenome e sinalizacao financeira dentro da familia.</p>
       {% endif %}
     </div>
     <div class="actions no-print">
@@ -49,7 +49,7 @@
       <input type="hidden" name="section" value="{{ families.section }}">
       <label>
         Pesquisar
-        <input name="q" value="{{ q }}" placeholder="Pessoa, codigo, CPF, sobrenome ou endereco">
+        <input name="q" value="{{ q }}" placeholder="Pessoa, ficha, CPF, nome da familia, CEP, rua, numero, complemento, bairro ou cidade">
       </label>
       <label>
         Filtrar CEP

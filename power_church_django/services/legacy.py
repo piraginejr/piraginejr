@@ -12,7 +12,14 @@ from urllib.parse import quote
 from django.conf import settings
 
 from power_church_core.formatting import br_date, br_datetime, br_money, competencia_from_date
-from power_church_core.family import family_address_key, family_base_address_key, family_group_label
+from power_church_core.family import (
+    address_complement_specificity,
+    complement_has_specific_unit,
+    family_address_key,
+    family_base_address_key,
+    family_group_label,
+    normalize_address_complement,
+)
 from power_church_core.normalization import (
     contribution_report_identity,
     document_digits,
@@ -95,6 +102,7 @@ def connect_legacy() -> sqlite3.Connection:
     uri = f"file:{quote(str(path), safe='/')}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
+    conn.create_function("NORMALIZE_MATCH", 1, normalize_match_name)
     conn.execute("PRAGMA query_only = ON")
     return conn
 
@@ -125,6 +133,29 @@ def status_sigla(status: object, has_person: bool = True) -> str:
 
 def _money(value: object) -> str:
     return br_money(value)
+
+
+def _person_search_clause(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"""
+    (
+        NORMALIZE_MATCH(COALESCE({prefix}nome, '')) LIKE ?
+        OR NORMALIZE_MATCH(COALESCE({prefix}nome_social, '')) LIKE ?
+        OR COALESCE({prefix}codigo_interno, '') LIKE ?
+        OR COALESCE({prefix}cpf, '') LIKE ?
+        OR NORMALIZE_MATCH(COALESCE({prefix}email_principal, '')) LIKE ?
+        OR COALESCE({prefix}telefone_principal, '') LIKE ?
+    )
+    """
+
+
+def _person_search_params(query: str) -> list[str]:
+    clean = normalize_query(query)
+    digits = "".join(ch for ch in clean if ch.isdigit())
+    normalized_like = f"%{normalize_match_name(clean)}%"
+    raw_like = f"%{clean}%"
+    digit_like = f"%{digits or clean}%"
+    return [normalized_like, normalized_like, raw_like, digit_like, normalized_like, digit_like]
 
 
 ENVELOPE_STATUS_LABELS = {
@@ -289,21 +320,8 @@ def list_people(q: str = "", status: str = "", limit: int | None = None) -> dict
         clauses.append("COALESCE(status, '') = ?")
         params.append(status)
     if q:
-        like = f"%{q}%"
-        digits = "".join(ch for ch in q if ch.isdigit())
-        clauses.append(
-            """
-            (
-                nome LIKE ?
-                OR COALESCE(nome_social, '') LIKE ?
-                OR COALESCE(codigo_interno, '') LIKE ?
-                OR COALESCE(cpf, '') LIKE ?
-                OR COALESCE(email_principal, '') LIKE ?
-                OR COALESCE(telefone_principal, '') LIKE ?
-            )
-            """
-        )
-        params.extend([like, like, like, f"%{digits or q}%", like, like])
+        clauses.append(_person_search_clause())
+        params.extend(_person_search_params(q))
     where = " AND ".join(clauses)
     with connect_legacy() as conn:
         total = int(scalar(conn, f"SELECT COUNT(*) FROM pessoas WHERE {where}", tuple(params)) or 0)
@@ -374,8 +392,6 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
         if person is None:
             return []
         organization_id = moneyless_int(person["organizacao_id"])
-        like = f"%{query}%"
-        digit_like = f"%{digits or query}%"
         rows = conn.execute(
             """
             SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
@@ -394,14 +410,9 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
                             (r.pessoa_relacionada_id = ? AND r.pessoa_id = p.id)
                        )
                )
-               AND (
-                    p.nome LIKE ?
-                    OR COALESCE(p.nome_social, '') LIKE ?
-                    OR COALESCE(p.codigo_interno, '') LIKE ?
-                    OR COALESCE(p.cpf, '') LIKE ?
-                    OR COALESCE(p.email_principal, '') LIKE ?
-                    OR COALESCE(p.telefone_principal, '') LIKE ?
-               )
+               AND """
+            + _person_search_clause("p")
+            + """
              ORDER BY p.nome COLLATE NOCASE, p.id
              LIMIT ?
             """,
@@ -410,12 +421,7 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
                 person_id,
                 person_id,
                 person_id,
-                like,
-                like,
-                like,
-                digit_like,
-                like,
-                like,
+                *_person_search_params(query),
                 limit,
             ),
         ).fetchall()
@@ -844,6 +850,8 @@ def _family_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "status": format_status(row["status"]),
         "status_raw": row["status"] or "",
         "sigla": status_sigla(row["status"], True),
+        "data_nascimento_raw": row["data_nascimento"] if "data_nascimento" in row.keys() else "",
+        "data_nascimento": br_date(row["data_nascimento"] if "data_nascimento" in row.keys() else ""),
         "photo_url": member_photo_url(row["id"], row["cpf"], row["nome"]),
         "complemento": row["complemento"] or "",
         "endereco": _format_address_line(row),
@@ -856,6 +864,56 @@ def _family_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "exact_key": family_address_key(row),
         "base_key": family_base_address_key(row),
     }
+
+
+def _household_profile_payload(people: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        from power_church_django.services.family_profiles import household_profile_context
+    except Exception:
+        household_profile_context = None
+    person_ids = [moneyless_int(person.get("id")) for person in people if moneyless_int(person.get("id"))]
+    fallback_name = _organized_family_surname_label(people) or "Familia domiciliar"
+    if not household_profile_context:
+        return {
+            "signature": ",".join(str(value) for value in sorted(set(person_ids))),
+            "head_person_id": 0,
+            "head_person_name": "",
+            "display_name_override": "",
+            "display_name_auto": fallback_name,
+            "display_name_effective": fallback_name,
+            "display_name_sort": normalize_match_name(fallback_name),
+        }
+    return household_profile_context(person_ids, people)
+
+
+def _group_rows_have_specific_distinct_units(rows: list[sqlite3.Row]) -> bool:
+    unit_by_person: dict[int, str] = {}
+    for row in rows:
+        person_id = moneyless_int(row["id"])
+        if not person_id or person_id in unit_by_person:
+            continue
+        unit_by_person[person_id] = normalize_address_complement(row["complemento"])
+    if len(unit_by_person) < 2:
+        return False
+    complements = [value for value in unit_by_person.values() if value]
+    if len(complements) != len(unit_by_person):
+        return False
+    if len(set(complements)) != len(unit_by_person):
+        return False
+    return all(complement_has_specific_unit(value) for value in complements)
+
+
+def _ambiguous_unit_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    seen_people: set[int] = set()
+    ambiguous: list[sqlite3.Row] = []
+    for row in rows:
+        person_id = moneyless_int(row["id"])
+        if not person_id or person_id in seen_people:
+            continue
+        seen_people.add(person_id)
+        if address_complement_specificity(row["complemento"]) != "exact":
+            ambiguous.append(row)
+    return ambiguous
 
 
 def _family_group_payload(
@@ -934,6 +992,10 @@ def _family_group_matches_query(payload: dict[str, Any], query_key: str, digits:
                 person.get("cpf"),
                 person.get("status"),
                 person.get("endereco"),
+                person.get("complemento"),
+                person.get("bairro"),
+                person.get("cidade"),
+                person.get("uf"),
             ]
         )
         digit_values.extend([person.get("codigo"), person.get("cpf"), person.get("cep"), person.get("numero")])
@@ -1093,9 +1155,17 @@ def _organized_family_payload(
     alignment = _family_alignment_payload(unique_people)
     financial = _family_financial_summary(unique_people)
     surname_label = _organized_family_surname_label(unique_people)
+    profile = _household_profile_payload(unique_people)
     member_names = ", ".join(person["nome"] for person in unique_people)
     return {
-        "label": alignment["label"],
+        "label": profile["display_name_effective"],
+        "automatic_label": profile["display_name_auto"],
+        "display_name_override": profile["display_name_override"],
+        "system_label": alignment["label"],
+        "profile_signature": profile["signature"],
+        "head_person_id": profile["head_person_id"],
+        "head_person_name": profile["head_person_name"],
+        "sort_label": profile["display_name_sort"],
         "surname_label": surname_label,
         "people": unique_people,
         "member_count": len(unique_people),
@@ -1117,6 +1187,8 @@ def _organized_family_matches_query(payload: dict[str, Any], query_key: str, dig
     people = payload.get("people") or []
     text_values: list[object] = [
         payload.get("label"),
+        payload.get("automatic_label"),
+        payload.get("system_label"),
         payload.get("surname_label"),
         payload.get("review_reason"),
         payload.get("address"),
@@ -1131,6 +1203,10 @@ def _organized_family_matches_query(payload: dict[str, Any], query_key: str, dig
                 person.get("codigo"),
                 person.get("cpf"),
                 person.get("endereco"),
+                person.get("complemento"),
+                person.get("bairro"),
+                person.get("cidade"),
+                person.get("uf"),
                 person.get("financial", {}).get("summary"),
             ]
         )
@@ -1153,6 +1229,7 @@ def family_nuclei_dashboard(
         rows = conn.execute(
             """
             SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                   p.data_nascimento,
                    e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
               FROM pessoas p
               JOIN pessoa_enderecos e ON e.pessoa_id = p.id
@@ -1222,11 +1299,17 @@ def family_nuclei_dashboard(
         exact_keys = {family_address_key(row) for row in group_rows if family_address_key(row)}
         if len(people_ids) < 2 or len(exact_keys) <= 1:
             continue
+        if _group_rows_have_specific_distinct_units(group_rows):
+            continue
+        candidate_rows = _ambiguous_unit_rows(group_rows)
+        candidate_people_ids = {moneyless_int(row["id"]) for row in candidate_rows}
+        if len(candidate_people_ids) < 2:
+            continue
         payload = _family_group_payload(
             key,
-            group_rows,
+            candidate_rows,
             confidence="Auditoria",
-            reason="Mesmo CEP, logradouro e numero, mas complemento diferente ou incompleto.",
+            reason="Mesmo CEP, logradouro e numero, com complemento ausente ou parcial que ainda precisa de auditoria humana.",
             include_complement=False,
         )
         payload["missing_relationships"] = _family_group_missing_relationships(payload, relationship_pairs, suppressed_pairs)
@@ -1384,9 +1467,8 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> 
         nuclei = [group for group in nuclei if not group["needs_review"]]
     nuclei.sort(
         key=lambda item: (
-            0 if item["needs_review"] else 1,
-            -moneyless_int(item["member_count"]),
-            normalize_match_name(item["label"]),
+            item.get("sort_label") or normalize_match_name(item["label"]),
+            normalize_match_name(item.get("address")),
         )
     )
     return {
@@ -1425,9 +1507,9 @@ def extended_family_clusters(nuclei: list[dict[str, Any]], q: str = "", review: 
         text_values: list[object] = [label]
         digit_values: list[object] = []
         for nucleus in filtered_members:
-            text_values.extend([nucleus.get("label"), nucleus.get("member_names"), nucleus.get("address"), nucleus.get("review_reason")])
+            text_values.extend([nucleus.get("label"), nucleus.get("automatic_label"), nucleus.get("system_label"), nucleus.get("member_names"), nucleus.get("address"), nucleus.get("review_reason")])
             for person in nucleus.get("people") or []:
-                text_values.extend([person.get("nome"), person.get("codigo"), person.get("cpf"), person.get("endereco")])
+                text_values.extend([person.get("nome"), person.get("codigo"), person.get("cpf"), person.get("endereco"), person.get("complemento"), person.get("bairro"), person.get("cidade"), person.get("uf")])
                 digit_values.extend([person.get("codigo"), person.get("cpf"), person.get("cep"), person.get("numero")])
         if query_key or digits:
             if not _family_query_matches(query_key, digits, text_values, digit_values):
@@ -1846,16 +1928,16 @@ def list_contributions(q: str = "", competencia: str = "", status: str = "", lim
         clauses.append("COALESCE(co.status_operacional, '') = ?")
         params.append(status)
     if q:
-        like = f"%{q}%"
+        like = f"%{normalize_match_name(q)}%"
         digits = "".join(ch for ch in q if ch.isdigit())
         clauses.append(
             """
             (
-                COALESCE(p.nome, '') LIKE ?
-                OR COALESCE(c.nome, '') LIKE ?
+                NORMALIZE_MATCH(COALESCE(p.nome, '')) LIKE ?
+                OR NORMALIZE_MATCH(COALESCE(c.nome, '')) LIKE ?
                 OR COALESCE(c.documento_principal, '') LIKE ?
                 OR COALESCE(p.cpf, '') LIKE ?
-                OR COALESCE(co.observacoes, '') LIKE ?
+                OR NORMALIZE_MATCH(COALESCE(co.observacoes, '')) LIKE ?
             )
             """
         )
@@ -2221,6 +2303,64 @@ def lookup_envelope_people(phone: str = "", address: str = "", limit: int = 8) -
                     )
                 )
             phone_matches = [item for _score, item in sorted(ranked, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]]
+            contributor_rows = conn.execute(
+                """
+                SELECT c.id, c.nome, c.documento_principal, c.tipo,
+                       GROUP_CONCAT(ci.valor, '||') AS identificadores
+                  FROM contribuintes c
+                  JOIN contribuintes_identificadores ci
+                    ON ci.contribuinte_id = c.id
+                   AND ci.ativo = 1
+                   AND ci.tipo IN ('telefone', 'celular', 'whatsapp')
+                 WHERE c.ativo = 1
+                   AND COALESCE(c.pessoa_id, 0) = 0
+                 GROUP BY c.id, c.nome, c.documento_principal, c.tipo
+                 ORDER BY c.nome COLLATE NOCASE ASC, c.id ASC
+                """
+            ).fetchall()
+            ranked_contributors: list[tuple[int, dict[str, Any]]] = []
+            for row in contributor_rows:
+                best_score = 0
+                matched_value = ""
+                for contact in str(row["identificadores"] or "").split("||"):
+                    candidate_digits = _digits_only(contact)
+                    if not candidate_digits:
+                        continue
+                    if candidate_digits == phone_digits:
+                        best_score = max(best_score, 30)
+                        matched_value = contact
+                    elif len(candidate_digits) >= 8 and phone_digits[-8:] == candidate_digits[-8:]:
+                        if best_score < 20:
+                            best_score = 20
+                            matched_value = contact
+                if not best_score:
+                    continue
+                contributor = {
+                    "id": moneyless_int(row["id"]),
+                    "nome": row["nome"] or "",
+                    "documento": row["documento_principal"] or "",
+                    "tipo": (row["tipo"] or "").upper(),
+                }
+                ranked_contributors.append(
+                    (
+                        best_score,
+                        {
+                            "id": contributor["id"],
+                            "label": _contributor_option_label(contributor),
+                            "nome": contributor["nome"],
+                            "codigo": "",
+                            "cpf": format_document(contributor["documento"]),
+                            "sigla": "NF",
+                            "matched_value": matched_value,
+                            "source": "Contribuinte sem ficha por telefone",
+                        },
+                    )
+                )
+            phone_matches.extend(
+                item
+                for _score, item in sorted(ranked_contributors, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]
+            )
+            phone_matches = sorted(phone_matches, key=lambda item: (item["source"], item["nome"], item["id"]))[:limit]
 
         if address_key or address_tokens:
             rows = conn.execute(
@@ -2279,6 +2419,62 @@ def lookup_envelope_people(phone: str = "", address: str = "", limit: int = 8) -
                 item
                 for _score, item in sorted(ranked_addresses, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]
             ]
+            contributor_rows = conn.execute(
+                """
+                SELECT c.id, c.nome, c.documento_principal, c.tipo, ci.valor
+                  FROM contribuintes c
+                  JOIN contribuintes_identificadores ci
+                    ON ci.contribuinte_id = c.id
+                   AND ci.ativo = 1
+                   AND ci.tipo = 'endereco'
+                 WHERE c.ativo = 1
+                   AND COALESCE(c.pessoa_id, 0) = 0
+                 ORDER BY c.nome COLLATE NOCASE ASC, c.id ASC
+                """
+            ).fetchall()
+            ranked_contributor_addresses: list[tuple[int, dict[str, Any]]] = []
+            for row in contributor_rows:
+                current_address = normalize_query(row["valor"])
+                current_key = _address_lookup_key(current_address)
+                current_tokens = _address_lookup_tokens(current_address)
+                score = 0
+                if address_key and current_key and (address_key in current_key or current_key in address_key):
+                    score = max(score, 30)
+                common_tokens = len(address_tokens & current_tokens)
+                if common_tokens >= 4:
+                    score = max(score, 26)
+                elif common_tokens >= 3:
+                    score = max(score, 20)
+                elif common_tokens >= 2:
+                    score = max(score, 12)
+                if not score:
+                    continue
+                contributor = {
+                    "id": moneyless_int(row["id"]),
+                    "nome": row["nome"] or "",
+                    "documento": row["documento_principal"] or "",
+                    "tipo": (row["tipo"] or "").upper(),
+                }
+                ranked_contributor_addresses.append(
+                    (
+                        score,
+                        {
+                            "id": contributor["id"],
+                            "label": _contributor_option_label(contributor),
+                            "nome": contributor["nome"],
+                            "codigo": "",
+                            "cpf": format_document(contributor["documento"]),
+                            "sigla": "NF",
+                            "matched_value": current_address,
+                            "source": "Contribuinte sem ficha por endereco",
+                        },
+                    )
+                )
+            address_matches.extend(
+                item
+                for _score, item in sorted(ranked_contributor_addresses, key=lambda pair: (-pair[0], pair[1]["nome"], pair[1]["id"]))[:limit]
+            )
+            address_matches = sorted(address_matches, key=lambda item: (item["source"], item["nome"], item["id"]))[:limit]
 
     return {"phone_matches": phone_matches, "address_matches": address_matches}
 
@@ -2286,13 +2482,19 @@ def lookup_envelope_people(phone: str = "", address: str = "", limit: int = 8) -
 def _person_option_label(person: dict[str, Any]) -> str:
     cpf = f" · CPF {person['cpf']}" if person.get("cpf") else ""
     code = f" · Ficha {person['codigo']}" if person.get("codigo") else ""
-    return f"Pessoa #{person['id']} · {person['nome']} · {person['sigla']}{code}{cpf}"
+    search_hint = ""
+    if any(ord(ch) > 127 for ch in str(person.get("nome") or "")):
+        search_hint = f" · busca {normalize_match_name(person.get('nome'))}"
+    return f"Pessoa #{person['id']} · {person['nome']} · {person['sigla']}{code}{cpf}{search_hint}"
 
 
 def _contributor_option_label(contributor: dict[str, Any]) -> str:
     document = f" · {format_document(contributor.get('documento'))}" if contributor.get("documento") else ""
     kind = f" · {contributor['tipo']}" if contributor.get("tipo") else ""
-    return f"Contribuinte #{contributor['id']} · {contributor['nome']}{kind}{document}"
+    search_hint = ""
+    if any(ord(ch) > 127 for ch in str(contributor.get("nome") or "")):
+        search_hint = f" · busca {normalize_match_name(contributor.get('nome'))}"
+    return f"Contribuinte #{contributor['id']} · {contributor['nome']}{kind}{document}{search_hint}"
 
 
 def _participant_options(people: list[dict[str, Any]], contributors: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -2369,6 +2571,7 @@ def envelope_contribution_context(person_id: int = 0) -> dict[str, Any]:
     context["default_justification"] = "Envelope conferido manualmente; imagem anexada para auditoria."
     context["default_lot_name"] = ""
     context["default_total"] = ""
+    context["selected_primary_ref"] = ""
     context["selected_person_ref"] = ""
     context["selected_contributor_ref"] = ""
     context["default_nome_informado"] = ""
@@ -2407,6 +2610,7 @@ def envelope_contribution_context(person_id: int = 0) -> dict[str, Any]:
     if person_id:
         for person in context["people_options"]:
             if moneyless_int(person["id"]) == moneyless_int(person_id):
+                context["selected_primary_ref"] = _person_option_label(person)
                 context["selected_person_ref"] = _person_option_label(person)
                 break
     return context
@@ -2505,6 +2709,7 @@ def launched_envelope_edit_context(envelope_id: int) -> dict[str, Any] | None:
                 "tipo": (row["contribuinte_tipo"] or "").upper(),
             }
         )
+    selected_primary_ref = main_person_ref or main_contributor_ref or (row["nome_informado"] or "")
     context.update(
         {
             "pending_envelope": {
@@ -2530,6 +2735,7 @@ def launched_envelope_edit_context(envelope_id: int) -> dict[str, Any] | None:
             "default_status": item_rows[0]["status_operacional"] if item_rows and item_rows[0]["status_operacional"] else "regular",
             "default_justification": row["justificativa"] or "Correcao manual de envelope lancado; imagem preservada para auditoria.",
             "default_total": "" if round(float(row["total_informado"] or 0), 2) <= 0 else _money(row["total_informado"]).replace("R$ ", ""),
+            "selected_primary_ref": selected_primary_ref,
             "selected_person_ref": main_person_ref,
             "selected_contributor_ref": main_contributor_ref,
             "default_nome_informado": row["nome_informado"] or "",
@@ -2587,15 +2793,15 @@ def list_envelopes(q: str = "", competencia: str = "", limit: int | None = None)
         params: list[Any] = []
         q_norm = normalize_query(q)
         if q_norm:
-            like = f"%{q_norm.upper()}%"
+            like = f"%{normalize_match_name(q_norm)}%"
             clauses.append(
                 """
                 (
-                    UPPER(COALESCE(e.nome_informado, '')) LIKE ?
-                    OR UPPER(COALESCE(p.nome, '')) LIKE ?
-                    OR UPPER(COALESCE(ct.nome, '')) LIKE ?
-                    OR UPPER(COALESCE(e.nome_arquivo_original, '')) LIKE ?
-                    OR UPPER(COALESCE(e.imagem_hash, '')) LIKE ?
+                    NORMALIZE_MATCH(COALESCE(e.nome_informado, '')) LIKE ?
+                    OR NORMALIZE_MATCH(COALESCE(p.nome, '')) LIKE ?
+                    OR NORMALIZE_MATCH(COALESCE(ct.nome, '')) LIKE ?
+                    OR NORMALIZE_MATCH(COALESCE(e.nome_arquivo_original, '')) LIKE ?
+                    OR NORMALIZE_MATCH(COALESCE(e.imagem_hash, '')) LIKE ?
                 )
                 """
             )
@@ -2876,6 +3082,7 @@ def pending_envelope_contribution_context(envelope_id: int) -> dict[str, Any] | 
             "default_type_id": moneyless_int(_row_get(row, "tipo_contribuicao_id_padrao")) or context.get("default_type_id") or 0,
             "default_campaign_id": moneyless_int(_row_get(row, "campanha_id_padrao")),
             "default_form_id": moneyless_int(row["forma_recebimento_id"]) or moneyless_int(_row_get(row, "forma_recebimento_id_padrao")),
+            "selected_primary_ref": row["nome_informado"] or "",
             "default_justification": "Envelope conferido manualmente; imagem anexada para auditoria.",
             "default_total": "" if round(float(row["total_informado"] or 0), 2) <= 0 else _money(row["total_informado"]).replace("R$ ", ""),
             "default_nome_informado": row["nome_informado"] or "",
@@ -3221,7 +3428,7 @@ def person_statement_data(
     selected_type_ids = [moneyless_int(item) for item in (type_ids or []) if moneyless_int(item)]
     with connect_legacy() as conn:
         person = conn.execute(
-            "SELECT id, organizacao_id, codigo_interno, nome, cpf, status FROM pessoas WHERE id = ?",
+            "SELECT id, organizacao_id, codigo_interno, nome, cpf, status, email_principal FROM pessoas WHERE id = ?",
             (person_id,),
         ).fetchone()
         if person is None:
@@ -3325,6 +3532,7 @@ def person_statement_data(
             "cpf": format_cpf(person["cpf"]),
             "status": format_status(person["status"]),
             "sigla": status_sigla(person["status"], True),
+            "email": person["email_principal"] or "",
         },
         "entries": entries,
         "summary": {
@@ -3352,26 +3560,19 @@ def search_receipt_people(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
     if len(query) < 2 and len(digits) < 2:
         return []
     limit = max(1, min(moneyless_int(limit) or 20, 80))
-    like = f"%{query}%"
-    digit_like = f"%{digits or query}%"
     with connect_legacy() as conn:
         rows = conn.execute(
             """
             SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
               FROM pessoas
              WHERE ativo = 1
-               AND (
-                    nome LIKE ?
-                    OR COALESCE(nome_social, '') LIKE ?
-                    OR COALESCE(codigo_interno, '') LIKE ?
-                    OR COALESCE(cpf, '') LIKE ?
-                    OR COALESCE(email_principal, '') LIKE ?
-                    OR COALESCE(telefone_principal, '') LIKE ?
-               )
+               AND """
+            + _person_search_clause()
+            + """
              ORDER BY nome COLLATE NOCASE ASC, id ASC
              LIMIT ?
             """,
-            (like, like, like, digit_like, like, like, limit),
+            (*_person_search_params(query), limit),
         ).fetchall()
     return [
         {
@@ -3464,10 +3665,10 @@ def list_receipts(q: str = "", person_id: int = 0, date_start: str = "", date_en
         clauses.append("r.pessoa_id = ?")
         params.append(person_id)
     if q:
-        like = f"%{q}%"
+        like = f"%{normalize_match_name(q)}%"
         digits = "".join(ch for ch in q if ch.isdigit())
-        clauses.append("(p.nome LIKE ? OR COALESCE(p.cpf, '') LIKE ? OR COALESCE(p.codigo_interno, '') LIKE ? OR r.numero LIKE ?)")
-        params.extend([like, f"%{digits or q}%", like, like])
+        clauses.append("(NORMALIZE_MATCH(COALESCE(p.nome, '')) LIKE ? OR COALESCE(p.cpf, '') LIKE ? OR COALESCE(p.codigo_interno, '') LIKE ? OR r.numero LIKE ?)")
+        params.extend([like, f"%{digits or q}%", f"%{q}%", f"%{q}%"])
     if date_start:
         clauses.append("r.data_emissao >= ?")
         params.append(date_start)
@@ -4632,22 +4833,17 @@ def _bank_person_options(
 
     lookup = normalize_query(lookup)
     if lookup:
-        like = f"%{lookup}%"
-        digits = "".join(ch for ch in lookup if ch.isdigit())
         rows = conn.execute(
             """
             SELECT id, codigo_interno, nome, cpf, status
               FROM pessoas
-             WHERE nome LIKE ?
-                OR COALESCE(nome_social, '') LIKE ?
-                OR COALESCE(codigo_interno, '') LIKE ?
-                OR COALESCE(cpf, '') LIKE ?
-                OR COALESCE(email_principal, '') LIKE ?
-                OR COALESCE(telefone_principal, '') LIKE ?
+             WHERE """
+            + _person_search_clause()
+            + """
              ORDER BY nome COLLATE NOCASE ASC, id ASC
              LIMIT 80
             """,
-            (like, like, like, f"%{digits or lookup}%", like, like),
+            tuple(_person_search_params(lookup)),
         ).fetchall()
         for row in rows:
             person_id = moneyless_int(row["id"])

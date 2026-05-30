@@ -8,7 +8,7 @@ from import_export.formats import base_formats
 from tablib import Dataset
 
 from power_church_core.formatting import br_date, br_datetime
-from power_church_core.normalization import format_cpf, moneyless_int
+from power_church_core.normalization import format_cpf, moneyless_int, normalize_match_name
 from power_church_django.services.legacy import (
     connect_legacy,
     format_status,
@@ -213,20 +213,21 @@ def _people_filters(q: str = "", status: str = "") -> tuple[str, list[Any]]:
         params.append(status)
     if q:
         like = f"%{q}%"
+        normalized_like = f"%{normalize_match_name(q)}%"
         digits = "".join(ch for ch in q if ch.isdigit())
         clauses.append(
             """
             (
-                p.nome LIKE ?
-                OR COALESCE(p.nome_social, '') LIKE ?
+                NORMALIZE_MATCH(COALESCE(p.nome, '')) LIKE ?
+                OR NORMALIZE_MATCH(COALESCE(p.nome_social, '')) LIKE ?
                 OR COALESCE(p.codigo_interno, '') LIKE ?
                 OR COALESCE(p.cpf, '') LIKE ?
-                OR COALESCE(p.email_principal, '') LIKE ?
+                OR NORMALIZE_MATCH(COALESCE(p.email_principal, '')) LIKE ?
                 OR COALESCE(p.telefone_principal, '') LIKE ?
             )
             """
         )
-        params.extend([like, like, like, f"%{digits or q}%", like, like])
+        params.extend([normalized_like, normalized_like, like, f"%{digits or q}%", normalized_like, like])
     return " AND ".join(clauses), params
 
 

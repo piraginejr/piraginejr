@@ -67,6 +67,7 @@ from django.test import Client
 from power_church_django.services.access_control import access_control_snapshot
 from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people, list_secure_people_trash
 from power_church_django.services.legacy_bank_write import _parse_upload_with_provider, _parsed_summary, compare_pdf_upload_providers
+from power_church_django.services.legacy_write import connect_legacy_write, ensure_manual_contributor, _resolve_primary_envelope_identity
 from power_church_core.normalization import contribution_report_identity
 
 if "testserver" not in settings.ALLOWED_HOSTS:
@@ -99,6 +100,58 @@ if int(all_envelopes_data["shown"] or 0) != int(all_envelopes_data["total"] or 0
     raise AssertionError(
         f"lista de envelopes ainda esta limitada: {all_envelopes_data['shown']} de {all_envelopes_data['total']}"
     )
+with connect_legacy_write() as conn:
+    conn.execute("BEGIN")
+    contributor_id = ensure_manual_contributor(
+        conn,
+        1,
+        "Teste Integracao Frequentador Envelope",
+        "",
+        source="verificador_django_funcional",
+    )
+    payload = {
+        "participante_principal_ref": f"Contribuinte #{contributor_id} · Teste Integracao Frequentador Envelope",
+        "telefone_informado": "(21) 99888-7766",
+        "endereco_informado": "Rua de Teste 123, Niteroi",
+        "nome_informado": "Teste Integracao Frequentador Envelope",
+    }
+    identity = _resolve_primary_envelope_identity(conn, 1, payload, actor="verificador_django_funcional")
+    person_id = int(identity["person_id"] or 0)
+    contributor = conn.execute("SELECT pessoa_id FROM contribuintes WHERE id = ?", (contributor_id,)).fetchone()
+    person = conn.execute(
+        "SELECT status, telefone_principal, whatsapp_principal FROM pessoas WHERE id = ?",
+        (person_id,),
+    ).fetchone()
+    contact_types = {
+        (row["tipo"], row["valor"])
+        for row in conn.execute("SELECT tipo, valor FROM pessoa_contatos WHERE pessoa_id = ?", (person_id,)).fetchall()
+    }
+    identifiers = {
+        (row["tipo"], row["valor"], int(row["pessoa_id"] or 0))
+        for row in conn.execute(
+            "SELECT tipo, valor, pessoa_id FROM contribuintes_identificadores WHERE contribuinte_id = ?",
+            (contributor_id,),
+        ).fetchall()
+    }
+    address_row = conn.execute(
+        "SELECT logradouro FROM pessoa_enderecos WHERE pessoa_id = ? ORDER BY id DESC LIMIT 1",
+        (person_id,),
+    ).fetchone()
+    if int(identity["contributor_id"] or 0) != int(contributor_id):
+        raise AssertionError("identificacao principal do envelope nao preservou o contribuinte auxiliar")
+    if not contributor or int(contributor["pessoa_id"] or 0) != person_id:
+        raise AssertionError("contribuinte auxiliar com telefone/endereco nao foi vinculado ao frequentador criado")
+    if not person or str(person["status"] or "") != "frequentador":
+        raise AssertionError("contribuinte auxiliar com telefone/endereco nao virou frequentador automaticamente")
+    if str(person["telefone_principal"] or "") != "(21) 99888-7766" or str(person["whatsapp_principal"] or "") != "(21) 99888-7766":
+        raise AssertionError("telefone do frequentador criado a partir do envelope nao foi aplicado na ficha")
+    if ("telefone", "(21) 99888-7766") not in contact_types or ("whatsapp", "(21) 99888-7766") not in contact_types:
+        raise AssertionError("contatos do frequentador criado pelo envelope nao foram persistidos")
+    if not address_row or str(address_row["logradouro"] or "") != "Rua de Teste 123, Niteroi":
+        raise AssertionError("endereco do frequentador criado pelo envelope nao foi persistido")
+    if ("telefone", "21998887766", person_id) not in identifiers or ("endereco", "Rua de Teste 123, Niteroi", person_id) not in identifiers:
+        raise AssertionError("identificadores do contribuinte auxiliar nao foram guardados para busca futura")
+    conn.rollback()
 families_data = family_registry_dashboard(section="organized")
 if int(families_data["organized"]["shown"] or 0) != int(families_data["organized"]["total"] or 0):
     raise AssertionError(
@@ -275,6 +328,7 @@ paths = [
     f"/reports/contributions-destinations.pdf?competencia={quote(latest_competence)}&inline=1",
     "/audit/",
     "/audit/?modo=django",
+    "/audit/?modo=emails",
     "/accounts/",
     "/accounts/login/",
 ]
@@ -412,10 +466,17 @@ for path in paths:
         for snippet in ["Rastreabilidade Django", "Eventos Django"]:
             if snippet not in content:
                 raise AssertionError(f"auditoria Django sem trecho esperado: {snippet}")
+    if path == "/audit/?modo=emails":
+        for snippet in ["Relatorio de e-mails enviados", "Consolida recibos e extratos enviados pelo sistema", "Pessoa", "Conteudo", "Destino", "E-mails do sistema", "Reenviar"]:
+            if snippet not in content:
+                raise AssertionError(f"auditoria de e-mails sem trecho esperado: {snippet}")
     if path == "/people/families/":
         for snippet in [
             "Familias domiciliares",
             "Nucleos organizados",
+            "Nome automatico:",
+            "Cabeca da familia",
+            "Salvar identidade familiar",
             "Fila de auditoria",
             "Familias estendidas",
             "Situacao do domicilio",
@@ -616,9 +677,9 @@ for path in paths:
             "Previa para digitacao",
             "data-envelope-file-input",
             "Caminho local do arquivo",
-            "numero da ficha/codigo interno",
+            "Funciona como no rateio",
             "Rateio em cartoes por pessoa, contribuinte e destinacao",
-            "Pessoa, contribuinte ou novo nome",
+            "Pessoa, contribuinte ou nome lido no envelope",
             "Sugestoes por telefone e endereco",
             "Salvar agora e lancar",
             "Usar tipo principal",
@@ -661,6 +722,7 @@ for path in paths:
             "Por padrao usa o total do envelope",
             "Rateio em cartoes",
             "data-envelope-zoom-image",
+            "Funciona como no rateio",
             "Sugestoes por telefone e endereco",
         ]:
             if snippet not in content:
@@ -676,10 +738,11 @@ for path in paths:
             "Salvar correcao auditada",
             "versao anterior sera preservada na auditoria",
             "Rateio em cartoes",
-            "Pessoa, contribuinte ou novo nome",
+            "Pessoa, contribuinte ou nome lido no envelope",
             "Rastreabilidade financeira",
             "Por padrao usa o total do envelope",
             "data-envelope-zoom-image",
+            "Funciona como no rateio",
             "Sugestoes por telefone e endereco",
         ]:
             if snippet not in content:
@@ -700,6 +763,10 @@ for path in paths:
         for snippet in ["Ajuste manual seguro", "Justificativa obrigatoria da alteracao", "Historico de auditoria", "Salvar ajuste com auditoria"]:
             if snippet not in content:
                 raise AssertionError(f"detalhe de contribuicao Django sem ajuste auditavel: {snippet}")
+    if re.match(r"^/contributions/statements/\d+/$", path):
+        for snippet in ["Extrato de contribuicoes", "Gerar PDF", "Enviar extrato por e-mail", "E-mail atual da ficha", "name=\"update_person_email\"", "name=\"email_update_reason\""]:
+            if snippet not in content:
+                raise AssertionError(f"extrato individual Django sem envio auditavel: {snippet}")
     if path.startswith("/contributions/new/"):
         for snippet in ["Lancamento manual com auditoria", "Subir envelope com imagem", "Abrir tela de envelope com imagem", "Justificativa obrigatoria", "Salvar contribuicao"]:
             if snippet not in content:

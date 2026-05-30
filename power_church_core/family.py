@@ -20,6 +20,10 @@ def normalize_address_complement(value: object) -> str:
     text = normalize_match_name(value)
     if not text:
         return ""
+    text = re.sub(r"\b(EDIFICIO|EDIF|ED)\b", "ED", text)
+    text = re.sub(r"\b(TORRE|TR)\b", "TORRE", text)
+    text = re.sub(r"\b(ANDAR|AN|PAVIMENTO|PAV)\b", "ANDAR", text)
+    text = re.sub(r"\b(CONDOMINIO|COND)\b", "COND", text)
     text = re.sub(r"\b(APARTAMENTO|APTO|APT|AP)\b", "AP", text)
     text = re.sub(r"\b(BLOCO|BLCO|BL)\b", "BL", text)
     text = re.sub(r"\b(CASA|CS)\b", "CASA", text)
@@ -34,7 +38,7 @@ def normalize_address_complement(value: object) -> str:
     pairs: list[tuple[str, str]] = []
     bare: list[str] = []
     index = 0
-    labels = {"AP", "BL", "CASA", "COB", "SALA", "LT", "QD"}
+    labels = {"AP", "BL", "CASA", "COB", "SALA", "LT", "QD", "TORRE", "ANDAR"}
     while index < len(tokens):
         token = tokens[index]
         if token in labels and index + 1 < len(tokens):
@@ -53,6 +57,33 @@ def normalize_address_complement(value: object) -> str:
         return " ".join(tokens)
     ordered = sorted(pairs, key=lambda item: (item[0], item[1]))
     return " ".join(f"{label} {number}" for label, number in ordered)
+
+
+def complement_has_specific_unit(value: object) -> bool:
+    normalized = normalize_address_complement(value)
+    if not normalized:
+        return False
+    tokens = normalized.split()
+    labels = {"AP", "BL", "CASA", "COB", "SALA", "LT", "QD", "TORRE", "ANDAR", "NUM"}
+    for index, token in enumerate(tokens[:-1]):
+        next_token = tokens[index + 1]
+        if token in labels and next_token and next_token not in labels:
+            return True
+    return any(ch.isdigit() for ch in normalized)
+
+
+def address_complement_specificity(value: object) -> str:
+    normalized = normalize_address_complement(value)
+    if not normalized:
+        return "missing"
+    tokens = normalized.split()
+    labels = {token for token in tokens if token in {"AP", "BL", "CASA", "COB", "SALA", "LT", "QD", "TORRE", "ANDAR", "NUM"}}
+    has_number = any(any(ch.isdigit() for ch in token) for token in tokens)
+    if not has_number:
+        return "missing"
+    if labels.intersection({"AP", "CASA", "COB", "SALA", "LT", "QD", "NUM"}):
+        return "exact"
+    return "partial"
 
 
 def family_address_key(row: Mapping[str, object], *, include_complement: bool = True) -> tuple[str, ...]:

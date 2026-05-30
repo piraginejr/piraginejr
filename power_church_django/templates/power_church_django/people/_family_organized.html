@@ -2,7 +2,7 @@
   <div class="section-head">
     <div>
       <h2>Nucleos organizados</h2>
-      <p class="muted">Mostrando {{ families.organized.shown }} de {{ families.organized.total }} nucleo(s) domiciliar(es). {% if families.organized.review_groups %}{{ families.organized.review_groups }} pedem auditoria de endereco.{% endif %}</p>
+      <p class="muted">Mostrando {{ families.organized.shown }} de {{ families.organized.total }} nucleo(s) domiciliar(es), ordenados alfabeticamente pelo nome da familia. {% if families.organized.review_groups %}{{ families.organized.review_groups }} pedem auditoria de endereco.{% endif %}</p>
     </div>
     <span class="badge">{{ families.organized.shown }} exibidos</span>
   </div>
@@ -14,12 +14,19 @@
       <div class="split">
         <div>
           <h2>{{ group.label }}</h2>
-          <p>{{ group.address }}<br><span class="muted">{{ group.review_reason }}</span></p>
+          <p>
+            <strong class="muted">Nome automatico:</strong> {{ group.automatic_label }}<br>
+            {{ group.address }}<br>
+            <span class="muted">{{ group.review_reason }}</span>
+          </p>
           <div class="legend">
             <span class="badge {% if group.needs_review %}warn{% else %}ok{% endif %}">{{ group.alignment_badge }}</span>
             <span class="badge">Pessoas {{ group.member_count }}</span>
             <span class="badge">SA {{ group.status_summary.sa }}</span>
             <span class="badge">Outros {{ group.status_summary.outros }}</span>
+            {% if group.head_person_name %}
+              <span class="badge">Cabeca {{ group.head_person_name }}</span>
+            {% endif %}
             {% if group.surname_label %}
               <span class="badge">Familia {{ group.surname_label }}</span>
             {% endif %}
@@ -34,6 +41,40 @@
           {% endif %}
         </div>
       </div>
+
+      <section class="panel no-print" style="margin-top:14px;">
+        <div class="section-head">
+          <div>
+            <h3 style="margin:0;">Identidade da familia domiciliar</h3>
+            <p class="muted">O sistema escolhe por padrao a pessoa mais velha como cabeca da familia. Se necessario, o operador pode trocar a referencia ou gravar um nome de guerra para ordenacao e impressao.</p>
+          </div>
+        </div>
+        <form method="post" class="form-grid">
+          {% csrf_token %}
+          <input type="hidden" name="family_profile_action" value="update_household_profile">
+          <input type="hidden" name="section" value="{{ families.section }}">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="review" value="{{ review }}">
+          <input type="hidden" name="cep" value="{{ cep }}">
+          <input type="hidden" name="mode" value="{{ mode }}">
+          <input type="hidden" name="person_ids" value="{{ group.person_ids }}">
+          <label>
+            Cabeca da familia
+            <select name="head_person_id">
+              {% for person in group.people %}
+                <option value="{{ person.id }}" {% if person.id == group.head_person_id %}selected{% endif %}>{{ person.nome }}{% if person.data_nascimento %} · {{ person.data_nascimento }}{% endif %}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="wide">
+            Nome de guerra / nome manual da familia
+            <input name="display_name_override" value="{{ group.display_name_override }}" placeholder="Opcional. Se preenchido, substitui o nome automatico">
+          </label>
+          <div class="wide actions">
+            <button type="submit">Salvar identidade familiar</button>
+          </div>
+        </form>
+      </section>
 
       <div class="relationship-card" style="margin-top:14px">
         <div class="relationship-card-header">

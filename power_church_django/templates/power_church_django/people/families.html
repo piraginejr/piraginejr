@@ -10,7 +10,7 @@
       {% elif families.section == "extended" %}
         <p>Consulta por sobrenome para descobrir quantos nucleos domiciliares existem em cada familia estendida e quais deles merecem auditoria.</p>
       {% else %}
-        <p>Consulta imprimivel dos nucleos domiciliares ja organizados, com busca ampla por pessoa, ficha, endereco completo, sobrenome e sinalizacao financeira dentro da familia.</p>
+        <p>Lista unica de todos os domicilios da base, incluindo familias domiciliares e casos unipessoais, com busca ampla por pessoa, ficha, endereco completo, sobrenome e sinalizacao financeira dentro da familia.</p>
       {% endif %}
     </div>
     <div class="actions no-print">
@@ -20,8 +20,8 @@
   </section>
 
   <section class="grid">
-    <a class="card" href="/people/families/?section=organized{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}">
-      <span class="label">Nucleos organizados</span>
+    <a class="card" href="/people/families/?section=organized{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}">
+      <span class="label">Todos os domicilios</span>
       <strong>{{ families.summary.organized_groups }}</strong>
       <div class="muted small">{{ families.summary.organized_people }} pessoa(s)</div>
     </a>
@@ -30,7 +30,7 @@
       <strong>{{ families.summary.audit_groups }}</strong>
       <div class="muted small">{{ families.summary.audit_people }} pessoa(s)</div>
     </a>
-    <a class="card" href="/people/families/?section=extended{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}">
+    <a class="card" href="/people/families/?section=extended{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}">
       <span class="label">Familias estendidas</span>
       <strong>{{ families.summary.extended_groups }}</strong>
       <div class="muted small">{{ families.summary.extended_nuclei }} nucleo(s)</div>
@@ -74,6 +74,14 @@
           </select>
         </label>
       {% else %}
+        <label>
+          Tipo do domicilio
+          <select name="household_kind">
+            <option value="all" {% if household_kind == "all" %}selected{% endif %}>Todos</option>
+            <option value="familiar" {% if household_kind == "familiar" %}selected{% endif %}>Familias domiciliares</option>
+            <option value="unipessoal" {% if household_kind == "unipessoal" %}selected{% endif %}>Unipessoais</option>
+          </select>
+        </label>
         <label>
           Situacao do domicilio
           <select name="review">

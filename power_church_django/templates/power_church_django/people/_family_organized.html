@@ -1,8 +1,8 @@
 <section class="panel">
   <div class="section-head">
     <div>
-      <h2>Nucleos organizados</h2>
-      <p class="muted">Mostrando {{ families.organized.shown }} de {{ families.organized.total }} nucleo(s) domiciliar(es), ordenados alfabeticamente pelo nome da familia. {% if families.organized.review_groups %}{{ families.organized.review_groups }} pedem auditoria de endereco.{% endif %}</p>
+      <h2>Todos os domicilios</h2>
+      <p class="muted">Mostrando {{ families.organized.shown }} de {{ families.organized.total }} domicilio(s), ordenados alfabeticamente pelo nome da familia ou pelo morador principal. {{ families.summary.organized_family_groups }} familia(s) domiciliar(es) e {{ families.summary.organized_single_groups }} unipessoal(is). {% if families.organized.review_groups %}{{ families.organized.review_groups }} pedem auditoria de endereco.{% endif %}</p>
     </div>
     <span class="badge">{{ families.organized.shown }} exibidos</span>
   </div>
@@ -21,7 +21,9 @@
           </p>
           <div class="legend">
             <span class="badge {% if group.needs_review %}warn{% else %}ok{% endif %}">{{ group.alignment_badge }}</span>
+            <span class="badge">{{ group.household_kind_label }}</span>
             <span class="badge">Pessoas {{ group.member_count }}</span>
+            <span class="badge">Membros {{ group.member_tag }}</span>
             <span class="badge">SA {{ group.status_summary.sa }}</span>
             <span class="badge">Outros {{ group.status_summary.outros }}</span>
             {% if group.head_person_name %}
@@ -55,6 +57,7 @@
           <input type="hidden" name="section" value="{{ families.section }}">
           <input type="hidden" name="q" value="{{ q }}">
           <input type="hidden" name="review" value="{{ review }}">
+          <input type="hidden" name="household_kind" value="{{ household_kind }}">
           <input type="hidden" name="cep" value="{{ cep }}">
           <input type="hidden" name="mode" value="{{ mode }}">
           <input type="hidden" name="person_ids" value="{{ group.person_ids }}">

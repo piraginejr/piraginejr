@@ -203,14 +203,27 @@ def people_export_form_context(
     }
 
 
-def _people_filters(q: str = "", status: str = "") -> tuple[str, list[Any]]:
+def _people_filters(q: str = "", status: str = "", city: str = "") -> tuple[str, list[Any]]:
     q = (q or "").strip()
     status = (status or "").strip()
+    city = (city or "").strip()
     clauses = ["p.ativo = 1"]
     params: list[Any] = []
     if status:
         clauses.append("COALESCE(p.status, '') = ?")
         params.append(status)
+    if city:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                  FROM pessoa_enderecos pe
+                 WHERE pe.pessoa_id = p.id
+                   AND NORMALIZE_MATCH(COALESCE(pe.cidade, '')) = ?
+            )
+            """
+        )
+        params.append(normalize_match_name(city))
     if q:
         like = f"%{q}%"
         normalized_like = f"%{normalize_match_name(q)}%"
@@ -243,8 +256,8 @@ def _primary_address_line(row: dict[str, Any]) -> str:
     return " | ".join(part for part in parts if part)
 
 
-def _people_export_rows(q: str = "", status: str = "") -> tuple[list[dict[str, Any]], int]:
-    where, params = _people_filters(q=q, status=status)
+def _people_export_rows(q: str = "", status: str = "", city: str = "") -> tuple[list[dict[str, Any]], int]:
+    where, params = _people_filters(q=q, status=status, city=city)
     with connect_legacy() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM pessoas p WHERE {where}", tuple(params)).fetchone()[0] or 0)
         rows = conn.execute(
@@ -409,12 +422,13 @@ def people_export_dataset(
     *,
     q: str = "",
     status: str = "",
+    city: str = "",
     columns: list[str] | tuple[str, ...] | None = None,
     preset: str = DEFAULT_PEOPLE_EXPORT_PRESET,
 ) -> dict[str, Any]:
     preset_key = _resolve_people_export_preset(preset)
     selected_columns = resolve_people_export_columns(list(columns or []), preset_key)
-    rows, total = _people_export_rows(q=q, status=status)
+    rows, total = _people_export_rows(q=q, status=status, city=city)
     dataset = Dataset(title="Pessoas")
     dataset.headers = [PEOPLE_EXPORT_FIELD_MAP[column]["label"] for column in selected_columns]
     for row in rows:
@@ -425,6 +439,7 @@ def people_export_dataset(
         "shown": len(rows),
         "q": q,
         "status": status,
+        "city": city,
         "preset": preset_key,
         "columns": selected_columns,
     }

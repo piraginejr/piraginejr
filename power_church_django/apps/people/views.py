@@ -61,12 +61,13 @@ def index(request: HttpRequest) -> HttpResponse:
         "title": "Pessoas",
         "q": request.GET.get("q", ""),
         "status": request.GET.get("status", ""),
+        "city": request.GET.get("city", ""),
         "can_delete_people": _can_delete_people(request),
         "people": None,
         "export_options": people_export_form_context(),
     }
     try:
-        context["people"] = list_people(q=context["q"], status=context["status"])
+        context["people"] = list_people(q=context["q"], status=context["status"], city=context["city"])
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/list.html", context)
@@ -75,11 +76,12 @@ def index(request: HttpRequest) -> HttpResponse:
 def export(request: HttpRequest) -> HttpResponse:
     q = request.GET.get("q", "")
     status = request.GET.get("status", "")
+    city = request.GET.get("city", "")
     preset = request.GET.get("preset", "")
     columns = [value for value in request.GET.getlist("column") if value.strip()]
     export_format = request.GET.get("format", "xlsx")
     try:
-        export_data = people_export_dataset(q=q, status=status, columns=columns, preset=preset)
+        export_data = people_export_dataset(q=q, status=status, city=city, columns=columns, preset=preset)
     except LegacyDatabaseError as exc:
         messages.error(request, str(exc))
         return redirect("/people/")
@@ -93,6 +95,7 @@ def export(request: HttpRequest) -> HttpResponse:
             after={
                 "q": q,
                 "status": status,
+                "city": city,
                 "formato": export_format,
                 "preset": export_data["preset"],
                 "colunas": export_data["columns"],
@@ -188,6 +191,7 @@ def families(request: HttpRequest) -> HttpResponse:
         cep = request.POST.get("cep", "")
         mode = request.POST.get("mode", "all")
         category = request.POST.get("category", "all")
+        household_kind = request.POST.get("household_kind", "all")
         q = request.POST.get("q", "")
         review = request.POST.get("review", "all")
         if request.POST.get("family_profile_action") == "update_household_profile":
@@ -199,6 +203,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     mode=mode,
                     review=review,
                     category=category,
+                    household_kind=household_kind,
                 )
                 person_ids_blob = str(request.POST.get("person_ids") or "")
                 target_group = next(
@@ -227,6 +232,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     "cep": cep,
                     "mode": mode,
                     "category": category,
+                    "household_kind": household_kind,
                     "q": q,
                     "review": review,
                 }
@@ -269,6 +275,7 @@ def families(request: HttpRequest) -> HttpResponse:
                 "cep": cep,
                 "mode": mode,
                 "category": category,
+                "household_kind": household_kind,
                 "q": q,
                 "review": review,
             }
@@ -282,6 +289,7 @@ def families(request: HttpRequest) -> HttpResponse:
         "mode": request.GET.get("mode", "all"),
         "review": request.GET.get("review", "all"),
         "category": request.GET.get("category", "all"),
+        "household_kind": request.GET.get("household_kind", "all"),
     }
     try:
         context["families"] = family_registry_dashboard(
@@ -291,6 +299,7 @@ def families(request: HttpRequest) -> HttpResponse:
             mode=context["mode"],
             review=context["review"],
             category=context["category"],
+            household_kind=context["household_kind"],
         )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)

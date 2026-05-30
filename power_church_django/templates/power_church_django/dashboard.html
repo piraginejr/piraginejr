@@ -20,6 +20,16 @@
         <strong>{{ summary.people_total }}</strong>
         <span class="muted">{{ summary.active_members }} membros ativos</span>
       </a>
+      <a class="card" href="/people/families/?section=organized">
+        <span class="label">Domicilios da base</span>
+        <strong>{{ summary.household_total }}</strong>
+        <span class="muted">{{ summary.household_family_groups }} familias e {{ summary.household_single_groups }} unipessoais</span>
+      </a>
+      <a class="card" href="/people/?status=membro_ativo&city=Niteroi">
+        <span class="label">Quorum em Niteroi</span>
+        <strong>{{ summary.active_members_niteroi }}</strong>
+        <span class="muted">membros ativos moradores em Niteroi</span>
+      </a>
       <a class="card" href="/contributions/">
         <span class="label">Contribuicoes</span>
         <strong>{{ summary.contributions_count }}</strong>

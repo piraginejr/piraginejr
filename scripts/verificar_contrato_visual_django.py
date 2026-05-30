@@ -86,6 +86,16 @@ def build_checks(db_path: Path) -> list[Check]:
         return body.decode("utf-8", errors="replace")
 
     checks: list[Check] = []
+    dashboard_html = get("/")
+    ok, detail = _contains_all(
+        dashboard_html,
+        [
+            "Dashboard operacional",
+            "Domicilios da base",
+            "Quorum em Niteroi",
+        ],
+    )
+    checks.append(Check("Dashboard expone domicilios e quorum de Niteroi", "OK" if ok else "FALHA", detail))
     imports_html = get("/imports/")
     ok, detail = _contains_all(
         imports_html,
@@ -175,6 +185,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Cadastro basico",
             "Contatos",
             "Familias e votacao",
+            "Cidade",
             "Selecionar tudo",
             f"Mostrando {people_data['total']} de {people_data['total']} registros",
         ],
@@ -184,7 +195,7 @@ def build_checks(db_path: Path) -> list[Check]:
     ok, detail = _contains_all(
         families_html,
         [
-            "Nucleos organizados",
+            "Todos os domicilios",
             "Nome automatico:",
             "Cabeca da familia",
             "Salvar identidade familiar",
@@ -192,6 +203,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Familias estendidas",
             "Situacao do domicilio",
             "Contribuicao na familia",
+            "Unipessoal",
             "Imprimir lista",
         ],
     )

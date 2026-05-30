@@ -298,6 +298,7 @@ paths = [
     "/",
     "/branding/logo",
     "/people/",
+    "/people/?status=membro_ativo&city=Niteroi",
     "/people/new/",
     "/people/families/",
     "/people/families/?section=audit",
@@ -439,6 +440,10 @@ for path in paths:
         raise AssertionError("dashboard nao incluiu atalho direto para envelopes digitalizados")
     if path == "/" and "/contributions/envelopes/new/" not in content:
         raise AssertionError("dashboard nao incluiu botao direto para subir envelope")
+    if path == "/":
+        for snippet in ["Domicilios da base", "Quorum em Niteroi"]:
+            if snippet not in content:
+                raise AssertionError(f"dashboard sem indicador estrategico: {snippet}")
     if path == "/people/":
         for snippet in [
             "Exportar XLSX",
@@ -446,6 +451,7 @@ for path in paths:
             "Exportacao dinamica de pessoas",
             "Cadastro basico",
             "Familias e votacao",
+            "Cidade",
             "Selecionar tudo",
             "Imprimir lista",
             f"Mostrando {people_data['total']} de {people_data['total']} registros",
@@ -454,6 +460,12 @@ for path in paths:
                 raise AssertionError(f"lista de pessoas sem exportacao import-export: {snippet}")
         if inactive_person and f"/people/{inactive_person['id']}/" in content:
             raise AssertionError("lista operacional de pessoas exibiu ficha excluida/inativa")
+    if path == "/people/?status=membro_ativo&city=Niteroi":
+        filtered_people = list_people(status="membro_ativo", city="Niteroi")
+        expected = f"Mostrando {filtered_people['total']} de {filtered_people['total']} registros"
+        for snippet in ["Cidade", "Niteroi", expected]:
+            if snippet not in content:
+                raise AssertionError(f"lista de quorum sem filtro esperado: {snippet}")
     if path == "/people/new/" or path == f"/people/{person_id}/edit/":
         for snippet in [
             'enctype="multipart/form-data"',
@@ -485,7 +497,7 @@ for path in paths:
     if path == "/people/families/":
         for snippet in [
             "Familias domiciliares",
-            "Nucleos organizados",
+            "Todos os domicilios",
             "Nome automatico:",
             "Cabeca da familia",
             "Salvar identidade familiar",
@@ -493,6 +505,7 @@ for path in paths:
             "Familias estendidas",
             "Situacao do domicilio",
             "Contribuicao na familia",
+            "Unipessoal",
         ]:
             if snippet not in content:
                 raise AssertionError(f"familias domiciliares Django sem trecho esperado: {snippet}")

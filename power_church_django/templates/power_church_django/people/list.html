@@ -6,7 +6,7 @@
       <p class="badge">Cadastro</p>
       <h1>Pessoas</h1>
       {% if people %}
-        <p>Mostrando {{ people.shown }} de {{ people.total }} registros. A busca considera nome, codigo, CPF, e-mail e telefone.</p>
+        <p>Mostrando {{ people.shown }} de {{ people.total }} registros. A busca considera nome, codigo, CPF, e-mail e telefone, com filtro adicional de cidade quando necessario.</p>
       {% endif %}
     </div>
     <div class="actions no-print">
@@ -14,8 +14,8 @@
       <a class="button secondary" href="/people/families/">Familias domiciliares</a>
       <a class="button secondary" href="/people/imports/">Importar pessoas</a>
       {% if can_delete_people %}<a class="button secondary" href="/people/trash/">Lixeira segura</a>{% endif %}
-      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&preset=cadastro_basico&format=xlsx">Exportar XLSX</a>
-      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&preset=cadastro_basico&format=csv">Exportar CSV</a>
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=xlsx">Exportar XLSX</a>
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=csv">Exportar CSV</a>
       <a class="button secondary" href="#exportacao-dinamica">Exportacao dinamica</a>
       <button type="button" onclick="window.print()">Imprimir lista</button>
     </div>
@@ -36,6 +36,10 @@
           {% endfor %}
         </select>
       </label>
+      <label>
+        Cidade
+        <input name="city" value="{{ city }}" placeholder="Ex.: Niteroi">
+      </label>
       <button type="submit">Filtrar</button>
       <a class="button secondary" href="/people/">Limpar</a>
     </form>
@@ -52,6 +56,7 @@
     <form method="get" action="/people/export/" data-export-builder>
       <input type="hidden" name="q" value="{{ q }}">
       <input type="hidden" name="status" value="{{ status }}">
+      <input type="hidden" name="city" value="{{ city }}">
       <div class="form-grid">
         <label>
           Preset

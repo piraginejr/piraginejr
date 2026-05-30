@@ -211,6 +211,24 @@ def dashboard_summary() -> dict[str, Any]:
         active_members = int(
             scalar(conn, "SELECT COUNT(*) FROM pessoas WHERE ativo = 1 AND status = 'membro_ativo'") or 0
         )
+        active_members_niteroi = int(
+            scalar(
+                conn,
+                """
+                SELECT COUNT(*)
+                  FROM pessoas p
+                 WHERE p.ativo = 1
+                   AND p.status = 'membro_ativo'
+                   AND EXISTS (
+                        SELECT 1
+                          FROM pessoa_enderecos pe
+                         WHERE pe.pessoa_id = p.id
+                           AND NORMALIZE_MATCH(COALESCE(pe.cidade, '')) = 'NITEROI'
+                   )
+                """,
+            )
+            or 0
+        )
         contributors_total = int(scalar(conn, "SELECT COUNT(*) FROM contribuintes WHERE ativo = 1") or 0)
         contributions_count = int(scalar(conn, "SELECT COUNT(*) FROM contribuicoes WHERE ativo = 1") or 0)
         contributions_total = float(scalar(conn, "SELECT COALESCE(SUM(valor), 0) FROM contribuicoes WHERE ativo = 1") or 0)
@@ -296,10 +314,12 @@ def dashboard_summary() -> dict[str, Any]:
                 """
             ).fetchall()
         ]
+    household_summary = organized_family_nuclei(q="", cep="", review="all", household_kind="all")
 
     return {
         "people_total": people_total,
         "active_members": active_members,
+        "active_members_niteroi": active_members_niteroi,
         "contributors_total": contributors_total,
         "contributions_count": contributions_count,
         "contributions_total": contributions_total,
@@ -312,19 +332,36 @@ def dashboard_summary() -> dict[str, Any]:
         "pix_lots": pix_lots,
         "total_lots": statement_lots + pix_lots,
         "pending_bank_reviews": pending_pix + pending_statements,
+        "household_total": household_summary["total"],
+        "household_family_groups": household_summary["family_groups"],
+        "household_single_groups": household_summary["single_groups"],
+        "household_review_groups": household_summary["review_groups"],
         "months": months,
         "people_statuses": statuses,
     }
 
 
-def list_people(q: str = "", status: str = "", limit: int | None = None) -> dict[str, Any]:
+def list_people(q: str = "", status: str = "", city: str = "", limit: int | None = None) -> dict[str, Any]:
     q = (q or "").strip()
     status = (status or "").strip()
+    city = normalize_query(city)
     clauses = ["ativo = 1"]
     params: list[Any] = []
     if status:
         clauses.append("COALESCE(status, '') = ?")
         params.append(status)
+    if city:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                  FROM pessoa_enderecos pe
+                 WHERE pe.pessoa_id = pessoas.id
+                   AND NORMALIZE_MATCH(COALESCE(pe.cidade, '')) = ?
+            )
+            """
+        )
+        params.append(normalize_match_name(city))
     if q:
         clauses.append(_person_search_clause())
         params.extend(_person_search_params(q))
@@ -378,6 +415,7 @@ def list_people(q: str = "", status: str = "", limit: int | None = None) -> dict
         "shown": len(items),
         "q": q,
         "status": status,
+        "city": city,
         "status_options": status_options,
         "limit": limit_value or total,
     }
@@ -872,6 +910,13 @@ def _family_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _household_short_name(value: object) -> str:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        return ""
+    return text.split()[0].title()
+
+
 def _household_profile_payload(people: list[dict[str, Any]]) -> dict[str, Any]:
     try:
         from power_church_django.services.family_profiles import household_profile_context
@@ -1153,16 +1198,24 @@ def _organized_family_payload(
         if row is None:
             continue
         person = _family_person_from_row(row)
+        person["nome_curto"] = _household_short_name(person["nome"])
         person["financial"] = _family_person_financial_payload(person_id, contribution_index, contributor_index)
         unique_people.append(person)
     unique_people.sort(key=lambda item: normalize_match_name(item["nome"]))
-    if len(unique_people) < 2:
+    if not unique_people:
         return None
     alignment = _family_alignment_payload(unique_people)
     financial = _family_financial_summary(unique_people)
     surname_label = _organized_family_surname_label(unique_people)
     profile = _household_profile_payload(unique_people)
     member_names = ", ".join(person["nome"] for person in unique_people)
+    member_short_names = ", ".join(person["nome_curto"] for person in unique_people if person.get("nome_curto"))
+    household_kind = "unipessoal" if len(unique_people) == 1 else "familiar"
+    other_member_short_names = ", ".join(
+        person["nome_curto"]
+        for person in unique_people
+        if person.get("nome_curto") and moneyless_int(person.get("id")) != moneyless_int(profile.get("head_person_id"))
+    )
     return {
         "label": profile["display_name_effective"],
         "automatic_label": profile["display_name_auto"],
@@ -1176,6 +1229,11 @@ def _organized_family_payload(
         "people": unique_people,
         "member_count": len(unique_people),
         "member_names": member_names,
+        "member_short_names": member_short_names,
+        "other_member_short_names": other_member_short_names,
+        "member_tag": member_short_names if len(unique_people) > 1 else "Unipessoal",
+        "household_kind": household_kind,
+        "household_kind_label": "Unipessoal" if household_kind == "unipessoal" else "Familia domiciliar",
         "status_summary": _family_status_summary(unique_people),
         "alignment_status": alignment["status"],
         "alignment_badge": alignment["badge"],
@@ -1374,12 +1432,13 @@ def family_nuclei_dashboard(
     }
 
 
-def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> dict[str, Any]:
+def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all", household_kind: str = "all") -> dict[str, Any]:
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
     cep_filter = _digits_only(cep)
     review = normalize_query(review) or "all"
+    household_kind = normalize_query(household_kind) or "all"
     with connect_legacy() as conn:
         person_rows = conn.execute(
             """
@@ -1467,9 +1526,19 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> 
         if payload is None:
             continue
         nuclei.append(payload)
+    assigned_ids = {person["id"] for group in nuclei for person in group["people"]}
+    for person_id in sorted(primary_rows):
+        if person_id in assigned_ids:
+            continue
+        payload = _organized_family_payload([person_id], primary_rows, contribution_index, contributor_index)
+        if payload is None:
+            continue
+        nuclei.append(payload)
     total_groups = len(nuclei)
     total_people = len({person["id"] for group in nuclei for person in group["people"]})
     total_review = sum(1 for group in nuclei if group["needs_review"])
+    family_groups = sum(1 for group in nuclei if group.get("household_kind") == "familiar")
+    single_groups = sum(1 for group in nuclei if group.get("household_kind") == "unipessoal")
     if cep_filter:
         nuclei = [
             group
@@ -1478,6 +1547,10 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> 
         ]
     if query_key or digits:
         nuclei = [group for group in nuclei if _organized_family_matches_query(group, query_key, digits)]
+    if household_kind == "familiar":
+        nuclei = [group for group in nuclei if group.get("household_kind") == "familiar"]
+    elif household_kind == "unipessoal":
+        nuclei = [group for group in nuclei if group.get("household_kind") == "unipessoal"]
     if review == "audit":
         nuclei = [group for group in nuclei if group["needs_review"]]
     elif review == "alinhados":
@@ -1497,6 +1570,9 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all") -> 
         "q": query,
         "cep": cep,
         "review": review,
+        "household_kind": household_kind,
+        "family_groups": family_groups,
+        "single_groups": single_groups,
     }
 
 
@@ -1567,13 +1643,14 @@ def family_registry_dashboard(
     mode: str = "all",
     review: str = "all",
     category: str = "all",
+    household_kind: str = "all",
 ) -> dict[str, Any]:
     section = normalize_query(section) or "organized"
     if section not in {"organized", "audit", "extended"}:
         section = "organized"
     audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q, category=category)
-    organized = organized_family_nuclei(q=q, cep=cep, review=review)
-    extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all")["items"], q=q, review=review)
+    organized = organized_family_nuclei(q=q, cep=cep, review=review, household_kind=household_kind)
+    extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all", household_kind="all")["items"], q=q, review=review)
     return {
         "section": section,
         "q": normalize_query(q),
@@ -1581,6 +1658,7 @@ def family_registry_dashboard(
         "mode": mode,
         "review": review,
         "category": category,
+        "household_kind": household_kind,
         "audit": audit,
         "organized": organized,
         "extended": extended,
@@ -1590,6 +1668,8 @@ def family_registry_dashboard(
             "organized_groups": organized["total"],
             "organized_people": organized["total_people"],
             "organized_review_groups": organized["review_groups"],
+            "organized_family_groups": organized["family_groups"],
+            "organized_single_groups": organized["single_groups"],
             "extended_groups": extended["total"],
             "extended_nuclei": sum(cluster["nuclei_count"] for cluster in extended["items"]),
         },

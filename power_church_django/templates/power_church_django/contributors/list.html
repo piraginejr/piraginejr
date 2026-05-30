@@ -138,12 +138,30 @@
         </div>
         <span class="badge warn">{{ contributors.family_links|length }}</span>
       </div>
+      {% if contributors.family_links_smart_summary %}
+        <div class="summary-grid" style="margin-bottom:12px;">
+          {% for item in contributors.family_links_smart_summary %}
+            <div class="card">
+              <span class="label">{{ item.label }}</span>
+              <strong>{{ item.count }}</strong>
+              <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
+              <div class="muted small">{{ item.suggested_action }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% for block in contributors.family_links %}
         <div class="panel" style="box-shadow:none">
           <div class="section-head">
             <div>
               <h3><a href="/contributors/{{ block.contributor.id }}/">{{ block.contributor.nome }}</a></h3>
               <p class="muted">{{ block.contributor.documento|default:"sem documento" }} · {{ block.contributor.total_contribuido_fmt }} · {{ block.contributor.recorrencia_competencias }} competencia(s)</p>
+              <div class="legend">
+                <span class="badge warn">{{ block.smart_audit.category_label }}</span>
+                <span class="badge">{{ block.smart_audit.risk_label }}</span>
+                <span class="badge">{{ block.smart_audit.confidence_label }}</span>
+              </div>
+              <p class="muted small" style="margin-top:8px;">{{ block.smart_audit.suggested_action }} {{ block.smart_audit.operator_hint }}</p>
             </div>
             <form class="no-print" method="post" action="/contributors/{{ block.contributor.id }}/">
               {% csrf_token %}

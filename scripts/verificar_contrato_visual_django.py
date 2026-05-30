@@ -158,6 +158,13 @@ def build_checks(db_path: Path) -> list[Check]:
             "checkboxes usam layout compacto",
         )
     )
+    contributor_links_html = get("/contributors/?mode=recorrentes&tag=integracao&section=family_links")
+    contributor_links_data = list_contributors(mode="recorrentes", tags=["integracao"], section="family_links", limit=10000)
+    contributor_link_tokens = ["Contribuintes recorrentes ligados a familias ja cadastradas"]
+    if contributor_links_data["family_links"]:
+        contributor_link_tokens.extend(["Criar frequentador", "Vincular a esta pessoa", "Risco"])
+    ok, detail = _contains_all(contributor_links_html, contributor_link_tokens)
+    checks.append(Check("Contribuintes exibem auditoria inteligente de integracao", "OK" if ok else "FALHA", detail))
     people_data = list_people()
     people_html = get("/people/")
     ok, detail = _contains_all(
@@ -197,6 +204,9 @@ def build_checks(db_path: Path) -> list[Check]:
             "Aplicacao em lote",
             "Criar familias selecionadas",
             "Ignorar sugestoes selecionadas",
+            "Padrao inteligente da auditoria",
+            "Categoria inteligente",
+            "Acao sugerida:",
         ],
     )
     checks.append(Check("Familias preservam fila de auditoria", "OK" if ok else "FALHA", detail))
@@ -211,6 +221,16 @@ def build_checks(db_path: Path) -> list[Check]:
         ],
     )
     checks.append(Check("Familias estendidas agrupam sobrenomes e nucleos", "OK" if ok else "FALHA", detail))
+    audit_html = get("/audit/")
+    ok, detail = _contains_all(
+        audit_html,
+        [
+            "Classificacao",
+            "Descricao / Acao sugerida",
+            "Risco",
+        ],
+    )
+    checks.append(Check("Auditoria operacional exibe classificacao inteligente", "OK" if ok else "FALHA", detail))
     contributions_data = list_contributions()
     contributions_html = get("/contributions/")
     ok, detail = _contains_all(
@@ -367,6 +387,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Conteudo",
             "E-mails do sistema",
             "Reenviar",
+            "Classificacao",
         ],
     )
     checks.append(Check("Auditoria de e-mails exibe relatorio consolidado com filtro e reenvio", "OK" if ok else "FALHA", detail))

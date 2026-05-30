@@ -11,6 +11,7 @@ from django.core.paginator import Paginator
 from django.db import OperationalError, ProgrammingError
 from django.utils import timezone
 
+from power_church_django.services.smart_audit import classify_email_audit, summarize_smart_audit
 
 def _audit_model():
     return apps.get_model("audit", "AuditEvent")
@@ -201,6 +202,7 @@ def list_system_email_events(
                     "can_resend": bool(item.legacy_receipt_id),
                 }
             )
+            rows[-1]["smart_audit"] = classify_email_audit(rows[-1])
 
     if kind in {"", "extrato"}:
         statement_actions = ["enviar_extrato_email_django"]
@@ -249,6 +251,7 @@ def list_system_email_events(
                     "can_resend": bool(event_person_id and destination),
                 }
             )
+            rows[-1]["smart_audit"] = classify_email_audit(rows[-1])
 
     rows.sort(key=lambda item: item["sort_date"], reverse=True)
     paginator = Paginator(rows, page_size)
@@ -260,6 +263,7 @@ def list_system_email_events(
         "status": status,
         "q": q,
         "person_id": person_id,
+        "smart_summary": summarize_smart_audit(rows),
         "items": list(page_obj.object_list),
         "kinds": kinds,
         "statuses": statuses,

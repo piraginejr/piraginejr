@@ -64,6 +64,15 @@
             <option value="hipoteses" {% if mode == "hipoteses" %}selected{% endif %}>Hipoteses / auditoria</option>
           </select>
         </label>
+        <label>
+          Categoria inteligente
+          <select name="category">
+            <option value="all" {% if category == "all" %}selected{% endif %}>Todas</option>
+            {% for item in families.audit.smart_summary %}
+              <option value="{{ item.key }}" {% if category == item.key %}selected{% endif %}>{{ item.label }} ({{ item.count }})</option>
+            {% endfor %}
+          </select>
+        </label>
       {% else %}
         <label>
           Situacao do domicilio

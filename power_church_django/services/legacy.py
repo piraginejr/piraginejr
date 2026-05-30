@@ -32,6 +32,12 @@ from power_church_core.normalization import (
     valid_cpf,
 )
 from power_church_django.services.photos import member_photo_url
+from power_church_django.services.smart_audit import (
+    classify_contributor_link_block,
+    classify_family_audit_group,
+    classify_import_pendency,
+    summarize_smart_audit,
+)
 
 
 PENDING_REVIEW_STATUSES = {
@@ -1219,9 +1225,11 @@ def family_nuclei_dashboard(
     mode: str = "all",
     q: str = "",
     limit: int | None = None,
+    category: str = "all",
 ) -> dict[str, Any]:
     cep_filter = "".join(ch for ch in str(cep or "") if ch.isdigit())
     mode = normalize_query(mode) or "all"
+    category = normalize_query(category).lower() or "all"
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
@@ -1312,6 +1320,7 @@ def family_nuclei_dashboard(
             reason="Mesmo CEP, logradouro e numero, com complemento ausente ou parcial que ainda precisa de auditoria humana.",
             include_complement=False,
         )
+        payload["smart_audit"] = classify_family_audit_group([person.get("complemento") for person in payload.get("people") or []])
         payload["missing_relationships"] = _family_group_missing_relationships(payload, relationship_pairs, suppressed_pairs)
         if payload["missing_relationships"] > 0:
             hypothesis_payloads.append(payload)
@@ -1321,6 +1330,12 @@ def family_nuclei_dashboard(
     if query_key or digits:
         exact_payloads = [payload for payload in exact_payloads if _family_group_matches_query(payload, query_key, digits)]
         hypothesis_payloads = [payload for payload in hypothesis_payloads if _family_group_matches_query(payload, query_key, digits)]
+    if category != "all":
+        hypothesis_payloads = [
+            payload
+            for payload in hypothesis_payloads
+            if str((payload.get("smart_audit") or {}).get("category_key") or "").lower() == category
+        ]
 
     exact_payloads.sort(key=lambda item: (-item["status_summary"]["total"], item["label"]))
     hypothesis_payloads.sort(key=lambda item: (-item["status_summary"]["total"], item["label"]))
@@ -1340,10 +1355,12 @@ def family_nuclei_dashboard(
     return {
         "cep": cep,
         "mode": mode,
+        "category": category,
         "q": query,
         "groups": selected_groups,
         "automatic_groups": exact_payloads,
         "hypothesis_groups": hypothesis_payloads,
+        "smart_summary": summarize_smart_audit(total_hypothesis_payloads),
         "summary": {
             "automatic_groups": len(total_exact_payloads),
             "automatic_people": len(exact_people_ids),
@@ -1549,11 +1566,12 @@ def family_registry_dashboard(
     section: str = "organized",
     mode: str = "all",
     review: str = "all",
+    category: str = "all",
 ) -> dict[str, Any]:
     section = normalize_query(section) or "organized"
     if section not in {"organized", "audit", "extended"}:
         section = "organized"
-    audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q)
+    audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q, category=category)
     organized = organized_family_nuclei(q=q, cep=cep, review=review)
     extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all")["items"], q=q, review=review)
     return {
@@ -1562,6 +1580,7 @@ def family_registry_dashboard(
         "cep": cep,
         "mode": mode,
         "review": review,
+        "category": category,
         "audit": audit,
         "organized": organized,
         "extended": extended,
@@ -3976,7 +3995,9 @@ def build_contributor_family_links(
         if not matches:
             continue
         matches.sort(key=lambda item: (0 if item["relation"] == "nuclear" else 1, str(item["nome"])))
-        blocks.append({"contributor": contributor, "matches": matches[:limit_people], "matches_count": len(matches)})
+        block = {"contributor": contributor, "matches": matches[:limit_people], "matches_count": len(matches)}
+        block["smart_audit"] = classify_contributor_link_block(block)
+        blocks.append(block)
     blocks.sort(
         key=lambda item: (
             -moneyless_int(item["contributor"].get("prioridade_integracao")),
@@ -4239,6 +4260,7 @@ def list_contributors(
         "type_options": type_options,
         "family_groups": family_groups,
         "family_links": family_links,
+        "family_links_smart_summary": summarize_smart_audit(family_links),
         "summary": {
             "total": len(summary_source),
             "linked": sum(1 for item in summary_source if moneyless_int(item["pessoa_id"])),
@@ -5433,6 +5455,8 @@ def _duplicate_member_number_items(conn: sqlite3.Connection) -> list[dict[str, A
                     "origem": "cadastro",
                 }
             )
+    for item in items:
+        item["smart_audit"] = classify_import_pendency(item)
     return items
 
 
@@ -5461,7 +5485,7 @@ def _import_audit_items(conn: sqlite3.Connection, tipo: str = "", severidade: st
         """,
         tuple(params),
     ).fetchall()
-    return [
+    items = [
         {
             "id": row["id"],
             "tipo": row["tipo"] or "",
@@ -5478,6 +5502,9 @@ def _import_audit_items(conn: sqlite3.Connection, tipo: str = "", severidade: st
         }
         for row in rows
     ]
+    for item in items:
+        item["smart_audit"] = classify_import_pendency(item)
+    return items
 
 
 def _audit_items(conn: sqlite3.Connection, tipo: str = "", severidade: str = "") -> list[dict[str, Any]]:
@@ -5572,6 +5599,7 @@ def operational_audit(tipo: str = "", severidade: str = "", page: int = 1, page_
         "tipo": tipo,
         "severidade": severidade,
         "summary": summary_rows,
+        "smart_summary": summarize_smart_audit(all_items),
         "people": people_rows,
         "items": [_format_operational_audit_item(item) for item in paged_items],
         "total": total_items,
@@ -5596,6 +5624,10 @@ def _format_operational_audit_item(item: dict[str, Any]) -> dict[str, Any]:
         "severidade": item.get("severidade") or "",
         "descricao": item.get("descricao") or "",
         "acao_sugerida": item.get("acao_sugerida") or "",
+        "smart_category": (item.get("smart_audit") or {}).get("category_label") or "",
+        "smart_risk": (item.get("smart_audit") or {}).get("risk_label") or "",
+        "smart_confidence": (item.get("smart_audit") or {}).get("confidence_label") or "",
+        "smart_operator_hint": (item.get("smart_audit") or {}).get("operator_hint") or "",
         "numero_linha": item.get("numero_linha") or "",
         "pessoa_id": person_id,
         "nome": item.get("nome") or "",

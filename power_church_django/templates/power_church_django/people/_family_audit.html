@@ -26,6 +26,27 @@
   </div>
 </section>
 
+{% if families.audit.smart_summary %}
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <h2>Padrao inteligente da auditoria</h2>
+        <p class="muted">O sistema agora classifica a ambiguidade, informa risco e sugere a melhor acao operacional antes da decisao humana.</p>
+      </div>
+    </div>
+    <div class="summary-grid">
+      {% for item in families.audit.smart_summary %}
+        <div class="card">
+          <span class="label">{{ item.label }}</span>
+          <strong>{{ item.count }}</strong>
+          <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
+          <div class="muted small">{{ item.suggested_action }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
 {% if families.audit.groups %}
   <form method="post">
     {% csrf_token %}
@@ -34,6 +55,7 @@
     <input type="hidden" name="review" value="{{ review }}">
     <input type="hidden" name="cep" value="{{ cep }}">
     <input type="hidden" name="mode" value="{{ mode }}">
+    <input type="hidden" name="category" value="{{ category }}">
     <section class="panel no-print">
       <div class="section-head">
         <div>
@@ -59,12 +81,16 @@
             <p>{{ group.address }}<br><span class="muted">{{ group.reason }}</span></p>
             <div class="legend">
               <span class="badge {% if group.confidence == 'Alta confianca' %}ok{% else %}warn{% endif %}">{{ group.confidence }}</span>
+              <span class="badge danger">{{ group.smart_audit.category_label }}</span>
+              <span class="badge">{{ group.smart_audit.risk_label }}</span>
+              <span class="badge">{{ group.smart_audit.confidence_label }}</span>
               <span class="badge">Pendentes {{ group.missing_relationships }}</span>
               <span class="badge">SA {{ group.status_summary.sa }}</span>
               <span class="badge">Outros {{ group.status_summary.outros }}</span>
               <span class="badge">Total {{ group.status_summary.total }}</span>
               <span class="badge">CEP {{ group.cep }}</span>
             </div>
+            <p class="muted" style="margin-top:10px;"><strong>Acao sugerida:</strong> {{ group.smart_audit.suggested_action }}<br>{{ group.smart_audit.operator_hint }}</p>
           </div>
           <div class="actions no-print">
             <button type="submit" name="single_person_ids" value="{{ group.person_ids }}">Criar familia domiciliar deste grupo</button>

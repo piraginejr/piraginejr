@@ -187,6 +187,7 @@ def families(request: HttpRequest) -> HttpResponse:
         section = request.POST.get("section", "audit")
         cep = request.POST.get("cep", "")
         mode = request.POST.get("mode", "all")
+        category = request.POST.get("category", "all")
         q = request.POST.get("q", "")
         review = request.POST.get("review", "all")
         if request.POST.get("family_profile_action") == "update_household_profile":
@@ -197,6 +198,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     section=section,
                     mode=mode,
                     review=review,
+                    category=category,
                 )
                 person_ids_blob = str(request.POST.get("person_ids") or "")
                 target_group = next(
@@ -224,6 +226,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     "section": section,
                     "cep": cep,
                     "mode": mode,
+                    "category": category,
                     "q": q,
                     "review": review,
                 }
@@ -265,6 +268,7 @@ def families(request: HttpRequest) -> HttpResponse:
                 "section": section,
                 "cep": cep,
                 "mode": mode,
+                "category": category,
                 "q": q,
                 "review": review,
             }
@@ -277,6 +281,7 @@ def families(request: HttpRequest) -> HttpResponse:
         "section": request.GET.get("section", "organized"),
         "mode": request.GET.get("mode", "all"),
         "review": request.GET.get("review", "all"),
+        "category": request.GET.get("category", "all"),
     }
     try:
         context["families"] = family_registry_dashboard(
@@ -285,6 +290,7 @@ def families(request: HttpRequest) -> HttpResponse:
             section=context["section"],
             mode=context["mode"],
             review=context["review"],
+            category=context["category"],
         )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)

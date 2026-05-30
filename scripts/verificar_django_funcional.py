@@ -65,7 +65,8 @@ from django.conf import settings
 from django.test import Client
 
 from power_church_django.services.access_control import access_control_snapshot
-from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people, list_secure_people_trash
+from power_church_django.services.django_audit import list_system_email_events
+from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people, list_secure_people_trash, operational_audit
 from power_church_django.services.legacy_bank_write import _parse_upload_with_provider, _parsed_summary, compare_pdf_upload_providers
 from power_church_django.services.legacy_write import connect_legacy_write, ensure_manual_contributor, _resolve_primary_envelope_identity
 from power_church_core.normalization import contribution_report_identity
@@ -163,11 +164,22 @@ if int(families_audit_data["audit"]["summary"]["shown_groups"] or 0) != expected
     raise AssertionError(
         f"fila de auditoria das familias ainda esta limitada: {families_audit_data['audit']['summary']['shown_groups']} de {expected_audit_groups}"
     )
+if not families_audit_data["audit"].get("smart_summary"):
+    raise AssertionError("auditoria de familias ficou sem resumo inteligente")
 access = access_control_snapshot()
 if not access["installed"]:
     raise AssertionError("permissoes Power Church nao instaladas no Django")
 if access["group_count"] < 5:
     raise AssertionError("grupos padrao do Django nao instalados")
+operational_snapshot = operational_audit(page_size=200)
+if not operational_snapshot.get("smart_summary"):
+    raise AssertionError("auditoria operacional ficou sem resumo inteligente")
+contributor_link_snapshot = list_contributors(mode="recorrentes", tags=["integracao"], section="family_links", limit=10000)
+if contributor_link_snapshot["family_links"] and not contributor_link_snapshot.get("family_links_smart_summary"):
+    raise AssertionError("integracao de contribuintes ficou sem resumo inteligente")
+email_snapshot = list_system_email_events(page_size=120)
+if email_snapshot["items"] and not email_snapshot.get("smart_summary"):
+    raise AssertionError("auditoria de e-mails ficou sem resumo inteligente")
 
 with connect_legacy() as conn:
     try:
@@ -467,7 +479,7 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"auditoria Django sem trecho esperado: {snippet}")
     if path == "/audit/?modo=emails":
-        for snippet in ["Relatorio de e-mails enviados", "Consolida recibos e extratos enviados pelo sistema", "Pessoa", "Conteudo", "Destino", "E-mails do sistema", "Reenviar"]:
+        for snippet in ["Relatorio de e-mails enviados", "Consolida recibos e extratos enviados pelo sistema", "Pessoa", "Conteudo", "Destino", "E-mails do sistema", "Reenviar", "Classificacao"]:
             if snippet not in content:
                 raise AssertionError(f"auditoria de e-mails sem trecho esperado: {snippet}")
     if path == "/people/families/":
@@ -491,6 +503,9 @@ for path in paths:
             "Hipoteses para auditoria",
             "Ignorar sugestoes selecionadas",
             "Criar familias selecionadas",
+            "Padrao inteligente da auditoria",
+            "Categoria inteligente",
+            "Acao sugerida:",
         ]:
             if snippet not in content:
                 raise AssertionError(f"auditoria de familias Django sem trecho esperado: {snippet}")
@@ -560,6 +575,12 @@ for path in paths:
                 raise AssertionError("filtro sem vinculo retornou contribuinte vinculado")
         if "section=family_links" in path and "Contribuintes recorrentes ligados a familias ja cadastradas" not in content:
             raise AssertionError("central de contribuintes sem painel de associacoes familiares")
+        if "section=family_links" in path:
+            data = list_contributors(mode="recorrentes", tags=["integracao"], section="family_links", limit=10000)
+            if data["family_links"]:
+                for snippet in ["Criar frequentador", "Vincular a esta pessoa", "Risco"]:
+                    if snippet not in content:
+                        raise AssertionError(f"central de contribuintes sem auditoria inteligente de integracao: {snippet}")
         if "section=family_groups" in path and "Blocos familiares sugeridos" not in content:
             raise AssertionError("central de contribuintes sem painel de blocos familiares")
     if path == "/contributions/":

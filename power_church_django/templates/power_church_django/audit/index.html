@@ -68,6 +68,18 @@
           <button type="submit">Filtrar</button>
           <a class="button secondary" href="/audit/?modo=emails">Limpar</a>
         </form>
+        {% if email_audit.smart_summary %}
+          <div class="summary-grid" style="margin-top:12px;">
+            {% for item in email_audit.smart_summary %}
+              <div class="card">
+                <span class="label">{{ item.label }}</span>
+                <strong>{{ item.count }}</strong>
+                <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
+                <div class="muted small">{{ item.suggested_action }}</div>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if email_people %}
           <div class="summary-grid" style="margin-top:12px;">
             {% for person in email_people %}
@@ -91,12 +103,13 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Data</th><th>Tipo</th><th>Origem</th><th>Status</th><th>Pessoa</th><th>Destino</th><th>Assunto</th><th>Conteudo</th><th>Anexo</th><th>Ref.</th><th>Operador</th><th>Acao</th></tr></thead>
+            <thead><tr><th>Data</th><th>Tipo</th><th>Classificacao</th><th>Origem</th><th>Status</th><th>Pessoa</th><th>Destino</th><th>Assunto</th><th>Conteudo</th><th>Anexo</th><th>Ref.</th><th>Operador</th><th>Acao</th></tr></thead>
             <tbody>
               {% for item in email_audit.items %}
                 <tr>
                   <td>{{ item.data }}</td>
                   <td><span class="badge">{{ item.tipo }}</span></td>
+                  <td><span class="badge">{{ item.smart_audit.category_label }}</span><div class="muted small">{{ item.smart_audit.risk_label }}</div></td>
                   <td>{{ item.origem }}</td>
                   <td><span class="badge {% if item.status_key == 'falhou' %}danger{% elif item.status_key == 'enviado' %}ok{% endif %}">{{ item.status }}</span></td>
                   <td>{{ item.pessoa|default:"-" }}</td>
@@ -136,7 +149,7 @@
                   </td>
                 </tr>
               {% empty %}
-                <tr><td colspan="12">Nenhum e-mail auditado encontrado.</td></tr>
+                <tr><td colspan="13">Nenhum e-mail auditado encontrado.</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -371,6 +384,18 @@
       </section>
 
       <section class="panel">
+        {% if audit.smart_summary %}
+          <div class="summary-grid" style="margin-bottom:12px;">
+            {% for item in audit.smart_summary %}
+              <div class="card">
+                <span class="label">{{ item.label }}</span>
+                <strong>{{ item.count }}</strong>
+                <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
+                <div class="muted small">{{ item.suggested_action }}</div>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
         <h2>{{ audit.shown }} de {{ audit.total }} pendencia(s) exibida(s)</h2>
         <div class="legend no-print">
           {% if audit.has_previous %}<a class="button secondary" href="/audit/?{{ audit.previous_query }}">Pagina anterior</a>{% endif %}
@@ -378,12 +403,13 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Sev.</th><th>Tipo</th><th>Pessoa</th><th>Descricao / Acao sugerida</th><th>Origem</th></tr></thead>
+            <thead><tr><th>Sev.</th><th>Tipo</th><th>Classificacao</th><th>Pessoa</th><th>Descricao / Acao sugerida</th><th>Origem</th></tr></thead>
             <tbody>
               {% for row in audit.items %}
                 <tr>
                   <td><span class="badge {% if row.severidade == 'aviso' %}danger{% else %}ok{% endif %}">{{ row.severidade }}</span></td>
                   <td>{{ row.tipo }}</td>
+                  <td><span class="badge">{{ row.smart_category }}</span><div class="muted small">{{ row.smart_risk }} · {{ row.smart_confidence }}</div></td>
                   <td>
                     {% if row.pessoa_id %}
                       <a href="/people/{{ row.pessoa_id }}/">{{ row.nome }}</a>
@@ -392,11 +418,11 @@
                       Sem pessoa vinculada
                     {% endif %}
                   </td>
-                  <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div></td>
+                  <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div><div class="muted small">{{ row.smart_operator_hint }}</div></td>
                   <td><span class="badge">{{ row.origem }}</span></td>
                 </tr>
               {% empty %}
-                <tr><td colspan="5">Nenhuma pendencia encontrada.</td></tr>
+                <tr><td colspan="6">Nenhuma pendencia encontrada.</td></tr>
               {% endfor %}
             </tbody>
           </table>

@@ -34,7 +34,13 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 
 if /usr/sbin/lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
-  if /usr/bin/curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
+  CURRENT_PID="$(/usr/sbin/lsof -ti "tcp:$PORT" | head -n 1)"
+  CURRENT_COMMAND="$(/bin/ps -p "$CURRENT_PID" -o command= 2>/dev/null || true)"
+  NEED_RESTART=0
+  if [[ "$CURRENT_COMMAND" == *"manage.py runserver"* && "$CURRENT_COMMAND" == *"--noreload"* ]]; then
+    NEED_RESTART=1
+  fi
+  if [[ "$NEED_RESTART" -eq 0 ]] && /usr/bin/curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
     echo "Power Church Django ja esta rodando em $URL"
     if [[ "${POWER_CHURCH_DJANGO_NO_BROWSER:-0}" != "1" ]]; then
       /usr/bin/open "$URL"
@@ -45,8 +51,13 @@ if /usr/sbin/lsof -ti "tcp:$PORT" >/dev/null 2>&1; then
     exit 0
   fi
 
-  echo "Encontrei um processo na porta $PORT, mas ele nao respondeu ao teste HTTP."
-  echo "Reiniciando o servidor Django para evitar tela vazia ou travada..."
+  if [[ "$NEED_RESTART" -eq 1 ]]; then
+    echo "Encontrei um servidor Django antigo, sem autoreload, na porta $PORT."
+    echo "Reiniciando para carregar o codigo mais recente automaticamente..."
+  else
+    echo "Encontrei um processo na porta $PORT, mas ele nao respondeu ao teste HTTP."
+    echo "Reiniciando o servidor Django para evitar tela vazia ou travada..."
+  fi
   /usr/sbin/lsof -ti "tcp:$PORT" | while read -r existing_pid; do
     if [[ -n "$existing_pid" ]]; then
       /bin/kill "$existing_pid" >/dev/null 2>&1 || true
@@ -77,4 +88,11 @@ if [[ "${POWER_CHURCH_DJANGO_NO_BROWSER:-0}" != "1" ]]; then
   ) &
 fi
 
-exec "$PYTHON_BIN" "$DJANGO_DIR/manage.py" runserver "$HOST:$PORT" --noreload
+RUNSERVER_ARGS=("$HOST:$PORT")
+if [[ "${POWER_CHURCH_DJANGO_NO_RELOAD:-0}" == "1" ]]; then
+  RUNSERVER_ARGS+=("--noreload")
+else
+  echo "Autoreload Django ativado para refletir mudancas locais automaticamente."
+fi
+
+exec "$PYTHON_BIN" "$DJANGO_DIR/manage.py" runserver "${RUNSERVER_ARGS[@]}"

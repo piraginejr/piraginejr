@@ -830,6 +830,7 @@ for path in paths:
             "E-mail do recibo",
             "Salvar somente o padrao",
             "Gerar e enviar consolidado",
+            "Gerar recibo consolidado",
             "Ver recibos desta pessoa",
         ]:
             if snippet not in content:

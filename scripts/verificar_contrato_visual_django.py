@@ -370,6 +370,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "E-mail do recibo",
             "Salvar somente o padrao",
             "Gerar e enviar consolidado",
+            "Gerar recibo consolidado",
         ],
     )
     checks.append(Check("Recibos centralizam geracao na mesma tela", "OK" if ok else "FALHA", detail))

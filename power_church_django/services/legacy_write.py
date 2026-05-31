@@ -5579,7 +5579,7 @@ def _auto_issue_event_receipts(contribution_ids: list[int], *, actor: str = "") 
         return
 
 
-def create_receipt(payload: Any, actor: str = "") -> int:
+def create_receipt(payload: Any, actor: str = "", replace_existing: bool = False) -> int:
     person_id = moneyless_int(_form_value(payload, "pessoa_id"))
     getter = getattr(payload, "getlist", None)
     raw_ids = getter("contribuicao_id") if getter else payload.get("contribuicao_id", [])
@@ -5596,6 +5596,7 @@ def create_receipt(payload: Any, actor: str = "") -> int:
         emission_date=emission_date,
         notes=notes,
         actor=actor,
+        replace_existing=replace_existing,
     )
 
 

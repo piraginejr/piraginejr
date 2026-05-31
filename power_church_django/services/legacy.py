@@ -3828,18 +3828,30 @@ def receipt_new_context(person_id: int, date_start: str = "", date_end: str = ""
               JOIN tipos_contribuicao t ON t.id = co.tipo_contribuicao_id
               LEFT JOIN formas_recebimento f ON f.id = co.forma_recebimento_id
              WHERE {' AND '.join(clauses)}
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM recibo_itens ri
-                     JOIN recibos r ON r.id = ri.recibo_id
-                     WHERE ri.contribuicao_id = co.id
-                       AND r.status <> 'cancelado'
-                       AND r.cancelado_em IS NULL
-               )
              ORDER BY co.data_recebimento, co.id
             """,
             tuple(params),
         ).fetchall()
+        receipt_rows = conn.execute(
+            """
+            SELECT ri.contribuicao_id, r.id, r.numero, r.data_emissao
+              FROM recibo_itens ri
+              JOIN recibos r ON r.id = ri.recibo_id
+             WHERE r.pessoa_id = ?
+               AND r.status <> 'cancelado'
+               AND r.cancelado_em IS NULL
+            """,
+            (person_id,),
+        ).fetchall()
+    active_receipt_by_contribution: dict[int, dict[str, Any]] = {}
+    for row in receipt_rows:
+        contribution_id = moneyless_int(row["contribuicao_id"])
+        if contribution_id and contribution_id not in active_receipt_by_contribution:
+            active_receipt_by_contribution[contribution_id] = {
+                "id": moneyless_int(row["id"]),
+                "numero": row["numero"] or "",
+                "data": br_date(row["data_emissao"]),
+            }
     total = sum(float(row["valor"] or 0) for row in rows)
     return {
         "person": {
@@ -3860,6 +3872,7 @@ def receipt_new_context(person_id: int, date_start: str = "", date_end: str = ""
                 "tipo": row["tipo_nome"] or "",
                 "forma": row["forma_nome"] or "",
                 "valor_fmt": _money(row["valor"]),
+                "active_receipt": active_receipt_by_contribution.get(moneyless_int(row["id"])),
             }
             for row in rows
         ],

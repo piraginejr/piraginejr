@@ -122,7 +122,12 @@
                 <td>{{ item.data }}</td>
                 <td>{{ item.competencia|default:"-" }}</td>
                 <td>{{ item.tipo }}</td>
-                <td>{{ item.forma|default:"-" }}</td>
+                <td>
+                  {{ item.forma|default:"-" }}
+                  {% if item.active_receipt %}
+                    <div class="small muted">Recibo atual: {{ item.active_receipt.numero }} em {{ item.active_receipt.data }}</div>
+                  {% endif %}
+                </td>
                 <td class="num">{{ item.valor_fmt }}</td>
               </tr>
             {% empty %}

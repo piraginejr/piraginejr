@@ -810,7 +810,7 @@ def receipts(request: HttpRequest) -> HttpResponse:
                     messages.info(request, "E-mail da ficha atualizado durante o envio manual dos recibos.")
                 messages.success(request, f"{len(result['receipt_ids'])} recibo(s) gerado(s) por competencia.")
                 return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
-            receipt_id = create_receipt(request.POST, actor=actor)
+            receipt_id = create_receipt(request.POST, actor=actor, replace_existing=True)
             if action == "generate_and_send_consolidated":
                 email_updated = _maybe_update_person_email_for_manual_receipt(
                     person_id=person_id,
@@ -874,7 +874,7 @@ def receipt_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         person_id = request.POST.get("pessoa_id", "")
         try:
-            receipt_id = create_receipt(request.POST, actor=_actor(request))
+            receipt_id = create_receipt(request.POST, actor=_actor(request), replace_existing=True)
             messages.success(request, f"Recibo #{receipt_id} gerado com auditoria.")
             return redirect(f"/receipts/{receipt_id}/")
         except LegacyWriteError as exc:

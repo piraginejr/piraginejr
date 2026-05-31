@@ -59,7 +59,7 @@
     <section class="panel no-print" style="margin-bottom:18px;">
       <div class="section-head">
         <div>
-          <h3>1. Varios recibos por competencia</h3>
+          <h3>1. Gerar recibos por competencia</h3>
           <p class="muted">Use esta opcao quando quiser um recibo por competencia selecionada. Ideal para reemissao em lote da mesma pessoa.</p>
         </div>
         <span class="badge">{{ receipt_form.period_options|length }} competencia(s)</span>
@@ -88,7 +88,7 @@
     <section class="panel no-print" style="margin-bottom:18px;">
       <div class="section-head">
         <div>
-          <h3>2. Recibo consolidado do periodo filtrado</h3>
+          <h3>2. Gerar um recibo consolidado do periodo filtrado</h3>
           <p class="muted">As linhas abaixo entram no mesmo recibo e a soma delas compoe o valor total do documento.</p>
         </div>
         <span class="badge">{{ receipt_form.items|length }} linha(s)</span>
@@ -191,10 +191,10 @@
     </section>
 
     <div class="actions no-print">
-      <button type="submit" name="action" value="generate_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar varios recibos por competencia</button>
-      <button type="submit" name="action" value="generate_and_send_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar e enviar por competencia</button>
-      <button type="submit" name="action" value="generate_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar recibo consolidado</button>
-      <button type="submit" name="action" value="generate_and_send_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar e enviar consolidado</button>
+      <button type="submit" name="action" value="generate_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar recibos por competencia</button>
+      <button type="submit" name="action" value="generate_and_send_competence" {% if not receipt_form.period_options %}disabled{% endif %}>Gerar e enviar recibos por competencia</button>
+      <button type="submit" name="action" value="generate_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar um recibo consolidado</button>
+      <button type="submit" name="action" value="generate_and_send_consolidated" {% if not receipt_form.items %}disabled{% endif %}>Gerar e enviar recibo consolidado</button>
     </div>
   </form>
 

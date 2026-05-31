@@ -141,6 +141,7 @@ def _receipt_hub_query(
     person_lookup: str = "",
     form_date_start: str = "",
     form_date_end: str = "",
+    generated_receipt_ids: list[int] | None = None,
 ) -> str:
     params: list[tuple[str, str]] = []
     if str(q or "").strip():
@@ -159,6 +160,9 @@ def _receipt_hub_query(
         params.append(("form_date_start", str(form_date_start).strip()))
     if str(form_date_end or "").strip():
         params.append(("form_date_end", str(form_date_end).strip()))
+    for item in generated_receipt_ids or []:
+        if int(item or 0):
+            params.append(("generated_receipt_id", str(int(item))))
     return urlencode(params)
 
 
@@ -231,6 +235,27 @@ def _receipt_return_query(payload: object, fallback_selected_person_id: int = 0)
         form_date_start=getter("return_form_date_start", ""),
         form_date_end=getter("return_form_date_end", ""),
     )
+
+
+def _generated_receipt_cards(receipt_ids: list[int]) -> list[dict[str, object]]:
+    cards: list[dict[str, object]] = []
+    for receipt_id in receipt_ids:
+        detail = get_receipt_detail(int(receipt_id or 0))
+        if not detail:
+            continue
+        receipt = detail.get("receipt") or {}
+        cards.append(
+            {
+                "id": int(receipt.get("id") or 0),
+                "numero": receipt.get("numero") or "",
+                "data": receipt.get("data") or "",
+                "periodo": f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}",
+                "valor_fmt": receipt.get("valor_fmt") or "",
+                "detail_url": f"/receipts/{int(receipt.get('id') or 0)}/",
+                "pdf_url": f"/receipts/{int(receipt.get('id') or 0)}/pdf/",
+            }
+        )
+    return cards
 
 
 def _statement_query(
@@ -809,7 +834,19 @@ def receipts(request: HttpRequest) -> HttpResponse:
                 if email_updated:
                     messages.info(request, "E-mail da ficha atualizado durante o envio manual dos recibos.")
                 messages.success(request, f"{len(result['receipt_ids'])} recibo(s) gerado(s) por competencia.")
-                return _receipt_hub_redirect(_receipt_return_query(request.POST, fallback_selected_person_id=person_id))
+                base_query = _receipt_return_query(request.POST, fallback_selected_person_id=person_id)
+                query = _receipt_hub_query(
+                    q=request.POST.get("return_q", ""),
+                    person_id=int(request.POST.get("return_person_id", "") or 0),
+                    date_start=request.POST.get("return_date_start", ""),
+                    date_end=request.POST.get("return_date_end", ""),
+                    selected_person_id=int(request.POST.get("return_selected_person_id", "") or person_id or 0),
+                    person_lookup=request.POST.get("return_person_lookup", ""),
+                    form_date_start=request.POST.get("return_form_date_start", ""),
+                    form_date_end=request.POST.get("return_form_date_end", ""),
+                    generated_receipt_ids=[int(item) for item in result["receipt_ids"]],
+                )
+                return _receipt_hub_redirect(query or base_query)
             receipt_id = create_receipt(request.POST, actor=actor, replace_existing=True)
             if action == "generate_and_send_consolidated":
                 email_updated = _maybe_update_person_email_for_manual_receipt(
@@ -844,6 +881,7 @@ def receipts(request: HttpRequest) -> HttpResponse:
         "person_lookup": request.GET.get("person_lookup", ""),
         "form_date_start": request.GET.get("form_date_start", ""),
         "form_date_end": request.GET.get("form_date_end", ""),
+        "generated_receipt_ids": [int(value) for value in request.GET.getlist("generated_receipt_id") if str(value).isdigit()],
     }
     try:
         context["receipts"] = list_receipts(
@@ -865,6 +903,7 @@ def receipts(request: HttpRequest) -> HttpResponse:
             if context["receipt_form"] is None:
                 context["selected_person_id"] = 0
                 messages.error(request, "Pessoa selecionada para gerar recibo nao foi encontrada.")
+        context["generated_receipts"] = _generated_receipt_cards(context["generated_receipt_ids"])
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/receipts/list.html", context)

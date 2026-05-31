@@ -365,12 +365,12 @@ def build_checks(db_path: Path) -> list[Check]:
         receipt_generator_html,
         [
             "Gerar recibos para",
-            "Varios recibos por competencia",
-            "Recibo consolidado do periodo filtrado",
+            "Gerar recibos por competencia",
+            "Gerar um recibo consolidado do periodo filtrado",
             "E-mail do recibo",
             "Salvar somente o padrao",
-            "Gerar e enviar consolidado",
-            "Gerar recibo consolidado",
+            "Gerar e enviar recibo consolidado",
+            "Gerar um recibo consolidado",
         ],
     )
     checks.append(Check("Recibos centralizam geracao na mesma tela", "OK" if ok else "FALHA", detail))
@@ -397,7 +397,8 @@ def build_checks(db_path: Path) -> list[Check]:
             [
                 "Logo do cliente",
                 "Enviar ou reenviar por e-mail",
-                "Abrir PDF",
+                "Abrir PDF do recibo",
+                "Imprimir esta tela",
                 "Contribuicoes do recibo",
             ],
         )

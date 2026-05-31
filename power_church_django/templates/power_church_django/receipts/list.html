@@ -81,6 +81,33 @@
     {% include "power_church_django/receipts/_generator.html" %}
   {% endif %}
 
+  {% if generated_receipts %}
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>Recibos gerados agora</h2>
+          <p class="muted">Confira o resultado da operacao e abra diretamente o documento correto antes de imprimir ou enviar.</p>
+        </div>
+        <span class="badge">{{ generated_receipts|length }} gerado(s)</span>
+      </div>
+      <div class="person-strip">
+        {% for receipt in generated_receipts %}
+          <div class="person-card" style="grid-template-columns:minmax(0,1fr);">
+            <span>
+              <strong>{{ receipt.numero }}</strong>
+              <span class="muted small">Emitido em {{ receipt.data }} · {{ receipt.periodo }}</span>
+              <span class="muted small">Valor {{ receipt.valor_fmt }}</span>
+              <span class="actions" style="margin-top:8px">
+                <a class="badge" href="{{ receipt.detail_url }}">Abrir detalhe</a>
+                <a class="badge" href="{{ receipt.pdf_url }}" target="_blank" rel="noopener">Abrir PDF do recibo</a>
+              </span>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
   <section class="panel no-print">
     <h2>Pesquisar recibos</h2>
     <form class="toolbar" method="get">

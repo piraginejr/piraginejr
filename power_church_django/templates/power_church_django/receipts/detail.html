@@ -11,9 +11,10 @@
       <div class="actions no-print">
         <a class="button secondary" href="/receipts/">Voltar para recibos</a>
         <a class="button secondary" href="/people/{{ detail.receipt.person_id }}/">Abrir ficha</a>
-        <a class="button secondary" href="/receipts/{{ detail.receipt.id }}/pdf/" target="_blank" rel="noopener">Abrir PDF</a>
-        <button type="button" onclick="window.print()">Imprimir recibo</button>
+        <a class="button" href="/receipts/{{ detail.receipt.id }}/pdf/" target="_blank" rel="noopener">Abrir PDF do recibo</a>
+        <button type="button" class="button secondary" onclick="window.print()">Imprimir esta tela</button>
       </div>
+      <p class="muted small no-print" style="margin:10px 0 0;">Para imprimir o documento oficial do recibo, use <strong>Abrir PDF do recibo</strong>. O comando <strong>Imprimir esta tela</strong> imprime apenas a pagina operacional.</p>
     </section>
 
     <section class="grid">

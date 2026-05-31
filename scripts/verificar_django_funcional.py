@@ -825,18 +825,18 @@ for path in paths:
     if path.startswith("/receipts/?selected_person_id="):
         for snippet in [
             "Gerar recibos para",
-            "Varios recibos por competencia",
-            "Recibo consolidado do periodo filtrado",
+            "Gerar recibos por competencia",
+            "Gerar um recibo consolidado do periodo filtrado",
             "E-mail do recibo",
             "Salvar somente o padrao",
-            "Gerar e enviar consolidado",
-            "Gerar recibo consolidado",
+            "Gerar e enviar recibo consolidado",
+            "Gerar um recibo consolidado",
             "Ver recibos desta pessoa",
         ]:
             if snippet not in content:
                 raise AssertionError(f"central de recibos Django sem trecho esperado: {snippet}")
     if re.match(r"^/receipts/\d+/$", path):
-        for snippet in ["Recibo de contribuicoes", "Imprimir recibo", "Contribuicoes do recibo", "Logo do cliente", "Enviar ou reenviar por e-mail", "Abrir PDF"]:
+        for snippet in ["Recibo de contribuicoes", "Imprimir esta tela", "Contribuicoes do recibo", "Logo do cliente", "Enviar ou reenviar por e-mail", "Abrir PDF do recibo"]:
             if snippet not in content:
                 raise AssertionError(f"detalhe de recibo Django sem trecho esperado: {snippet}")
 legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")

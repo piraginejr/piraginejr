@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import date
+from functools import lru_cache
 from typing import Any
 
 from power_church_core.formatting import br_date
 from power_church_core.normalization import normalize_query
+from power_church_django.services.branding import brand_logo_available, brand_logo_path
 
 
 def _pdf_escape(value: object) -> str:
@@ -42,21 +44,97 @@ def _compact_remittances(remittances: list[dict[str, Any]], limit: int = 4) -> s
     return " | ".join(chunks)
 
 
+@lru_cache(maxsize=1)
+def _brand_logo_jpeg() -> bytes | None:
+    if not brand_logo_available():
+        return None
+    try:
+        return brand_logo_path().read_bytes()
+    except OSError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _brand_logo_dimensions() -> tuple[int, int] | None:
+    payload = _brand_logo_jpeg()
+    if not payload or len(payload) < 4 or payload[:2] != b"\xff\xd8":
+        return None
+    index = 2
+    markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+    while index + 8 <= len(payload):
+        while index < len(payload) and payload[index] != 0xFF:
+            index += 1
+        while index < len(payload) and payload[index] == 0xFF:
+            index += 1
+        if index >= len(payload):
+            break
+        marker = payload[index]
+        index += 1
+        if marker in {0xD8, 0xD9}:
+            continue
+        if index + 1 >= len(payload):
+            break
+        length = (payload[index] << 8) | payload[index + 1]
+        index += 2
+        if length < 2 or index + length - 2 > len(payload):
+            break
+        if marker in markers:
+            height = (payload[index + 1] << 8) | payload[index + 2]
+            width = (payload[index + 3] << 8) | payload[index + 4]
+            if width > 0 and height > 0:
+                return width, height
+            break
+        index += length - 2
+    return None
+
+
+def _append_brand_logo(page_ops: list[str], x: int, y_top: int, max_width: int = 130, max_height: int = 50) -> None:
+    dimensions = _brand_logo_dimensions()
+    if not dimensions:
+        return
+    width, height = dimensions
+    scale = min(max_width / float(width), max_height / float(height))
+    draw_width = width * scale
+    draw_height = height * scale
+    y_bottom = y_top - draw_height
+    page_ops.append(f"q {draw_width:.2f} 0 0 {draw_height:.2f} {x:.2f} {y_bottom:.2f} cm /ImBrand Do Q")
+
+
 def _build_pdf(pages: list[list[str]]) -> bytes:
     page_payloads = ["\n".join(page_ops).encode("latin-1", errors="replace") for page_ops in pages]
     kids: list[str] = []
-    objects: list[bytes] = [b"" for _ in range(5 + (len(page_payloads) * 2))]
-    objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"
-    objects[3] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
-    objects[4] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+    objects: list[bytes] = [b""]
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(b"")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+    brand_logo = _brand_logo_jpeg()
+    brand_dimensions = _brand_logo_dimensions()
+    brand_object_id: int | None = None
+    if brand_logo and brand_dimensions:
+        width, height = brand_dimensions
+        objects.append(
+            (
+                f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+                f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {len(brand_logo)} >>\nstream\n"
+            ).encode("ascii")
+            + brand_logo
+            + b"\nendstream"
+        )
+        brand_object_id = len(objects) - 1
     for index, content in enumerate(page_payloads):
-        content_id = 5 + (index * 2)
+        content_id = len(objects)
+        objects.append(b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream")
         page_id = content_id + 1
+        objects.append(b"")
         kids.append(f"{page_id} 0 R")
-        objects[content_id] = b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream"
+        resources = "/Resources << /Font << /F1 3 0 R /F2 4 0 R >>"
+        if brand_object_id is not None:
+            resources += f" /XObject << /ImBrand {brand_object_id} 0 R >>"
+        resources += " >>"
         objects[page_id] = (
             f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
-            f"/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")
+            f"{resources} /Contents {content_id} 0 R >>".encode("ascii")
         )
     objects[2] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>".encode("ascii")
     pdf = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
@@ -230,6 +308,7 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
+        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -381,6 +460,7 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
+        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -537,6 +617,7 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
+        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -574,9 +655,12 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
     rule()
     fill_rect(408, y - 58, 145, 58, "0.99 0.97 0.93")
     current.append(f"0.82 0.77 0.70 RG 0.8 w 408 {y - 58} 145 58 re S")
-    text_at(418, y - 18, "Espaco reservado", size=7, bold=False)
-    text_at(418, y - 34, "Logo do cliente", size=11, bold=True)
-    text_at(418, y - 48, "Pode receber marca no futuro", size=7, bold=False)
+    if _brand_logo_dimensions():
+        _append_brand_logo(current, 414, y - 4, 132, 48)
+    else:
+        text_at(418, y - 18, "Espaco reservado", size=7, bold=False)
+        text_at(418, y - 34, "Logo do cliente", size=11, bold=True)
+        text_at(418, y - 48, "Pode receber marca no futuro", size=7, bold=False)
     top = y
     summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=220)
     summary_box(top, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 270, width=180)

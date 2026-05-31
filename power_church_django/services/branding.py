@@ -21,7 +21,6 @@ def branding_context(_request: object) -> dict[str, Any]:
     return {
         "brand_logo_available": brand_logo_available(),
         "brand_logo_url": BRAND_LOGO_URL,
-        "brand_title": "Power Church",
-        "brand_subtitle": "Gestao e contribuicoes",
+        "brand_title": "Primeira Igreja Batista de Niterói",
+        "brand_subtitle": "Gestão e contribuições",
     }
-

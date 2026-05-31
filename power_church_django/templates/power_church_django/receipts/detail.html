@@ -33,9 +33,17 @@
           {% endif %}
         </div>
         <div style="border:1px dashed #bda98b; min-height:108px; border-radius:14px; padding:12px; background:#fcfaf6;">
-          <div class="muted small">Espaco reservado</div>
-          <strong style="display:block; margin-top:8px;">Logo do cliente</strong>
-          <div class="muted small" style="margin-top:8px;">A logo pode ser encaixada aqui no layout impresso e no PDF.</div>
+          {% if brand_logo_available %}
+            <div class="muted small" style="margin-bottom:8px;">Logo do cliente</div>
+            <div style="display:flex; align-items:center; justify-content:center; min-height:72px;">
+              <img src="{{ brand_logo_url }}" alt="{{ brand_title }}" style="max-width:100%; max-height:84px; object-fit:contain;">
+            </div>
+          {% else %}
+            <div>
+              <div class="muted small">Espaco reservado</div>
+              <strong style="display:block; margin-top:8px;">Logo do cliente</strong>
+            </div>
+          {% endif %}
         </div>
       </div>
     </section>

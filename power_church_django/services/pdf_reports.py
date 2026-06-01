@@ -308,7 +308,6 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
-        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -460,7 +459,6 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
-        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -617,7 +615,6 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         if current:
             pages.append(current)
         current = ["0.12 0.16 0.22 rg"]
-        _append_brand_logo(current, 420, 812, 135, 56)
         y = 800
 
     def text_at(x: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
@@ -662,10 +659,10 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         text_at(418, y - 34, "Logo do cliente", size=11, bold=True)
         text_at(418, y - 48, "Pode receber marca no futuro", size=7, bold=False)
     top = y
-    summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=220)
-    summary_box(top, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 270, width=180)
-    summary_box(top - 64, "Valor total", receipt.get("valor_fmt") or "-", 408, width=145)
-    y -= 108
+    summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=350)
+    summary_box(top - 64, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 42, width=250)
+    summary_box(top - 64, "Valor total", receipt.get("valor_fmt") or "-", 300, width=100)
+    y -= 122
     line(
         f"Codigo: {person.get('codigo') or receipt.get('person_code') or 'sem codigo'} | CPF: {person.get('cpf') or receipt.get('person_cpf') or 'nao informado'}",
         size=9,

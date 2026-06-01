@@ -170,6 +170,13 @@ def contribution_period_pdf(report: dict[str, Any]) -> bytes:
         font = "F2" if bold else "F1"
         current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
 
+    def text_right(x_right: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        raw = str(value or "")
+        factor = 0.56 if bold else 0.51
+        width = max(len(raw) * size * factor, 0)
+        x = max(42, x_right - int(round(width)))
+        text_at(x, y_pos, raw, size=size, bold=bold)
+
     def text(x: int, value: object, size: int = 9, bold: bool = False) -> None:
         text_at(x, y, value, size=size, bold=bold)
 
@@ -726,7 +733,7 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         text_at(106, y - 10, "Competencia", size=8, bold=True)
         text_at(196, y - 10, "Tipo", size=8, bold=True)
         text_at(356, y - 10, "Forma", size=8, bold=True)
-        text_at(462, y - 10, "Valor", size=8, bold=True)
+        text_right(541, y - 10, "Valor", size=8, bold=True)
         y -= 24
 
     def row_separator() -> None:
@@ -742,13 +749,13 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
             new_page()
             table_header()
         start_y = y
-        text_at(48, start_y, item.get("data") or "-", size=8)
+        text_at(48, start_y, item.get("data") or "-", size=8, bold=True)
         text_at(106, start_y, item.get("competencia") or "-", size=8)
         for index, value in enumerate(type_lines):
             text_at(196, start_y - (index * 11), value, size=8, bold=index == 0)
         for index, value in enumerate(form_lines):
             text_at(356, start_y - (index * 11), value, size=8)
-        text_at(462, start_y, item.get("valor_fmt") or "-", size=8, bold=True)
+        text_right(541, start_y, item.get("valor_fmt") or "-", size=8, bold=True)
         y -= row_height
         if item.get("observacoes"):
             for chunk in _wrap(item.get("observacoes"), 78)[:2]:

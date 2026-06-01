@@ -636,33 +636,70 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
     def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
         current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
 
-    def summary_box(top: int, label: str, value: object, x: int, width: int = 160) -> None:
-        fill_rect(x, top - 34, width, 34)
-        current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
-        text_at(x + 7, top - 14, label, size=7, bold=True)
-        text_at(x + 7, top - 28, value, size=10, bold=True)
+    def stroke_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.86 0.80 0.70", line_width: float = 0.6) -> None:
+        current.append(f"{color} RG {line_width:.2f} w {x} {y_pos} {width} {height} re S")
+
+    def summary_box(
+        top: int,
+        label: str,
+        value: object,
+        x: int,
+        *,
+        width: int = 160,
+        height: int = 34,
+        value_size: int = 10,
+        max_lines: int = 2,
+    ) -> None:
+        fill_rect(x, top - height, width, height, "0.995 0.985 0.965")
+        fill_rect(x, top - 13, width, 13, "0.95 0.91 0.84")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.7)
+        text_at(x + 8, top - 9, label, size=6, bold=True)
+        wrap_width = max(12, int((width - 18) / 5.8))
+        lines = _wrap(value, wrap_width)[:max_lines] or ["-"]
+        line_y = top - 25
+        for index, chunk in enumerate(lines):
+            text_at(x + 8, line_y - (index * 10), chunk, size=value_size, bold=index == 0)
+
+    def logo_panel(top: int, x: int = 402, width: int = 151, height: int = 96) -> None:
+        fill_rect(x, top - height, width, height, "0.998 0.992 0.980")
+        fill_rect(x, top - 14, width, 14, "0.93 0.88 0.80")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.8)
+        text_at(x + 10, top - 10, "Organizacao", size=6, bold=True)
+        org_name = receipt.get("organizacao") or "Power Church"
+        for index, chunk in enumerate(_wrap(org_name, 24)[:2]):
+            text_at(x + 10, top - 26 - (index * 9), chunk, size=7, bold=index == 0)
+        if _brand_logo_dimensions():
+            _append_brand_logo(current, x + 14, top - 82, width - 28, 40)
+        else:
+            text_at(x + 10, top - 58, "Espaco reservado", size=7, bold=False)
+            text_at(x + 10, top - 72, "Logo do cliente", size=11, bold=True)
 
     new_page()
-    line(f"Recibo de contribuicoes {receipt.get('numero') or ''}".strip(), size=18, bold=True, advance=22)
-    line(
-        f"Emitido em {receipt.get('data') or br_date(date.today().isoformat())} | Organizacao: {receipt.get('organizacao') or 'Power Church'}",
+    fill_rect(42, 694, 511, 108, "0.998 0.994 0.987")
+    fill_rect(42, 792, 511, 10, "0.77 0.61 0.40")
+    stroke_rect(42, 694, 511, 108, "0.86 0.80 0.70", 0.8)
+    text_at(54, 770, "Recibo de contribuicoes", size=20, bold=True)
+    text_at(54, 752, f"Documento {receipt.get('numero') or '-'}", size=9, bold=True)
+    text_at(
+        54,
+        736,
+        f"Emitido em {receipt.get('data') or br_date(date.today().isoformat())}",
         size=9,
-        advance=18,
+        bold=False,
     )
-    rule()
-    fill_rect(408, y - 58, 145, 58, "0.99 0.97 0.93")
-    current.append(f"0.82 0.77 0.70 RG 0.8 w 408 {y - 58} 145 58 re S")
-    if _brand_logo_dimensions():
-        _append_brand_logo(current, 414, y - 4, 132, 48)
-    else:
-        text_at(418, y - 18, "Espaco reservado", size=7, bold=False)
-        text_at(418, y - 34, "Logo do cliente", size=11, bold=True)
-        text_at(418, y - 48, "Pode receber marca no futuro", size=7, bold=False)
+    text_at(
+        54,
+        722,
+        "Comprovante formal das contribuicoes registradas neste periodo.",
+        size=8,
+        bold=False,
+    )
     top = y
-    summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=350)
-    summary_box(top - 64, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 42, width=250)
-    summary_box(top - 64, "Valor total", receipt.get("valor_fmt") or "-", 300, width=100)
-    y -= 122
+    logo_panel(top)
+    summary_box(top, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=346, height=42, value_size=10, max_lines=2)
+    summary_box(top - 50, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 42, width=228, height=42, value_size=9, max_lines=2)
+    summary_box(top - 50, "Valor total", receipt.get("valor_fmt") or "-", 280, width=108, height=42, value_size=11, max_lines=1)
+    y -= 126
     line(
         f"Codigo: {person.get('codigo') or receipt.get('person_code') or 'sem codigo'} | CPF: {person.get('cpf') or receipt.get('person_cpf') or 'nao informado'}",
         size=9,

@@ -457,7 +457,7 @@ for path in paths:
             "Familias e votacao",
             "Cidade",
             "Selecionar tudo",
-            "Imprimir lista",
+            "Imprimir esta lista",
             f"Mostrando {people_data['total']} de {people_data['total']} registros",
         ]:
             if snippet not in content:
@@ -621,7 +621,7 @@ for path in paths:
             "Abrir lista completa",
             "Subir lote",
             "Subir envelope",
-            "Imprimir lista filtrada",
+            "Imprimir esta lista filtrada",
             f"Mostrando {total} de {total} lancamentos",
         ]
         for snippet in required:
@@ -671,7 +671,7 @@ for path in paths:
             raise AssertionError(f"contribuicoes Django mantiveram documento antes do nome: {bad_named_numbers[0]}")
         required = [
             "Visualizar relatorio alfabetico",
-            "Imprimir lista filtrada",
+            "Imprimir esta lista filtrada",
             "contributions-table",
             f"Mostrando {total} de {total} lancamentos",
         ]
@@ -680,7 +680,7 @@ for path in paths:
                 raise AssertionError(f"contribuicoes Django sem trecho esperado: {snippet}")
         print(f"contributions_period={latest_competence}:{total}:alfabetico")
     if path.startswith("/contributions/statements/"):
-        for snippet in ["Extrato de contribuicoes", "Imprimir extrato", "Total geral", "Extrato analitico"]:
+        for snippet in ["Extrato de contribuicoes", "Abrir PDF do extrato", "Total geral", "Extrato analitico"]:
             if snippet not in content:
                 raise AssertionError(f"extrato individual Django sem trecho esperado: {snippet}")
     if path == "/contributions/manual/":
@@ -700,7 +700,7 @@ for path in paths:
             "Abrir lista completa",
             "Subir lote",
             "Subir envelope",
-            "Imprimir lista",
+            "Imprimir esta lista",
             "Reprocessar telefones/enderecos",
             f"Mostrando {total} de {total} envelope(s)",
         ]:
@@ -811,7 +811,7 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"detalhe de contribuicao Django sem ajuste auditavel: {snippet}")
     if re.match(r"^/contributions/statements/\d+/$", path):
-        for snippet in ["Extrato de contribuicoes", "Gerar PDF", "Enviar extrato por e-mail", "E-mail atual da ficha", "name=\"update_person_email\"", "name=\"email_update_reason\""]:
+        for snippet in ["Extrato de contribuicoes", "Abrir PDF do extrato", "Enviar extrato por e-mail", "E-mail atual da ficha", "name=\"update_person_email\"", "name=\"email_update_reason\""]:
             if snippet not in content:
                 raise AssertionError(f"extrato individual Django sem envio auditavel: {snippet}")
     if path.startswith("/contributions/new/"):
@@ -881,14 +881,14 @@ if expected_receipt_target not in redirect_target:
         required_report_snippets = ["Contribuintes com nome", "Somente documento"]
         if documents:
             required_report_snippets.append("Somente documento/numero")
-        required_report_snippets.extend(["Abrir PDF p/ imprimir", "Baixar PDF"])
+        required_report_snippets.extend(["Abrir PDF oficial para imprimir", "Baixar PDF"])
         required_report_snippets.extend(["report-summary-strip", "summary-pill", "report-table", "remittance-chip"])
         for snippet in required_report_snippets:
             if snippet not in content:
                 raise AssertionError(f"relatorio Django sem bloco esperado: {snippet}")
         print(f"reports_period_identity={latest_competence}:{len(named)}:nomes:{len(documents)}:documentos")
     if path == "/reports/destinations/":
-        for snippet in ["Contribuicoes por destino", "Resumo por destino", "Destino financeiro", "Abrir PDF p/ imprimir", "Baixar PDF"]:
+        for snippet in ["Contribuicoes por destino", "Resumo por destino", "Destino financeiro", "Abrir PDF oficial para imprimir", "Baixar PDF"]:
             if snippet not in content:
                 raise AssertionError(f"relatorio por destino Django sem trecho esperado: {snippet}")
     if path.startswith("/reports/destinations/?competencia="):

@@ -183,7 +183,7 @@ def build_checks(db_path: Path) -> list[Check]:
     ok, detail = _contains_all(
         people_html,
         [
-            "Imprimir lista",
+            "Imprimir esta lista",
             "Exportacao dinamica de pessoas",
             "Cadastro basico",
             "Contatos",
@@ -207,7 +207,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Situacao do domicilio",
             "Contribuicao na familia",
             "Unipessoal",
-            "Imprimir lista",
+            "Imprimir esta lista",
         ],
     )
     checks.append(Check("Familias organizadas exibem consulta imprimivel e identidade nominal", "OK" if ok else "FALHA", detail))
@@ -271,7 +271,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Subir lote",
             "Subir envelope",
             "Abrir lista completa",
-            "Imprimir lista filtrada",
+            "Imprimir esta lista filtrada",
             f"Mostrando {contributions_data['total']} de {contributions_data['total']} lancamentos",
         ],
     )
@@ -342,7 +342,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Abrir lista completa",
             "Subir lote",
             "Subir envelope",
-            "Imprimir lista",
+            "Imprimir esta lista",
             f"Mostrando {envelopes_data['total']} de {envelopes_data['total']} envelope(s)",
         ],
     )
@@ -355,7 +355,7 @@ def build_checks(db_path: Path) -> list[Check]:
             "Pesquisar pessoa",
             "Pesquisar recibos",
             "Lista de recibos",
-            "Imprimir lista",
+            "Imprimir esta lista",
             "Envio automatico",
         ],
     )
@@ -379,7 +379,7 @@ def build_checks(db_path: Path) -> list[Check]:
         statement_html,
         [
             "Extrato de contribuicoes",
-            "Gerar PDF",
+            "Abrir PDF do extrato",
             "Enviar extrato por e-mail",
             "E-mail atual da ficha",
             "Atualizar a ficha desta pessoa com o destinatario informado acima",

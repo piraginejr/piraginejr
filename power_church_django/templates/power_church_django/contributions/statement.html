@@ -11,8 +11,8 @@
       <div class="actions no-print">
         <a class="button secondary" href="/people/{{ statement.person.id }}/">Abrir ficha</a>
         <a class="button secondary" href="/receipts/?selected_person_id={{ statement.person.id }}#gerar-recibo">Gerar recibo</a>
-        <a class="button secondary" href="/contributions/statements/{{ statement.person.id }}/pdf/{% if statement.filters.year or statement.filters.competencia or statement.filters.date_start or statement.filters.date_end or statement.filters.type_ids %}?{% if statement.filters.year %}year={{ statement.filters.year|urlencode }}&{% endif %}{% if statement.filters.competencia %}competencia={{ statement.filters.competencia|urlencode }}&{% endif %}{% if statement.filters.date_start %}date_start={{ statement.filters.date_start|urlencode }}&{% endif %}{% if statement.filters.date_end %}date_end={{ statement.filters.date_end|urlencode }}&{% endif %}{% for item in statement.filters.type_ids %}tipo_id={{ item }}&{% endfor %}{% endif %}">Gerar PDF</a>
-        <button type="button" onclick="window.print()">Imprimir extrato</button>
+        <a class="button primary" href="/contributions/statements/{{ statement.person.id }}/pdf/{% if statement.filters.year or statement.filters.competencia or statement.filters.date_start or statement.filters.date_end or statement.filters.type_ids %}?{% if statement.filters.year %}year={{ statement.filters.year|urlencode }}&{% endif %}{% if statement.filters.competencia %}competencia={{ statement.filters.competencia|urlencode }}&{% endif %}{% if statement.filters.date_start %}date_start={{ statement.filters.date_start|urlencode }}&{% endif %}{% if statement.filters.date_end %}date_end={{ statement.filters.date_end|urlencode }}&{% endif %}{% for item in statement.filters.type_ids %}tipo_id={{ item }}&{% endfor %}{% endif %}" target="_blank" rel="noopener">Abrir PDF do extrato</a>
+        <button type="button" onclick="window.print()">Imprimir esta tela</button>
       </div>
     </section>
 
@@ -22,6 +22,8 @@
       <div class="card"><span class="label">Competencias</span><strong>{{ statement.summary.competencias }}</strong></div>
       <div class="card"><span class="label">Pessoa</span><strong style="font-size:20px">{{ statement.person.nome }}</strong></div>
     </section>
+
+    <p class="muted small no-print" style="margin:12px 0 0;">Para imprimir o documento oficial do extrato, use <strong>Abrir PDF do extrato</strong>. O comando <strong>Imprimir esta tela</strong> imprime apenas a pagina operacional.</p>
 
     <section class="panel no-print">
       <div class="section-head">

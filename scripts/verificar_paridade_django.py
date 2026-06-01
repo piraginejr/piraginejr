@@ -151,7 +151,7 @@ if b"Familia domiciliar" not in dynamic_csv_body or b"Familia tem contribuinte" 
     raise AssertionError("exportacao dinamica CSV de pessoas nao trouxe colunas familiares")
 assert_html(
     "/people/families/",
-    ["Familias domiciliares", "Nucleos organizados", "Fila de auditoria", "Familias estendidas", "Contribuicao na familia"],
+    ["Familias domiciliares", "Todos os domicilios", "Fila de auditoria", "Familias estendidas", "Contribuicao na familia"],
 )
 assert_html(
     "/people/families/?section=audit",
@@ -248,7 +248,7 @@ assert_html("/contributions/manual/", ["Lancamento manual assistido", "Rateio po
 assert_html(f"/contributions/{contribution_id}/", ["Ajuste manual seguro", "Historico de auditoria"])
 assert_html(f"/contributions/{contribution_id}/split/", ["Rateio manual", "Rateio com soma fechada"])
 assert_html(f"/contributions/new/?person_id={contribution_person_id}", ["Lancamento manual com auditoria"])
-assert_html(f"/contributions/statements/{contribution_person_id}/", ["Extrato de contribuicoes", "Imprimir extrato"])
+assert_html(f"/contributions/statements/{contribution_person_id}/", ["Extrato de contribuicoes", "Abrir PDF do extrato"])
 emit("Contribuicoes", "OK", f"{latest_competence}: {period_data['total']} lancamentos completos e alfabeticos")
 
 assert_html("/receipts/", ["Recibos", "Gerar recibo por pessoa", "Pesquisar recibos", "Lista de recibos", "Envio automatico"])
@@ -256,11 +256,11 @@ assert_html(
     f"/receipts/?selected_person_id={contribution_person_id}",
     [
         "Gerar recibos para",
-        "Varios recibos por competencia",
-        "Recibo consolidado do periodo filtrado",
+        "Gerar recibos por competencia",
+        "Gerar um recibo consolidado do periodo filtrado",
         "E-mail do recibo",
         "Salvar somente o padrao",
-        "Gerar e enviar consolidado",
+        "Gerar e enviar recibo consolidado",
     ],
 )
 legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")
@@ -292,7 +292,7 @@ emit("Importacoes bancarias", "OK", "central, lotes, movimentos e regras de cent
 
 report = contribution_report(competencia=latest_competence)
 destination_report = contribution_destination_report(competencia=latest_competence)
-assert_html("/reports/", ["Contribuicoes por periodo", "Abrir PDF p/ imprimir", "Baixar PDF"])
+assert_html("/reports/", ["Contribuicoes por periodo", "Abrir PDF oficial para imprimir", "Baixar PDF"])
 assert_html(f"/reports/?competencia={quote(latest_competence)}", ["Contribuintes com nome", "Legenda do rol"])
 assert_html("/reports/destinations/", ["Contribuicoes por destino", "Resumo por destino", "Destino financeiro"])
 assert_html(f"/reports/destinations/?competencia={quote(latest_competence)}", ["Contribuicoes por destino", "Resumo por destino", "Contribuintes com nome"])

@@ -195,6 +195,37 @@ def contribution_period_pdf(report: dict[str, Any]) -> bytes:
     def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
         current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
 
+    def stroke_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.86 0.80 0.70", line_width: float = 0.6) -> None:
+        current.append(f"{color} RG {line_width:.2f} w {x} {y_pos} {width} {height} re S")
+
+    def summary_box(
+        top: int,
+        label: str,
+        value: object,
+        x: int,
+        *,
+        width: int = 98,
+        height: int = 34,
+        value_size: int = 10,
+        max_lines: int = 2,
+    ) -> None:
+        fill_rect(x, top - height, width, height, "0.995 0.985 0.965")
+        fill_rect(x, top - 13, width, 13, "0.95 0.91 0.84")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.7)
+        text_at(x + 7, top - 9, label, size=6, bold=True)
+        lines = _wrap(value, max(10, int((width - 16) / 5.6)))[:max_lines] or ["-"]
+        for index, chunk in enumerate(lines):
+            text_at(x + 7, top - 25 - (index * 10), chunk, size=value_size, bold=index == 0)
+
+    def logo_panel(top: int, x: int = 366, width: int = 187, height: int = 84) -> None:
+        fill_rect(x, top - height, width, height, "0.998 0.992 0.980")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.8)
+        if _brand_logo_dimensions():
+            _append_brand_logo(current, x + 10, top - 8, width - 20, 66)
+        else:
+            text_at(x + 10, top - 36, "Espaco reservado", size=7, bold=False)
+            text_at(x + 10, top - 52, "Logo do cliente", size=11, bold=True)
+
     def summary_boxes(summary: dict[str, Any]) -> None:
         nonlocal y
         boxes = [
@@ -209,10 +240,7 @@ def contribution_period_pdf(report: dict[str, Any]) -> bytes:
         top = y
         for index, (label, value) in enumerate(boxes):
             x = 42 + (index * (width + gap))
-            fill_rect(x, top - 34, width, 34)
-            current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
-            text_at(x + 7, top - 14, label, size=7, bold=True)
-            text_at(x + 7, top - 28, value, size=10, bold=True)
+            summary_box(top, label, value, x, width=width, height=34, value_size=10, max_lines=2)
         y -= 46
 
     def table_header() -> None:
@@ -239,9 +267,15 @@ def contribution_period_pdf(report: dict[str, Any]) -> bytes:
     if report.get("q"):
         filters.append(f"Busca: {report['q']}")
     filter_label = " | ".join(filters) if filters else "Todas as contribuicoes cadastradas"
-    line("Contribuicoes por periodo", size=18, bold=True, advance=22)
-    line(f"Emitido em {br_date(date.today().isoformat())} | {filter_label}", size=9, advance=18)
-    rule()
+    fill_rect(42, 716, 511, 86, "0.998 0.994 0.987")
+    fill_rect(42, 792, 511, 10, "0.77 0.61 0.40")
+    stroke_rect(42, 716, 511, 86, "0.86 0.80 0.70", 0.8)
+    text_at(54, 772, "Contribuicoes por periodo", size=21, bold=True)
+    text_at(54, 753, "Relatorio analitico de contribuicoes", size=9, bold=True)
+    text_at(54, 738, f"Emitido em {br_date(date.today().isoformat())}", size=8, bold=False)
+    text_at(54, 724, filter_label, size=7, bold=False)
+    logo_panel(792)
+    y = 702
     summary_boxes(summary)
     line(
         f"Legenda: SA membro ativo | SI inativo | NF frequentador | NV visitante | NM arquivo morto | NR sem vinculo",
@@ -278,7 +312,7 @@ def contribution_period_pdf(report: dict[str, Any]) -> bytes:
             text_at(48, start_y - (index * 11), value, size=8, bold=index == 0)
         for index, value in enumerate(remessa_lines):
             text_at(270, start_y - (index * 11), value, size=8)
-        text_at(456, start_y, item.get("total_fmt"), size=8, bold=True)
+        text_right(521, start_y, item.get("total_fmt"), size=8, bold=True)
         text_at(523, start_y, item.get("sigla"), size=8, bold=True)
         y -= row_height
         row_separator()
@@ -321,6 +355,13 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
         font = "F2" if bold else "F1"
         current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
 
+    def text_right(x_right: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        raw = str(value or "")
+        factor = 0.56 if bold else 0.51
+        width = max(len(raw) * size * factor, 0)
+        x = max(42, x_right - int(round(width)))
+        text_at(x, y_pos, raw, size=size, bold=bold)
+
     def text(x: int, value: object, size: int = 9, bold: bool = False) -> None:
         text_at(x, y, value, size=size, bold=bold)
 
@@ -339,6 +380,37 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
     def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
         current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
 
+    def stroke_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.86 0.80 0.70", line_width: float = 0.6) -> None:
+        current.append(f"{color} RG {line_width:.2f} w {x} {y_pos} {width} {height} re S")
+
+    def summary_box(
+        top: int,
+        label: str,
+        value: object,
+        x: int,
+        *,
+        width: int = 98,
+        height: int = 34,
+        value_size: int = 10,
+        max_lines: int = 2,
+    ) -> None:
+        fill_rect(x, top - height, width, height, "0.995 0.985 0.965")
+        fill_rect(x, top - 13, width, 13, "0.95 0.91 0.84")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.7)
+        text_at(x + 7, top - 9, label, size=6, bold=True)
+        lines = _wrap(value, max(10, int((width - 16) / 5.6)))[:max_lines] or ["-"]
+        for index, chunk in enumerate(lines):
+            text_at(x + 7, top - 25 - (index * 10), chunk, size=value_size, bold=index == 0)
+
+    def logo_panel(top: int, x: int = 366, width: int = 187, height: int = 84) -> None:
+        fill_rect(x, top - height, width, height, "0.998 0.992 0.980")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.8)
+        if _brand_logo_dimensions():
+            _append_brand_logo(current, x + 10, top - 8, width - 20, 66)
+        else:
+            text_at(x + 10, top - 36, "Espaco reservado", size=7, bold=False)
+            text_at(x + 10, top - 52, "Logo do cliente", size=11, bold=True)
+
     def summary_boxes(summary: dict[str, Any]) -> None:
         nonlocal y
         boxes = [
@@ -353,10 +425,7 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
         top = y
         for index, (label, value) in enumerate(boxes):
             x = 42 + (index * (width + gap))
-            fill_rect(x, top - 34, width, 34)
-            current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
-            text_at(x + 7, top - 14, label, size=7, bold=True)
-            text_at(x + 7, top - 28, value, size=10, bold=True)
+            summary_box(top, label, value, x, width=width, height=34, value_size=10, max_lines=2)
         y -= 46
 
     def table_header() -> None:
@@ -385,9 +454,15 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
     if report.get("selected_destination_label"):
         filters.append(str(report["selected_destination_label"]))
     filter_label = " | ".join(filters) if filters else "Todas as destinacoes cadastradas"
-    line("Relatorio por destino", size=18, bold=True, advance=22)
-    line(f"Emitido em {br_date(date.today().isoformat())} | {filter_label}", size=9, advance=18)
-    rule()
+    fill_rect(42, 716, 511, 86, "0.998 0.994 0.987")
+    fill_rect(42, 792, 511, 10, "0.77 0.61 0.40")
+    stroke_rect(42, 716, 511, 86, "0.86 0.80 0.70", 0.8)
+    text_at(54, 772, "Relatorio por destino", size=21, bold=True)
+    text_at(54, 753, "Distribuicao analitica das contribuicoes", size=9, bold=True)
+    text_at(54, 738, f"Emitido em {br_date(date.today().isoformat())}", size=8, bold=False)
+    text_at(54, 724, filter_label, size=7, bold=False)
+    logo_panel(792)
+    y = 702
     summary_boxes(summary)
     line(
         "Legenda: SA membro ativo | SI inativo | NF frequentador | NV visitante | NM arquivo morto | NR sem vinculo",
@@ -404,9 +479,9 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
         if y < 118:
             new_page()
         fill_rect(42, y - 20, 511, 24, "0.98 0.95 0.90")
-        current.append(f"0.86 0.80 0.70 RG 0.6 w 42 {y - 20} 511 24 re S")
+        stroke_rect(42, y - 20, 511, 24, "0.86 0.80 0.70", 0.6)
         text_at(48, y - 12, f"{destination.get('kind_label')}: {destination.get('label')}", size=10, bold=True)
-        text_at(390, y - 12, f"{destination.get('total_fmt')} | {destination.get('remessas')} remessa(s)", size=8, bold=True)
+        text_right(545, y - 12, f"{destination.get('total_fmt')} | {destination.get('remessas')} remessa(s)", size=8, bold=True)
         y -= 34
         table_header()
         for item in destination.get("items", []):
@@ -424,7 +499,7 @@ def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
                 text_at(48, start_y - (index * 11), value, size=8, bold=index == 0)
             for index, value in enumerate(remessa_lines):
                 text_at(282, start_y - (index * 11), value, size=8)
-            text_at(462, start_y, item.get("total_fmt"), size=8, bold=True)
+            text_right(525, start_y, item.get("total_fmt"), size=8, bold=True)
             text_at(525, start_y, item.get("sigla"), size=8, bold=True)
             y -= row_height
             row_separator()
@@ -472,6 +547,13 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
         font = "F2" if bold else "F1"
         current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
 
+    def text_right(x_right: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        raw = str(value or "")
+        factor = 0.56 if bold else 0.51
+        width = max(len(raw) * size * factor, 0)
+        x = max(42, x_right - int(round(width)))
+        text_at(x, y_pos, raw, size=size, bold=bold)
+
     def text(x: int, value: object, size: int = 9, bold: bool = False) -> None:
         text_at(x, y, value, size=size, bold=bold)
 
@@ -490,6 +572,37 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
     def fill_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.98 0.95 0.90") -> None:
         current.append(f"{color} rg {x} {y_pos} {width} {height} re f")
 
+    def stroke_rect(x: int, y_pos: int, width: int, height: int, color: str = "0.86 0.80 0.70", line_width: float = 0.6) -> None:
+        current.append(f"{color} RG {line_width:.2f} w {x} {y_pos} {width} {height} re S")
+
+    def summary_box(
+        top: int,
+        label: str,
+        value: object,
+        x: int,
+        *,
+        width: int = 120,
+        height: int = 36,
+        value_size: int = 10,
+        max_lines: int = 2,
+    ) -> None:
+        fill_rect(x, top - height, width, height, "0.995 0.985 0.965")
+        fill_rect(x, top - 13, width, 13, "0.95 0.91 0.84")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.7)
+        text_at(x + 8, top - 9, label, size=6, bold=True)
+        lines = _wrap(value, max(12, int((width - 18) / 5.8)))[:max_lines] or ["-"]
+        for index, chunk in enumerate(lines):
+            text_at(x + 8, top - 25 - (index * 10), chunk, size=value_size, bold=index == 0)
+
+    def logo_panel(top: int, x: int = 366, width: int = 187, height: int = 84) -> None:
+        fill_rect(x, top - height, width, height, "0.998 0.992 0.980")
+        stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.8)
+        if _brand_logo_dimensions():
+            _append_brand_logo(current, x + 10, top - 8, width - 20, 66)
+        else:
+            text_at(x + 10, top - 36, "Espaco reservado", size=7, bold=False)
+            text_at(x + 10, top - 52, "Logo do cliente", size=11, bold=True)
+
     def summary_boxes(summary: dict[str, Any]) -> None:
         nonlocal y
         boxes = [
@@ -502,10 +615,7 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
         top = y
         for index, (label, value) in enumerate(boxes):
             x = 42 + (index * (width + gap))
-            fill_rect(x, top - 34, width, 34)
-            current.append(f"0.86 0.80 0.70 RG 0.6 w {x} {top - 34} {width} 34 re S")
-            text_at(x + 7, top - 14, label, size=7, bold=True)
-            text_at(x + 7, top - 28, value, size=10, bold=True)
+            summary_box(top, label, value, x, width=width, height=36, value_size=10, max_lines=2)
         y -= 46
 
     def table_header() -> None:
@@ -541,9 +651,15 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
     filter_label = " | ".join(filter_chunks) if filter_chunks else "Todos os lancamentos da pessoa"
 
     new_page()
-    line("Extrato de contribuicoes", size=18, bold=True, advance=22)
-    line(f"Emitido em {br_date(date.today().isoformat())} | {filter_label}", size=9, advance=18)
-    rule()
+    fill_rect(42, 716, 511, 86, "0.998 0.994 0.987")
+    fill_rect(42, 792, 511, 10, "0.77 0.61 0.40")
+    stroke_rect(42, 716, 511, 86, "0.86 0.80 0.70", 0.8)
+    text_at(54, 772, "Extrato de contribuicoes", size=21, bold=True)
+    text_at(54, 753, person.get("nome") or "Pessoa", size=9, bold=True)
+    text_at(54, 738, f"Emitido em {br_date(date.today().isoformat())}", size=8, bold=False)
+    text_at(54, 724, filter_label, size=7, bold=False)
+    logo_panel(792)
+    y = 702
     line(f"Pessoa: {person.get('nome') or ''}", size=11, bold=True, advance=16)
     line(
         f"Ficha {person.get('codigo') or 'sem codigo'} | CPF {person.get('cpf') or 'nao informado'} | {person.get('status') or ''}",
@@ -575,7 +691,7 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
             new_page()
             table_header()
         start_y = y
-        text_at(48, start_y, entry.get("data"), size=8)
+        text_at(48, start_y, entry.get("data"), size=8, bold=True)
         text_at(102, start_y, entry.get("competencia") or "-", size=8)
         for index, value in enumerate(type_lines):
             text_at(182, start_y - (index * 11), value, size=8, bold=index == 0)
@@ -583,7 +699,7 @@ def person_statement_pdf(statement: dict[str, Any]) -> bytes:
             text_at(258, start_y - (index * 11), value or "-", size=8)
         for index, value in enumerate(notes):
             text_at(324, start_y - (index * 11), value, size=8)
-        text_at(506, start_y, entry.get("valor_fmt"), size=8, bold=True)
+        text_right(541, start_y, entry.get("valor_fmt"), size=8, bold=True)
         y -= row_height
         row_separator()
     if not statement.get("entries"):
@@ -628,6 +744,13 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         font = "F2" if bold else "F1"
         current.append(f"0.12 0.16 0.22 rg BT /{font} {size} Tf 1 0 0 1 {x} {y_pos} Tm ({_pdf_escape(value)}) Tj ET")
 
+    def text_right(x_right: int, y_pos: int, value: object, size: int = 9, bold: bool = False) -> None:
+        raw = str(value or "")
+        factor = 0.56 if bold else 0.51
+        width = max(len(raw) * size * factor, 0)
+        x = max(42, x_right - int(round(width)))
+        text_at(x, y_pos, raw, size=size, bold=bold)
+
     def line(value: object, size: int = 9, bold: bool = False, x: int = 42, advance: int = 14) -> None:
         nonlocal y
         if y < 54:
@@ -667,19 +790,21 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         for index, chunk in enumerate(lines):
             text_at(x + 8, line_y - (index * 10), chunk, size=value_size, bold=index == 0)
 
-    def logo_panel(top: int, x: int = 410, width: int = 143, height: int = 76) -> None:
+    def logo_panel(top: int, x: int = 366, width: int = 187, height: int = 84) -> None:
         fill_rect(x, top - height, width, height, "0.998 0.992 0.980")
-        fill_rect(x, top - 14, width, 14, "0.93 0.88 0.80")
         stroke_rect(x, top - height, width, height, "0.84 0.78 0.70", 0.8)
-        text_at(x + 10, top - 10, "Organizacao", size=6, bold=True)
-        org_name = receipt.get("organizacao") or "Power Church"
-        for index, chunk in enumerate(_wrap(org_name, 24)[:2]):
-            text_at(x + 10, top - 26 - (index * 9), chunk, size=7, bold=index == 0)
-        if _brand_logo_dimensions():
-            _append_brand_logo(current, x + 16, top - 66, width - 32, 28)
+        dimensions = _brand_logo_dimensions()
+        if dimensions:
+            raw_width, raw_height = dimensions
+            scale = min((width - 18) / float(raw_width), 66 / float(raw_height))
+            draw_width = raw_width * scale
+            draw_height = raw_height * scale
+            logo_x = x + int(round((width - draw_width) / 2))
+            logo_top = top - 8
+            _append_brand_logo(current, logo_x, logo_top, width - 18, 66)
         else:
-            text_at(x + 10, top - 48, "Espaco reservado", size=7, bold=False)
-            text_at(x + 10, top - 61, "Logo do cliente", size=11, bold=True)
+            text_at(x + 10, top - 36, "Espaco reservado", size=7, bold=False)
+            text_at(x + 10, top - 52, "Logo do cliente", size=11, bold=True)
 
     new_page()
     fill_rect(42, 716, 511, 86, "0.998 0.994 0.987")
@@ -702,9 +827,9 @@ def receipt_pdf(detail: dict[str, Any]) -> bytes:
         bold=False,
     )
     logo_panel(792)
-    summary_box(706, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=236, height=42, value_size=10, max_lines=2)
-    summary_box(706, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 290, width=150, height=42, value_size=8, max_lines=2)
-    summary_box(706, "Valor total", receipt.get("valor_fmt") or "-", 452, width=101, height=42, value_size=13, max_lines=1)
+    summary_box(706, "Contribuinte", person.get("nome") or receipt.get("person_name") or "-", 42, width=232, height=42, value_size=10, max_lines=2)
+    summary_box(706, "Periodo", f"{receipt.get('periodo_inicio') or '-'} a {receipt.get('periodo_fim') or '-'}", 286, width=138, height=42, value_size=8, max_lines=2)
+    summary_box(706, "Valor total", receipt.get("valor_fmt") or "-", 436, width=117, height=42, value_size=13, max_lines=1)
     y = 646
     line(
         f"Codigo: {person.get('codigo') or receipt.get('person_code') or 'sem codigo'} | CPF: {person.get('cpf') or receipt.get('person_cpf') or 'nao informado'}",

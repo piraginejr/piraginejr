@@ -161,7 +161,7 @@ def check_contributions_period_print_order(
         html = app.render_contributions(db, {"competencia": [competence]})
         required = [
             "Relatorio alfabetico por periodo",
-            "Imprimir lista filtrada",
+            "Imprimir esta lista filtrada",
             f"<h2>{total} contribuicao(oes) exibida(s)</h2>",
         ]
         missing = [snippet for snippet in required if snippet not in html]
@@ -930,7 +930,7 @@ def main() -> int:
                 check_render_contains(
                     "Relatorio por periodo com impressao/PDF",
                     lambda: app.render_contributors(db, {"section": ["periodo"]}),
-                    ["Contribuicoes por periodo", "Abrir PDF p/ imprimir", "Baixar PDF", "print-only"],
+                    ["Contribuicoes por periodo", "Abrir PDF oficial para imprimir", "Baixar PDF", "print-only"],
                     max_seconds=DEFAULT_RENDER_LIMIT_SECONDS,
                 ),
                 check_pdf(
@@ -996,7 +996,7 @@ def main() -> int:
                         db,
                         {"person_id": [str(sample_person_id)], "tipo_id": [str(dizimo_type_id)] if dizimo_type_id else []},
                     ),
-                    ["Imprimir extrato", "Baixar PDF", "Extrato analitico"],
+                    ["Abrir PDF do extrato", "Baixar PDF", "Extrato analitico"],
                     max_seconds=DEFAULT_RENDER_LIMIT_SECONDS,
                 )
             )

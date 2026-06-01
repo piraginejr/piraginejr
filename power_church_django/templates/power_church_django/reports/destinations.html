@@ -8,9 +8,9 @@
       <p>Conferencia separada de Dizimo, missoes, acao social e campanhas, respeitando a destinacao registrada em cada remessa.</p>
     </div>
     <div class="actions no-print">
-      <button onclick="window.print()">Imprimir</button>
-      <a class="button primary" href="/reports/contributions-destinations.pdf{% if report_query_string %}?{{ report_query_string }}&inline=1{% else %}?inline=1{% endif %}" target="_blank" rel="noopener">Abrir PDF p/ imprimir</a>
+      <a class="button primary" href="/reports/contributions-destinations.pdf{% if report_query_string %}?{{ report_query_string }}&inline=1{% else %}?inline=1{% endif %}" target="_blank" rel="noopener">Abrir PDF oficial para imprimir</a>
       <a class="button secondary" href="/reports/contributions-destinations.pdf{% if report_query_string %}?{{ report_query_string }}{% endif %}">Baixar PDF</a>
+      <button onclick="window.print()">Imprimir esta tela</button>
       <a class="button secondary" href="/reports/">Relatorio por periodo</a>
     </div>
   </section>

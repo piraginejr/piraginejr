@@ -865,7 +865,7 @@
         <a href="/reports/">Relatorios</a>
         <a href="/audit/">Auditoria</a>
         <a href="/accounts/">Usuarios</a>
-        <button class="button secondary no-print" type="button" onclick="window.print()">Imprimir</button>
+        <button class="button secondary no-print" type="button" onclick="window.print()">Imprimir esta tela</button>
         {% if request.user.is_authenticated %}
           <form method="post" action="/accounts/logout/" style="display:inline">{% csrf_token %}<button class="button secondary" type="submit">{{ request.user.username }} · sair</button></form>
         {% else %}

@@ -21,6 +21,7 @@ from power_church_django.services.legacy import (
     list_secure_people_trash,
     list_people,
     people_import_dashboard,
+    search_receipt_people,
     search_people_for_relationship,
 )
 from power_church_django.services.legacy_write import (
@@ -35,6 +36,7 @@ from power_church_django.services.legacy_write import (
     empty_person_form,
     get_person_form_initial,
     import_people_from_upload,
+    merge_people,
     person_form_payload,
     purge_secure_person_trash,
     soft_delete_person,
@@ -369,12 +371,68 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
         "can_view_finance": _local_or_has_permission(request, "view_contributions"),
         "can_manage_finance": _local_or_has_permission(request, "manage_contributions"),
         "can_delete_people": _can_delete_people(request),
+        "can_merge_people": _can_merge_people(request),
     }
     try:
         context["detail"] = get_person_detail(person_id)
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/detail.html", context)
+
+
+def merge(request: HttpRequest, person_id: int) -> HttpResponse:
+    if not _can_merge_people(request):
+        messages.error(request, "Entre com um usuario autorizado para mesclar fichas.")
+        return redirect(f"/people/{person_id}/")
+    context = {
+        "title": "Mesclar fichas",
+        "merge_lookup": request.GET.get("merge_lookup", ""),
+        "selected_duplicate_id": int(request.GET.get("selected_duplicate_id") or 0),
+    }
+    try:
+        primary_detail = get_person_detail(person_id)
+        if not primary_detail:
+            raise LegacyWriteError("Ficha principal nao encontrada.")
+        context["primary_detail"] = primary_detail
+        if context["merge_lookup"]:
+            context["merge_candidates"] = [
+                item
+                for item in search_receipt_people(context["merge_lookup"], limit=30)
+                if int(item["id"] or 0) != int(person_id or 0)
+            ]
+        else:
+            context["merge_candidates"] = []
+        if context["selected_duplicate_id"]:
+            duplicate_detail = get_person_detail(context["selected_duplicate_id"])
+            if not duplicate_detail:
+                raise LegacyWriteError("Ficha duplicada nao encontrada ou ja fora do cadastro operacional.")
+            context["duplicate_detail"] = duplicate_detail
+            context["prefer_duplicate_name"] = _prefer_duplicate_name(
+                primary_detail["person"].get("nome"),
+                duplicate_detail["person"].get("nome"),
+            )
+            context["comparison_rows"] = _merge_comparison_rows(primary_detail, duplicate_detail)
+        else:
+            context["prefer_duplicate_name"] = False
+            context["comparison_rows"] = []
+        if request.method == "POST":
+            duplicate_person_id = int(request.POST.get("duplicate_person_id") or 0)
+            result = merge_people(
+                person_id,
+                duplicate_person_id,
+                reason=request.POST.get("reason", ""),
+                actor=_actor_label(request),
+                prefer_duplicate_name=str(request.POST.get("prefer_duplicate_name") or "") in {"1", "on", "true", "sim"},
+            )
+            messages.success(
+                request,
+                "Mesclagem concluida com auditoria preservada. "
+                f"Ficha #{result['duplicate_person_id']} absorvida por #{result['primary_person_id']}.",
+            )
+            return redirect(f"/people/{person_id}/")
+    except (LegacyDatabaseError, LegacyWriteError) as exc:
+        context["error"] = str(exc)
+    return render(request, "power_church_django/people/merge.html", context)
 
 
 def delete(request: HttpRequest, person_id: int) -> HttpResponse:
@@ -544,12 +602,45 @@ def _can_delete_people(request: HttpRequest) -> bool:
     return request.user.is_superuser or request.user.has_perm("power_church.delete_people")
 
 
+def _can_merge_people(request: HttpRequest) -> bool:
+    return _local_or_has_permission(request, "delete_people")
+
+
 def _can_purge_people(request: HttpRequest) -> bool:
     return bool(request.user.is_authenticated and request.user.is_superuser)
 
 
 def normalize_delete_confirmation(value: object) -> str:
     return " ".join(str(value or "").strip().upper().split())
+
+
+def _prefer_duplicate_name(primary_name: object, duplicate_name: object) -> bool:
+    primary_text = str(primary_name or "").strip()
+    duplicate_text = str(duplicate_name or "").strip()
+    return bool(duplicate_text and (len(duplicate_text.split()) > len(primary_text.split()) or len(duplicate_text) > len(primary_text) + 4))
+
+
+def _merge_comparison_rows(primary_detail: dict[str, object], duplicate_detail: dict[str, object]) -> list[dict[str, str]]:
+    primary_person = primary_detail.get("person") or {}
+    duplicate_person = duplicate_detail.get("person") or {}
+    primary_address = (primary_detail.get("addresses") or [{}])[0] if (primary_detail.get("addresses") or []) else {}
+    duplicate_address = (duplicate_detail.get("addresses") or [{}])[0] if (duplicate_detail.get("addresses") or []) else {}
+    return [
+        {"label": "Nome", "primary": str(primary_person.get("nome") or "-"), "duplicate": str(duplicate_person.get("nome") or "-")},
+        {"label": "Codigo", "primary": str(primary_person.get("codigo") or "-"), "duplicate": str(duplicate_person.get("codigo") or "-")},
+        {"label": "CPF", "primary": str(primary_person.get("cpf") or "-"), "duplicate": str(duplicate_person.get("cpf") or "-")},
+        {"label": "Nascimento", "primary": str(primary_person.get("data_nascimento") or "-"), "duplicate": str(duplicate_person.get("data_nascimento") or "-")},
+        {"label": "E-mail", "primary": str(primary_person.get("email") or "-"), "duplicate": str(duplicate_person.get("email") or "-")},
+        {"label": "Telefone", "primary": str(primary_person.get("telefone") or "-"), "duplicate": str(duplicate_person.get("telefone") or "-")},
+        {"label": "WhatsApp", "primary": str(primary_person.get("whatsapp") or "-"), "duplicate": str(duplicate_person.get("whatsapp") or "-")},
+        {
+            "label": "Endereco principal",
+            "primary": f"{primary_address.get('logradouro') or ''} {primary_address.get('numero') or ''} {primary_address.get('complemento') or ''} {primary_address.get('bairro') or ''} {primary_address.get('cidade') or ''}".strip() or "-",
+            "duplicate": f"{duplicate_address.get('logradouro') or ''} {duplicate_address.get('numero') or ''} {duplicate_address.get('complemento') or ''} {duplicate_address.get('bairro') or ''} {duplicate_address.get('cidade') or ''}".strip() or "-",
+        },
+        {"label": "Contribuicoes ativas", "primary": str(len(primary_detail.get('contributions') or [])), "duplicate": str(len(duplicate_detail.get('contributions') or []))},
+        {"label": "Identidades financeiras", "primary": str(len(primary_detail.get('contributors') or [])), "duplicate": str(len(duplicate_detail.get('contributors') or []))},
+    ]
 
 
 def _save_person_photo_if_present(

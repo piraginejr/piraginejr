@@ -163,7 +163,11 @@ assert_html(
 )
 assert_html(
     f"/people/{person_id}/",
-    ["Dados cadastrais", "person-photo-large", "Familia domiciliar por endereco", "Sincronizar familias domiciliares por endereco", "Relacoes familiares ativas", "relationship-card", "Desassociar da familia domiciliar", "Ignorar sugestao", "data-person-relationship-search", "Contribuintes vinculados", "Ultimas contribuicoes"],
+    ["Dados cadastrais", "person-photo-large", "Mesclar ficha", "Familia domiciliar por endereco", "Sincronizar familias domiciliares por endereco", "Relacoes familiares ativas", "relationship-card", "Desassociar da familia domiciliar", "Ignorar sugestao", "data-person-relationship-search", "Contribuintes vinculados", "Ultimas contribuicoes"],
+)
+assert_html(
+    f"/people/{person_id}/merge/",
+    ["Mesclar ficha em", "Buscar ficha duplicada", "Justificativa da mesclagem"],
 )
 assert_html(
     f"/people/{person_id}/edit/",
@@ -176,6 +180,7 @@ assert_html(
 assert_html("/people/imports/", ["Importacao de pessoas", "Subir planilha Excel", "Lotes recentes de pessoas"])
 if people_lot:
     assert_html(f"/people/imports/{people_lot[0]}/", ["Lote de pessoas", "Linhas importadas"])
+assert_html("/audit/", ["Mesclar fichas do cadastro", "Buscar ficha principal", "Buscar ficha duplicada"])
 emit("Pessoas e importacao de pessoas", "OK", "lista, familias organizadas/auditoria, ficha com vinculos familiares, edicao e auditoria de importacao no Django")
 
 contributors_all = list_contributors(limit=10000)

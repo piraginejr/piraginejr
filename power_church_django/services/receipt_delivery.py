@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import time
 from typing import Any
 
 from django.conf import settings
@@ -13,7 +14,12 @@ from power_church_core.normalization import normalize_query
 from power_church_django.apps.contributions.models import ReceiptDispatch, ReceiptEmailTemplate
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.legacy import connect_legacy, format_cpf, format_status, get_receipt_detail, status_sigla
-from power_church_django.services.legacy_write import issue_period_receipts, issue_receipts_for_event_contributions
+from power_church_django.services.legacy_write import (
+    issue_period_receipts,
+    issue_receipt_for_contribution_ids,
+    issue_receipts_for_event_contributions,
+    preferred_delivery_email,
+)
 from power_church_django.services.mail_dispatch import (
     MailAttachment,
     MailDispatchError,
@@ -259,7 +265,7 @@ def receipt_person_snapshot(person_id: int) -> dict[str, Any] | None:
         "cpf": format_cpf(row["cpf"]),
         "status": format_status(row["status"]),
         "sigla": status_sigla(row["status"], True),
-        "email": row["email_principal"] or "",
+        "email": preferred_delivery_email(row["email_principal"], row["nome"]),
         "telefone": row["telefone_principal"] or "",
     }
 
@@ -304,7 +310,11 @@ def _dispatch_defaults(detail: dict[str, Any], *, email_to: str = "", subject: s
     template = get_or_create_receipt_email_template()
     rendered_subject = _render_template_value(subject or template.subject_template, detail)
     rendered_body = _render_template_value(body or template.body_template, detail)
-    rendered_email = normalize_query(email_to) or normalize_query((detail.get("person") or {}).get("email")) or normalize_query((detail.get("receipt") or {}).get("person_email"))
+    rendered_email = (
+        preferred_delivery_email(email_to, (detail.get("receipt") or {}).get("person_name"))
+        or preferred_delivery_email((detail.get("person") or {}).get("email"), (detail.get("receipt") or {}).get("person_name"))
+        or preferred_delivery_email((detail.get("receipt") or {}).get("person_email"), (detail.get("receipt") or {}).get("person_name"))
+    )
     return ReceiptRenderContext(detail=detail, subject=rendered_subject, body=rendered_body, to_email=rendered_email)
 
 
@@ -318,6 +328,7 @@ def queue_receipt_dispatches(
     trigger: str = ReceiptDispatch.Trigger.MANUAL,
     auto_created: bool = False,
     send_now: bool = False,
+    metadata_extra: dict[str, Any] | None = None,
 ) -> list[ReceiptDispatch]:
     dispatches: list[ReceiptDispatch] = []
     for receipt_id in [int(value or 0) for value in receipt_ids if int(value or 0)]:
@@ -330,6 +341,8 @@ def queue_receipt_dispatches(
             "items": [item.get("contribution_id") for item in detail.get("items") or []],
             "total_itens": len(detail.get("items") or []),
         }
+        if metadata_extra:
+            metadata.update(metadata_extra)
         dispatch = ReceiptDispatch.objects.create(
             organization_id=int(receipt.get("organization_id") or 0) or None,
             legacy_person_id=int(receipt.get("person_id") or 0),
@@ -374,6 +387,320 @@ def queue_receipt_dispatches(
     return dispatches
 
 
+def _campaign_full_receipt_sets(
+    *,
+    cutoff_date: str = "",
+) -> tuple[dict[int, dict[str, Any]], dict[int, list[dict[str, Any]]], dict[int, list[dict[str, Any]]]]:
+    cutoff = normalize_query(cutoff_date)
+    contribution_clause = ""
+    contribution_params: list[Any] = []
+    receipt_clause = ""
+    receipt_params: list[Any] = []
+    if cutoff:
+        contribution_clause = " AND c.data_recebimento <= ?"
+        contribution_params.append(cutoff)
+        receipt_clause = " AND c.data_recebimento <= ?"
+        receipt_params.append(cutoff)
+    with connect_legacy() as conn:
+        contribution_rows = conn.execute(
+            f"""
+            SELECT p.id AS person_id,
+                   p.nome,
+                   p.email_principal,
+                   c.id AS contribution_id,
+                   c.valor,
+                   c.data_recebimento
+              FROM pessoas p
+              JOIN contribuicoes c ON c.pessoa_id = p.id
+             WHERE p.ativo = 1
+               AND c.ativo = 1
+               AND COALESCE(p.email_principal, '') <> ''
+               {contribution_clause}
+             ORDER BY p.nome, c.data_recebimento, c.id
+            """,
+            tuple(contribution_params),
+        ).fetchall()
+        receipt_rows = conn.execute(
+            f"""
+            SELECT r.id AS receipt_id,
+                   r.pessoa_id AS person_id,
+                   r.numero,
+                   r.data_emissao,
+                   ri.contribuicao_id
+              FROM recibos r
+              JOIN recibo_itens ri ON ri.recibo_id = r.id
+              JOIN contribuicoes c ON c.id = ri.contribuicao_id
+             WHERE r.status <> 'cancelado'
+               AND r.cancelado_em IS NULL
+               {receipt_clause}
+             ORDER BY r.pessoa_id, r.id, ri.id
+            """,
+            tuple(receipt_params),
+        ).fetchall()
+    people: dict[int, dict[str, Any]] = {}
+    receipt_sets: dict[int, list[dict[str, Any]]] = {}
+    contributions_by_person: dict[int, list[dict[str, Any]]] = {}
+    for row in contribution_rows:
+        person_id = int(row["person_id"] or 0)
+        if not person_id:
+            continue
+        contributions_by_person.setdefault(person_id, []).append(
+            {
+                "id": int(row["contribution_id"] or 0),
+                "value": round(float(row["valor"] or 0), 2),
+                "date": row["data_recebimento"] or "",
+            }
+        )
+        people.setdefault(
+            person_id,
+            {
+                "person_id": person_id,
+                "person_name": row["nome"] or "",
+                "email": preferred_delivery_email(row["email_principal"], row["nome"]),
+            },
+        )
+    for row in receipt_rows:
+        person_id = int(row["person_id"] or 0)
+        receipt_id = int(row["receipt_id"] or 0)
+        if not person_id or not receipt_id:
+            continue
+        bucket = receipt_sets.setdefault(person_id, [])
+        current = next((item for item in bucket if int(item["receipt_id"]) == receipt_id), None)
+        if current is None:
+            current = {
+                "receipt_id": receipt_id,
+                "receipt_number": row["numero"] or "",
+                "emission_date": row["data_emissao"] or "",
+                "contribution_ids": [],
+            }
+            bucket.append(current)
+        current["contribution_ids"].append(int(row["contribuicao_id"] or 0))
+    return people, contributions_by_person, receipt_sets
+
+
+def consolidated_receipt_campaign_candidates(
+    *,
+    cutoff_date: str = "",
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    people, contributions_by_person, receipt_sets = _campaign_full_receipt_sets(cutoff_date=cutoff_date)
+    candidates: list[dict[str, Any]] = []
+    for person_id, person in people.items():
+        contributions = contributions_by_person.get(person_id, [])
+        if not contributions:
+            continue
+        full_ids = sorted(int(item["id"]) for item in contributions)
+        full_id_set = set(full_ids)
+        total_value = round(sum(float(item["value"] or 0) for item in contributions), 2)
+        existing_receipts = receipt_sets.get(person_id, [])
+        matching_receipt = next(
+            (
+                item
+                for item in existing_receipts
+                if set(int(value or 0) for value in item.get("contribution_ids", [])) == full_id_set
+            ),
+            None,
+        )
+        latest_dispatch = None
+        if matching_receipt:
+            latest_dispatch = (
+                ReceiptDispatch.objects.filter(legacy_receipt_id=int(matching_receipt["receipt_id"] or 0))
+                .order_by("-created_at", "-id")
+                .first()
+            )
+        if latest_dispatch and latest_dispatch.status == ReceiptDispatch.Status.SENT:
+            action = "already_sent"
+        elif latest_dispatch and latest_dispatch.status == ReceiptDispatch.Status.PENDING:
+            action = "already_queued"
+        elif latest_dispatch and latest_dispatch.status == ReceiptDispatch.Status.FAILED:
+            action = "retry_existing"
+        elif matching_receipt:
+            action = "queue_existing"
+        else:
+            action = "generate_and_queue"
+        candidates.append(
+            {
+                "person_id": person_id,
+                "person_name": person["person_name"],
+                "email": person["email"],
+                "contribution_count": len(full_ids),
+                "contribution_ids": full_ids,
+                "total_value": total_value,
+                "period_start": min(str(item["date"] or "") for item in contributions),
+                "period_end": max(str(item["date"] or "") for item in contributions),
+                "matching_receipt_id": int(matching_receipt["receipt_id"] or 0) if matching_receipt else 0,
+                "matching_receipt_number": matching_receipt["receipt_number"] if matching_receipt else "",
+                "latest_dispatch_id": int(latest_dispatch.pk or 0) if latest_dispatch else 0,
+                "latest_dispatch_status": str(latest_dispatch.status or "") if latest_dispatch else "",
+                "action": action,
+            }
+        )
+    candidates.sort(key=lambda item: (str(item["person_name"]).casefold(), int(item["person_id"])))
+    if int(limit or 0) > 0:
+        return candidates[: int(limit)]
+    return candidates
+
+
+def consolidated_receipt_campaign_summary(*, cutoff_date: str = "") -> dict[str, Any]:
+    candidates = consolidated_receipt_campaign_candidates(cutoff_date=cutoff_date)
+    summary = {
+        "cutoff_date": normalize_query(cutoff_date) or "",
+        "total_people": len(candidates),
+        "generate_and_queue": 0,
+        "queue_existing": 0,
+        "retry_existing": 0,
+        "already_queued": 0,
+        "already_sent": 0,
+    }
+    for item in candidates:
+        action = str(item["action"] or "")
+        if action in summary:
+            summary[action] += 1
+    summary["ready_to_queue"] = summary["generate_and_queue"] + summary["queue_existing"] + summary["retry_existing"]
+    return {"summary": summary, "items": candidates}
+
+
+def prepare_consolidated_receipt_campaign(
+    *,
+    cutoff_date: str = "",
+    emission_date: str = "",
+    actor: str = "",
+    limit: int = 0,
+) -> dict[str, Any]:
+    cutoff = normalize_query(cutoff_date)
+    emission = normalize_query(emission_date) or date.today().isoformat()
+    campaign_key = f"retroativo_consolidado:{cutoff or emission}"
+    snapshot = consolidated_receipt_campaign_summary(cutoff_date=cutoff)
+    prepared: list[dict[str, Any]] = []
+    created = 0
+    reused = 0
+    retried = 0
+    skipped = 0
+    for item in snapshot["items"]:
+        if int(limit or 0) > 0 and len(prepared) >= int(limit):
+            break
+        action = str(item["action"] or "")
+        if action not in {"generate_and_queue", "queue_existing", "retry_existing"}:
+            skipped += 1
+            continue
+        receipt_id = int(item["matching_receipt_id"] or 0)
+        if action == "generate_and_queue":
+            receipt_id = issue_receipt_for_contribution_ids(
+                person_id=int(item["person_id"] or 0),
+                contribution_ids=[int(value or 0) for value in item["contribution_ids"]],
+                emission_date=emission,
+                notes=f"Recibo consolidado retroativo preparado em campanha ate {cutoff or emission}.",
+                actor=actor,
+                replace_existing=True,
+                audit_action="gerar_recibo_consolidado_retroativo_django",
+            )
+            created += 1
+        existing_dispatches = list(
+            ReceiptDispatch.objects.filter(
+                legacy_receipt_id=receipt_id,
+                metadata__campaign_key=campaign_key,
+            )
+            .exclude(status=ReceiptDispatch.Status.CANCELLED)
+            .order_by("-created_at", "-id")
+        )
+        if action == "queue_existing":
+            reused += 1
+        elif action == "retry_existing":
+            retried += 1
+        if existing_dispatches:
+            dispatches = existing_dispatches[:1]
+        else:
+            dispatches = queue_receipt_dispatches(
+                [receipt_id],
+                email_to=str(item["email"] or ""),
+                subject="",
+                body="",
+                actor=actor,
+                trigger=ReceiptDispatch.Trigger.RETROACTIVE,
+                auto_created=True,
+                send_now=False,
+                metadata_extra={
+                    "campaign_key": campaign_key,
+                    "campaign_mode": "retroativo_consolidado",
+                    "campaign_cutoff_date": cutoff or emission,
+                },
+            )
+        prepared.append(
+            {
+                **item,
+                "receipt_id": receipt_id,
+                "dispatch_ids": [int(dispatch.pk or 0) for dispatch in dispatches],
+            }
+        )
+    return {
+        "campaign_key": campaign_key,
+        "cutoff_date": cutoff or emission,
+        "emission_date": emission,
+        "prepared": len(prepared),
+        "created": created,
+        "reused": reused,
+        "retried": retried,
+        "skipped": skipped,
+        "items": prepared,
+        "summary": snapshot["summary"],
+    }
+
+
+def dedupe_campaign_receipt_dispatches(*, campaign_key: str, actor: str = "") -> dict[str, int]:
+    clean_key = normalize_query(campaign_key)
+    if not clean_key:
+        return {"receipts": 0, "cancelled": 0}
+    rows = list(
+        ReceiptDispatch.objects.filter(metadata__campaign_key=clean_key)
+        .exclude(status=ReceiptDispatch.Status.CANCELLED)
+        .order_by("legacy_receipt_id", "-created_at", "-id")
+    )
+    by_receipt: dict[int, list[ReceiptDispatch]] = {}
+    for item in rows:
+        by_receipt.setdefault(int(item.legacy_receipt_id or 0), []).append(item)
+    kept_receipts = 0
+    cancelled = 0
+    priority = {
+        ReceiptDispatch.Status.SENT: 3,
+        ReceiptDispatch.Status.PENDING: 2,
+        ReceiptDispatch.Status.FAILED: 1,
+    }
+    for receipt_id, items in by_receipt.items():
+        if not receipt_id or not items:
+            continue
+        keep = sorted(
+            items,
+            key=lambda item: (
+                priority.get(str(item.status or ""), 0),
+                item.created_at or timezone.now(),
+                int(item.pk or 0),
+            ),
+            reverse=True,
+        )[0]
+        kept_receipts += 1
+        for item in items:
+            if int(item.pk or 0) == int(keep.pk or 0):
+                continue
+            item.status = ReceiptDispatch.Status.CANCELLED
+            item.last_error = "Fila duplicada cancelada automaticamente para evitar envio repetido na campanha consolidada."
+            item.save(update_fields=["status", "last_error", "updated_at"])
+            cancelled += 1
+            try:
+                record_django_audit_event(
+                    actor=actor,
+                    action="cancelar_envio_recibo_duplicado_django",
+                    table_name="receipt_dispatch",
+                    record_id=int(item.pk or 0),
+                    organization_id=item.organization_id,
+                    source="receipt_email",
+                    summary=f"Fila duplicada do recibo {item.legacy_receipt_number or item.legacy_receipt_id} cancelada automaticamente",
+                    after={"status": item.status, "erro": item.last_error},
+                )
+            except Exception:
+                pass
+    return {"receipts": kept_receipts, "cancelled": cancelled}
+
+
 def _raw_date(value: object) -> str:
     raw = normalize_query(value)
     if len(raw) == 10 and raw[2] == "/" and raw[5] == "/":
@@ -382,8 +709,44 @@ def _raw_date(value: object) -> str:
     return raw
 
 
+def refresh_receipt_dispatch_destination(dispatch: ReceiptDispatch | int, *, actor: str = "") -> ReceiptDispatch:
+    item = dispatch if isinstance(dispatch, ReceiptDispatch) else ReceiptDispatch.objects.get(pk=int(dispatch))
+    detail = get_receipt_detail(int(item.legacy_receipt_id or 0))
+    if not detail:
+        return item
+    refreshed_email = (
+        preferred_delivery_email((detail.get("person") or {}).get("email"), (detail.get("receipt") or {}).get("person_name"))
+        or preferred_delivery_email((detail.get("receipt") or {}).get("person_email"), (detail.get("receipt") or {}).get("person_name"))
+        or preferred_delivery_email(item.email_to or item.person_email, item.person_name)
+    )
+    changed = False
+    if refreshed_email and refreshed_email != (item.email_to or ""):
+        item.email_to = refreshed_email
+        changed = True
+    if refreshed_email and refreshed_email != (item.person_email or ""):
+        item.person_email = refreshed_email
+        changed = True
+    if changed:
+        item.save(update_fields=["email_to", "person_email", "updated_at"])
+        try:
+            record_django_audit_event(
+                actor=actor,
+                action="atualizar_destino_fila_recibo_django",
+                table_name="receipt_dispatch",
+                record_id=int(item.pk or 0),
+                organization_id=item.organization_id,
+                source="receipt_email",
+                summary=f"Destino do recibo {item.legacy_receipt_number or item.period_label} sincronizado com a ficha",
+                after={"email_to": item.email_to, "person_email": item.person_email},
+            )
+        except Exception:
+            pass
+    return item
+
+
 def send_receipt_dispatch(dispatch: ReceiptDispatch | int, *, actor: str = "") -> ReceiptDispatch:
     item = dispatch if isinstance(dispatch, ReceiptDispatch) else ReceiptDispatch.objects.get(pk=int(dispatch))
+    item = refresh_receipt_dispatch_destination(item, actor=actor)
     detail = get_receipt_detail(int(item.legacy_receipt_id or 0))
     if not detail:
         item.status = ReceiptDispatch.Status.FAILED
@@ -511,6 +874,37 @@ def process_pending_receipt_dispatches(*, limit: int = 20, actor: str = "") -> l
     return [send_receipt_dispatch(item, actor=actor) for item in items]
 
 
+def process_campaign_receipt_dispatches(
+    *,
+    campaign_key: str,
+    limit: int = 20,
+    actor: str = "",
+    pending_only: bool = False,
+    sleep_seconds: float = 0.0,
+    pause_every: int = 0,
+    pause_seconds: float = 0.0,
+) -> list[ReceiptDispatch]:
+    statuses = [ReceiptDispatch.Status.PENDING]
+    if not pending_only:
+        statuses.append(ReceiptDispatch.Status.FAILED)
+    items = list(
+        ReceiptDispatch.objects.filter(status__in=statuses, metadata__campaign_key=normalize_query(campaign_key))
+        .exclude(Q(email_to="") & Q(person_email=""))
+        .order_by("created_at", "id")[: max(1, int(limit or 20))]
+    )
+    processed: list[ReceiptDispatch] = []
+    for index, item in enumerate(items, start=1):
+        processed.append(send_receipt_dispatch(item, actor=actor))
+        if index >= len(items):
+            continue
+        if int(pause_every or 0) > 0 and index % int(pause_every) == 0 and float(pause_seconds or 0) > 0:
+            time.sleep(float(pause_seconds or 0))
+            continue
+        if float(sleep_seconds or 0) > 0:
+            time.sleep(float(sleep_seconds or 0))
+    return processed
+
+
 def email_runtime_snapshot() -> dict[str, Any]:
     return {
         "provider": configured_provider(),
@@ -584,10 +978,11 @@ def issue_event_receipts_and_optionally_send(
             person_id = int((detail.get("receipt") or {}).get("person_id") or 0)
             email_to = ""
             if email_overrides:
-                email_to = normalize_query(email_overrides.get(person_id))
+                email_to = preferred_delivery_email(email_overrides.get(person_id), (detail.get("receipt") or {}).get("person_name"))
             if not email_to:
-                email_to = normalize_query((detail.get("person") or {}).get("email")) or normalize_query(
-                    (detail.get("receipt") or {}).get("person_email")
+                email_to = preferred_delivery_email((detail.get("person") or {}).get("email"), (detail.get("receipt") or {}).get("person_name")) or preferred_delivery_email(
+                    (detail.get("receipt") or {}).get("person_email"),
+                    (detail.get("receipt") or {}).get("person_name"),
                 )
             if not email_to:
                 continue
@@ -638,13 +1033,13 @@ def schedule_automatic_receipts_for_events(
         person_id = int(row["pessoa_id"] or 0)
         if not person_id:
             continue
-        email_overrides[person_id] = normalize_query(row["email_principal"])
+        email_overrides[person_id] = preferred_delivery_email(row["email_principal"], row["nome"])
         payload = by_person.setdefault(
             person_id,
             {
                 "person_id": person_id,
                 "person_name": row["nome"] or "",
-                "email": normalize_query(row["email_principal"]),
+                "email": preferred_delivery_email(row["email_principal"], row["nome"]),
                 "contribution_ids": [],
                 "dates": [],
                 "competences": [],

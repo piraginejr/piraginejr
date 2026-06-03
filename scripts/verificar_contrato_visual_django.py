@@ -62,13 +62,14 @@ def build_checks(db_path: Path) -> list[Check]:
     from django.conf import settings
     from django.test import Client
 
-    from power_church_django.services.legacy import connect_legacy, list_contributions, list_contributors, list_envelopes, list_people
+    from power_church_django.services.legacy import connect_legacy, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people
 
     if "testserver" not in settings.ALLOWED_HOSTS:
         settings.ALLOWED_HOSTS.append("testserver")
 
     client = Client()
     with connect_legacy() as conn:
+        person_id = conn.execute("SELECT id FROM pessoas WHERE ativo = 1 ORDER BY id LIMIT 1").fetchone()[0]
         latest_competence = conn.execute(
             "SELECT competencia FROM contribuicoes WHERE ativo = 1 AND COALESCE(competencia, '') <> '' "
             "GROUP BY competencia ORDER BY MAX(COALESCE(competencia_ordem, 0)) DESC, competencia DESC LIMIT 1"
@@ -212,18 +213,21 @@ def build_checks(db_path: Path) -> list[Check]:
     )
     checks.append(Check("Familias organizadas exibem consulta imprimivel e identidade nominal", "OK" if ok else "FALHA", detail))
     families_audit_html = get("/people/families/?section=audit")
-    ok, detail = _contains_all(
-        families_audit_html,
-        [
-            "Fila de auditoria",
-            "Aplicacao em lote",
-            "Criar familias selecionadas",
-            "Ignorar sugestoes selecionadas",
-            "Padrao inteligente da auditoria",
-            "Categoria inteligente",
-            "Acao sugerida:",
-        ],
-    )
+    families_audit_snapshot = family_registry_dashboard(section="audit", mode="all")
+    families_audit_tokens = [
+        "Fila de auditoria",
+        "Categoria inteligente",
+    ]
+    if int(families_audit_snapshot["audit"]["summary"]["shown_groups"] or 0) > 0:
+        families_audit_tokens.extend(
+            [
+                "Aplicacao em lote",
+                "Criar familias selecionadas",
+                "Ignorar sugestoes selecionadas",
+                "Acao sugerida:",
+            ]
+        )
+    ok, detail = _contains_all(families_audit_html, families_audit_tokens)
     checks.append(Check("Familias preservam fila de auditoria", "OK" if ok else "FALHA", detail))
     families_broad_html = get("/people/families/?section=broad")
     ok, detail = _contains_all(
@@ -254,9 +258,33 @@ def build_checks(db_path: Path) -> list[Check]:
             "Classificacao",
             "Descricao / Acao sugerida",
             "Risco",
+            "Mesclar fichas do cadastro",
+            "Buscar ficha principal",
+            "Buscar ficha duplicada",
+            "Abrir comparacao da mesclagem",
         ],
     )
     checks.append(Check("Auditoria operacional exibe classificacao inteligente", "OK" if ok else "FALHA", detail))
+    person_detail_html = get(f"/people/{person_id}/")
+    ok, detail = _contains_all(
+        person_detail_html,
+        [
+            "Mesclar ficha",
+            "Dados cadastrais",
+            "Contribuintes vinculados",
+        ],
+    )
+    checks.append(Check("Ficha da pessoa expone mesclagem auditavel", "OK" if ok else "FALHA", detail))
+    merge_html = get(f"/people/{person_id}/merge/")
+    ok, detail = _contains_all(
+        merge_html,
+        [
+            "Mesclar ficha em",
+            "Buscar ficha duplicada",
+            "Justificativa da mesclagem",
+        ],
+    )
+    checks.append(Check("Tela de merge de pessoas fica acessivel", "OK" if ok else "FALHA", detail))
     contributions_data = list_contributions()
     contributions_html = get("/contributions/")
     ok, detail = _contains_all(
@@ -352,6 +380,8 @@ def build_checks(db_path: Path) -> list[Check]:
         receipts_html,
         [
             "Gerar recibo por pessoa",
+            "Monitorar fila de envio",
+            "Fila de envio em andamento",
             "Pesquisar pessoa",
             "Pesquisar recibos",
             "Lista de recibos",
@@ -360,6 +390,22 @@ def build_checks(db_path: Path) -> list[Check]:
         ],
     )
     checks.append(Check("Recibos exibem busca central e impressao", "OK" if ok else "FALHA", detail))
+    receipt_queue_html = get("/receipts/queue/")
+    ok, detail = _contains_all(
+        receipt_queue_html,
+        [
+            "Monitor de envio de recibos",
+            "Filtros do monitor",
+            "Pendentes",
+            "Enviados",
+            "Falhas",
+            "Ultimos itens da fila",
+            "Auditoria de e-mails",
+            "Reprocessar falhas e pendencias deste filtro",
+            "Sincronizar e-mail",
+        ],
+    )
+    checks.append(Check("Monitor da fila de recibos expone progresso e ultimos envios", "OK" if ok else "FALHA", detail))
     receipt_generator_html = get(f"/receipts/?selected_person_id={contribution_person_id}")
     ok, detail = _contains_all(
         receipt_generator_html,

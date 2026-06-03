@@ -37,6 +37,18 @@ def _actor(request: HttpRequest) -> str:
     return "django"
 
 
+def _search_person_by_id(person_id: int) -> dict[str, object] | None:
+    if person_id <= 0:
+        return None
+    for item in search_receipt_people(str(person_id), limit=10):
+        try:
+            if int(item.get("id") or 0) == person_id:
+                return item
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def index(request: HttpRequest) -> HttpResponse:
     mode = request.GET.get("modo", "cadastro")
     context = {
@@ -49,6 +61,11 @@ def index(request: HttpRequest) -> HttpResponse:
         "email_kind": request.GET.get("email_kind", ""),
         "email_status": request.GET.get("email_status", ""),
         "q": request.GET.get("q", ""),
+        "merge_lookup": request.GET.get("merge_lookup", ""),
+        "merge_primary_lookup": request.GET.get("merge_primary_lookup", ""),
+        "merge_duplicate_lookup": request.GET.get("merge_duplicate_lookup", ""),
+        "merge_primary_id": _int_param(request, "merge_primary_id", 0),
+        "merge_duplicate_id": _int_param(request, "merge_duplicate_id", 0),
         "selected_person_id": _int_param(request, "selected_person_id", 0),
         "person_lookup": request.GET.get("person_lookup", ""),
     }
@@ -130,6 +147,14 @@ def index(request: HttpRequest) -> HttpResponse:
             )
             context["technical"] = technical
         else:
+            if context["merge_lookup"]:
+                context["merge_people"] = search_receipt_people(context["merge_lookup"], limit=20)
+            if context["merge_primary_lookup"]:
+                context["merge_primary_people"] = search_receipt_people(context["merge_primary_lookup"], limit=20)
+            if context["merge_duplicate_lookup"]:
+                context["merge_duplicate_people"] = search_receipt_people(context["merge_duplicate_lookup"], limit=20)
+            context["merge_primary_person"] = _search_person_by_id(context["merge_primary_id"])
+            context["merge_duplicate_person"] = _search_person_by_id(context["merge_duplicate_id"])
             audit = operational_audit(
                 tipo=context["tipo"],
                 severidade=context["severidade"],

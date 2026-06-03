@@ -20,6 +20,7 @@ urlpatterns = [
     path("imports/", views.imports, name="imports"),
     path("imports/<int:lot_id>/", views.import_lot, name="import_lot"),
     path("<int:person_id>/delete/", views.delete, name="delete"),
+    path("<int:person_id>/merge/", views.merge, name="merge"),
     path("<int:person_id>/edit/", views.edit, name="edit"),
     path("<int:person_id>/", views.detail, name="detail"),
 ]

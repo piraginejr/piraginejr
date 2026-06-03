@@ -9,6 +9,7 @@ from power_church_django.apps.contributions.views import (
     receipt_detail,
     receipt_new,
     receipt_pdf_view,
+    receipt_queue_monitor,
     receipts,
 )
 from power_church_django.apps.imports.views import dashboard
@@ -26,6 +27,7 @@ urlpatterns = [
     path("contributions/", include("power_church_django.apps.contributions.urls")),
     path("receipts/", receipts, name="receipts"),
     path("receipts/new/", receipt_new, name="receipt_new"),
+    path("receipts/queue/", receipt_queue_monitor, name="receipt_queue_monitor"),
     path("receipts/<int:receipt_id>/pdf/", receipt_pdf_view, name="receipt_pdf"),
     path("receipts/<int:receipt_id>/", receipt_detail, name="receipt_detail"),
     path("imports/", include("power_church_django.apps.imports.urls")),

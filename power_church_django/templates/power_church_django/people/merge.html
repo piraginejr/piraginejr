@@ -1,0 +1,129 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  {% if primary_detail %}
+    <section class="hero">
+      <div>
+        <p class="badge">Auditoria do cadastro</p>
+        <h1>Mesclar ficha em {{ primary_detail.person.nome }}</h1>
+        <p>Use esta tela para absorver uma ficha duplicada na ficha principal, preservando auditoria, contribuicoes e identidades financeiras.</p>
+      </div>
+      <div class="actions no-print">
+        <a class="button secondary" href="/audit/">Voltar para auditoria</a>
+        <a class="button secondary" href="/people/{{ primary_detail.person.id }}/">Voltar para a ficha</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><span class="label">Ficha principal</span><strong>{{ primary_detail.person.nome }}</strong><div class="muted small">#{{ primary_detail.person.id }} · {{ primary_detail.person.codigo|default:"sem codigo" }}</div></div>
+      <div class="card"><span class="label">CPF principal</span><strong>{{ primary_detail.person.cpf|default:"-" }}</strong></div>
+      <div class="card"><span class="label">Contribuicoes ativas</span><strong>{{ primary_detail.contributions|length }}</strong></div>
+      <div class="card"><span class="label">Identidades financeiras</span><strong>{{ primary_detail.contributors|length }}</strong></div>
+    </section>
+
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>1. Encontrar a ficha duplicada</h2>
+          <p class="muted">Pesquise por nome, codigo, CPF, e-mail ou telefone. Depois abra a comparacao para conferir os dois lados antes de mesclar.</p>
+        </div>
+      </div>
+      <form class="toolbar" method="get">
+        <label class="wide">
+          Buscar ficha duplicada
+          <input name="merge_lookup" value="{{ merge_lookup }}" placeholder="Ex.: Miguel de Souza Santos, CPF, codigo ou e-mail">
+        </label>
+        <button type="submit">Pesquisar</button>
+        <a class="button secondary" href="/people/{{ primary_detail.person.id }}/merge/">Limpar</a>
+      </form>
+
+      {% if merge_candidates %}
+        <div class="summary-grid" style="margin-top:12px;">
+          {% for person in merge_candidates %}
+            <a class="card" href="/people/{{ primary_detail.person.id }}/merge/?merge_lookup={{ merge_lookup|urlencode }}&selected_duplicate_id={{ person.id }}">
+              <span class="label">{{ person.sigla }} · {{ person.status }}</span>
+              <strong>{{ person.nome }}</strong>
+              <div class="muted small">#{{ person.id }} · {{ person.codigo|default:"sem codigo" }}</div>
+              <div class="muted small">{{ person.cpf|default:"sem CPF" }} · {{ person.email|default:"sem e-mail" }}</div>
+            </a>
+          {% endfor %}
+        </div>
+      {% elif merge_lookup %}
+        <p class="muted" style="margin-top:12px;">Nenhuma ficha ativa encontrada para essa pesquisa.</p>
+      {% endif %}
+      {% if not duplicate_detail %}
+        <div class="card" style="margin-top:12px;">
+          <span class="label">Proximo passo</span>
+          <strong>Justificativa da mesclagem</strong>
+          <div class="muted small">Depois de escolher a ficha duplicada, o sistema libera a comparacao completa e o campo de justificativa da mesclagem.</div>
+        </div>
+      {% endif %}
+    </section>
+
+    {% if duplicate_detail %}
+      <section class="split">
+        <div class="panel">
+          <h2>2. Comparacao da principal</h2>
+          <div class="card">
+            <span class="label">Ficha principal</span>
+            <strong>{{ primary_detail.person.nome }}</strong>
+            <div class="muted small">#{{ primary_detail.person.id }} · {{ primary_detail.person.codigo|default:"sem codigo" }}</div>
+          </div>
+          <div class="table-wrap" style="margin-top:12px;">
+            <table>
+              <thead><tr><th>Campo</th><th>Valor</th></tr></thead>
+              <tbody>
+                {% for row in comparison_rows %}
+                  <tr><td>{{ row.label }}</td><td>{{ row.primary }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>3. Ficha candidata a duplicada</h2>
+          <div class="card">
+            <span class="label">Ficha duplicada</span>
+            <strong>{{ duplicate_detail.person.nome }}</strong>
+            <div class="muted small">#{{ duplicate_detail.person.id }} · {{ duplicate_detail.person.codigo|default:"sem codigo" }}</div>
+          </div>
+          <div class="table-wrap" style="margin-top:12px;">
+            <table>
+              <thead><tr><th>Campo</th><th>Valor</th></tr></thead>
+              <tbody>
+                {% for row in comparison_rows %}
+                  <tr><td>{{ row.label }}</td><td>{{ row.duplicate }}</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel no-print">
+        <div class="section-head">
+          <div>
+            <h2>4. Confirmar mesclagem</h2>
+            <p class="muted">A ficha duplicada vai para a lixeira segura com snapshot completo. As referencias operacionais sao trazidas para a ficha principal e a trilha fica na auditoria.</p>
+          </div>
+          <span class="badge warn">Acao auditada</span>
+        </div>
+        <form method="post" class="form-grid">
+          {% csrf_token %}
+          <input type="hidden" name="duplicate_person_id" value="{{ duplicate_detail.person.id }}">
+          <label class="wide muted" style="display:flex; gap:8px; align-items:center;">
+            <input type="checkbox" name="prefer_duplicate_name" value="1" {% if prefer_duplicate_name %}checked{% endif %}>
+            Usar o nome da ficha duplicada na ficha principal quando ele parecer mais completo
+          </label>
+          <label class="wide">
+            Justificativa da mesclagem
+            <textarea name="reason" rows="4" placeholder="Ex.: ficha curta sem sobrenome, mas com mesmo CPF mascarado e mesma origem financeira do contribuinte." required></textarea>
+          </label>
+          <div class="wide actions">
+            <button type="submit">Mesclar ficha duplicada agora</button>
+          </div>
+        </form>
+      </section>
+    {% endif %}
+  {% endif %}
+{% endblock %}

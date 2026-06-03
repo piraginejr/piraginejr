@@ -16,6 +16,7 @@
       <div class="actions no-print">
         <a class="button secondary" href="/people/">Voltar para pessoas</a>
         <a class="button" href="/people/{{ detail.person.id }}/edit/">Editar ficha</a>
+        {% if can_merge_people %}<a class="button secondary" href="/people/{{ detail.person.id }}/merge/">Mesclar ficha</a>{% endif %}
         {% if can_manage_finance %}<a class="button" href="/contributions/new/?person_id={{ detail.person.id }}">Lancar contribuicao</a>{% endif %}
         {% if can_view_finance %}<a class="button" href="/contributions/statements/{{ detail.person.id }}/">Extrato</a>{% endif %}
         {% if can_manage_finance %}<a class="button" href="/receipts/?selected_person_id={{ detail.person.id }}#gerar-recibo">Gerar recibo</a>{% endif %}

@@ -10,6 +10,7 @@
     </div>
     <div class="actions no-print">
       <a class="button secondary" href="#busca-pessoa-recibo">Buscar pessoa para recibo</a>
+      <a class="button secondary" href="/receipts/queue/">Monitorar fila de envio</a>
       <button type="button" onclick="window.print()">Imprimir esta lista</button>
     </div>
   </section>
@@ -20,6 +21,45 @@
       <div class="card"><span class="label">Total emitido</span><strong>{{ receipts.summary.total_fmt }}</strong></div>
       <div class="card"><span class="label">Pessoas</span><strong>{{ receipts.summary.pessoas }}</strong></div>
       <div class="card"><span class="label">Ultima emissao</span><strong style="font-size:20px">{{ receipts.summary.ultima_data|default:"-" }}</strong></div>
+    </section>
+  {% endif %}
+
+  {% if queue_overview %}
+    <section class="panel no-print">
+      <div class="section-head">
+        <div>
+          <h2>Fila de envio em andamento</h2>
+          <p class="muted">Resumo rapido da campanha mais recente para acompanhar o disparo sem sair da central de recibos.</p>
+        </div>
+        <span class="badge">{{ queue_overview.campaign_key|default:"fila geral" }}</span>
+      </div>
+      <div class="grid">
+        <a class="card" href="/receipts/queue/{% if queue_overview.campaign_key %}?campaign={{ queue_overview.campaign_key|urlencode }}&status=pendente{% endif %}">
+          <span class="label">Pendentes</span>
+          <strong>{{ queue_overview.counts.pendente }}</strong>
+          <span class="muted small">Abrir os pendentes</span>
+        </a>
+        <a class="card" href="/receipts/queue/{% if queue_overview.campaign_key %}?campaign={{ queue_overview.campaign_key|urlencode }}&status=enviado{% endif %}">
+          <span class="label">Enviados</span>
+          <strong>{{ queue_overview.counts.enviado }}</strong>
+          <span class="muted small">Abrir os enviados</span>
+        </a>
+        <a class="card" href="/receipts/queue/{% if queue_overview.campaign_key %}?campaign={{ queue_overview.campaign_key|urlencode }}&status=falhou{% endif %}">
+          <span class="label">Falhas</span>
+          <strong>{{ queue_overview.counts.falhou }}</strong>
+          <span class="muted small">Abrir as falhas</span>
+        </a>
+        <a class="card" href="/receipts/queue/{% if queue_overview.campaign_key %}?campaign={{ queue_overview.campaign_key|urlencode }}{% endif %}">
+          <span class="label">Ultima tentativa</span>
+          <strong style="font-size:20px">{{ queue_overview.latest_attempt|default:"-" }}</strong>
+          <span class="muted small">Abrir o monitor</span>
+        </a>
+      </div>
+      <div class="actions">
+        <a class="button" href="/receipts/queue/{% if queue_overview.campaign_key %}?campaign={{ queue_overview.campaign_key|urlencode }}{% endif %}">Abrir monitor detalhado</a>
+        <a class="button secondary" href="/audit/?modo=emails">Auditoria de e-mails</a>
+        <span class="muted small">Provedor atual: {{ email_runtime.provider|default:"-" }}</span>
+      </div>
     </section>
   {% endif %}
 

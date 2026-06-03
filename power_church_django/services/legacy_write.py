@@ -84,6 +84,28 @@ ENVELOPE_DUPLICATE_STATUS = "duplicado"
 
 EMAIL_LOCAL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$")
 EMAIL_DOMAIN_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+PERSONAL_EMAIL_DOMAINS = {
+    "gmail.com",
+    "hotmail.com",
+    "hotmail.com.br",
+    "outlook.com",
+    "outlook.com.br",
+    "live.com",
+    "live.com.br",
+    "msn.com",
+    "yahoo.com",
+    "yahoo.com.br",
+    "icloud.com",
+    "me.com",
+    "mac.com",
+    "uol.com.br",
+    "bol.com.br",
+    "terra.com.br",
+    "globo.com",
+    "globomail.com",
+    "proton.me",
+    "protonmail.com",
+}
 
 
 class LegacyWriteError(RuntimeError):
@@ -157,6 +179,65 @@ def _manual_email_or_error(value: object) -> str:
     ):
         raise LegacyWriteError("E-mail invalido. Corrija o endereco antes de salvar a ficha.")
     return email
+
+
+def split_email_candidates(value: object) -> list[str]:
+    raw = normalize_query(value)
+    if not raw:
+        return []
+    prepared = raw.replace("\n", ";")
+    prepared = re.sub(r"\s+(?:e|ou)\s+", ";", prepared, flags=re.IGNORECASE)
+    prepared = prepared.replace(",", ";")
+    tokens = [normalize_query(chunk).lower() for chunk in prepared.split(";")]
+    emails: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if not token:
+            continue
+        try:
+            candidate = _manual_email_or_error(token)
+        except LegacyWriteError:
+            continue
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        emails.append(candidate)
+    return emails
+
+
+def _email_candidate_score(email: str, person_name: object = "") -> tuple[int, int, int, str]:
+    local, _, domain = email.partition("@")
+    score = 0
+    if domain in PERSONAL_EMAIL_DOMAINS:
+        score += 100
+    else:
+        score += 40
+    normalized_name = normalize_match_name(person_name)
+    tokens = [token.lower() for token in normalized_name.split() if len(token) >= 3]
+    local_compact = re.sub(r"[^a-z0-9]+", "", local.lower())
+    matches = 0
+    for token in tokens:
+        if token in local_compact:
+            score += 12
+            matches += 1
+    if tokens:
+        first = tokens[0]
+        last = tokens[-1]
+        if first in local_compact:
+            score += 8
+        if last in local_compact:
+            score += 10
+        if local_compact.startswith(first[:1]) and last in local_compact:
+            score += 6
+    return (score, matches, -len(local_compact), email)
+
+
+def preferred_delivery_email(value: object, person_name: object = "") -> str:
+    emails = split_email_candidates(value)
+    if not emails:
+        return ""
+    ranked = sorted(emails, key=lambda email: _email_candidate_score(email, person_name), reverse=True)
+    return ranked[0] if ranked else ""
 
 
 def validate_person_cpf_for_form(value: object, ignore_person_id: int = 0) -> dict[str, object]:
@@ -899,6 +980,530 @@ def soft_delete_person(person_id: int, reason: str, actor: str = "") -> int:
                 return trash_id
         except sqlite3.IntegrityError as exc:
             raise LegacyWriteError(f"Nao foi possivel excluir a ficha: {exc}") from exc
+
+
+def _merge_pick_text(primary_value: object, duplicate_value: object, *, prefer_duplicate: bool = False) -> str:
+    primary_text = normalize_query(primary_value)
+    duplicate_text = normalize_query(duplicate_value)
+    if prefer_duplicate and duplicate_text:
+        return duplicate_text
+    return primary_text or duplicate_text
+
+
+def _merge_pick_name(primary_name: object, duplicate_name: object, *, prefer_duplicate_name: bool = False) -> str:
+    primary_text = normalize_query(primary_name)
+    duplicate_text = normalize_query(duplicate_name)
+    if prefer_duplicate_name and duplicate_text:
+        return duplicate_text
+    if not primary_text:
+        return duplicate_text
+    if not duplicate_text:
+        return primary_text
+    primary_words = len(primary_text.split())
+    duplicate_words = len(duplicate_text.split())
+    if duplicate_words > primary_words and primary_words <= 1:
+        return duplicate_text
+    if len(duplicate_text) > len(primary_text) + 4 and primary_words <= 1:
+        return duplicate_text
+    return primary_text
+
+
+def _merge_notes(primary_notes: object, duplicate_notes: object, merge_note: str) -> str:
+    chunks: list[str] = []
+    for raw in (primary_notes, duplicate_notes):
+        text = normalize_query(raw)
+        if text and text not in chunks:
+            chunks.append(text)
+    if merge_note and merge_note not in chunks:
+        chunks.append(merge_note)
+    return "\n".join(chunks)
+
+
+def _address_merge_key(row: sqlite3.Row | Mapping[str, object] | None) -> tuple[str, ...]:
+    if row is None:
+        return ("", "", "", "", "", "", "")
+    return tuple(
+        normalize_query(row.get(field) if isinstance(row, dict) else row[field]).lower()
+        for field in ("cep", "logradouro", "numero", "complemento", "bairro", "cidade", "uf")
+    )
+
+
+def _address_score(row: sqlite3.Row | Mapping[str, object] | None) -> int:
+    key = _address_merge_key(row)
+    return sum(1 for value in key if value)
+
+
+def _merge_duplicate_contacts(
+    conn: sqlite3.Connection,
+    *,
+    primary_person_id: int,
+    duplicate_person_id: int,
+) -> dict[str, int]:
+    primary_keys = {
+        (normalize_query(row["tipo"]).lower(), normalize_query(row["valor"]).lower())
+        for row in conn.execute(
+            "SELECT tipo, valor FROM pessoa_contatos WHERE pessoa_id = ? ORDER BY id",
+            (primary_person_id,),
+        ).fetchall()
+    }
+    moved = 0
+    removed = 0
+    rows = conn.execute(
+        "SELECT id, tipo, valor FROM pessoa_contatos WHERE pessoa_id = ? ORDER BY principal DESC, id",
+        (duplicate_person_id,),
+    ).fetchall()
+    for row in rows:
+        key = (normalize_query(row["tipo"]).lower(), normalize_query(row["valor"]).lower())
+        if key in primary_keys:
+            conn.execute("DELETE FROM pessoa_contatos WHERE id = ?", (row["id"],))
+            removed += 1
+            continue
+        conn.execute(
+            "UPDATE pessoa_contatos SET pessoa_id = ?, criado_em = criado_em WHERE id = ?",
+            (primary_person_id, row["id"]),
+        )
+        primary_keys.add(key)
+        moved += 1
+    for kind in ("email", "telefone", "whatsapp", "celular"):
+        rows = conn.execute(
+            """
+            SELECT id
+              FROM pessoa_contatos
+             WHERE pessoa_id = ? AND tipo = ?
+             ORDER BY principal DESC, id
+            """,
+            (primary_person_id, kind),
+        ).fetchall()
+        first = True
+        for row in rows:
+            desired = 1 if first else 0
+            conn.execute("UPDATE pessoa_contatos SET principal = ? WHERE id = ?", (desired, row["id"]))
+            first = False
+    return {"moved": moved, "removed": removed}
+
+
+def _merge_duplicate_addresses(
+    conn: sqlite3.Connection,
+    *,
+    primary_person_id: int,
+    duplicate_person_id: int,
+) -> dict[str, int]:
+    primary_keys = {
+        _address_merge_key(row): moneyless_int(row["id"])
+        for row in conn.execute(
+            "SELECT * FROM pessoa_enderecos WHERE pessoa_id = ? ORDER BY principal DESC, id",
+            (primary_person_id,),
+        ).fetchall()
+    }
+    moved = 0
+    removed = 0
+    rows = conn.execute(
+        "SELECT * FROM pessoa_enderecos WHERE pessoa_id = ? ORDER BY principal DESC, id",
+        (duplicate_person_id,),
+    ).fetchall()
+    for row in rows:
+        key = _address_merge_key(row)
+        if key in primary_keys or _address_score(row) <= 1:
+            conn.execute("DELETE FROM pessoa_enderecos WHERE id = ?", (row["id"],))
+            removed += 1
+            continue
+        conn.execute("UPDATE pessoa_enderecos SET pessoa_id = ? WHERE id = ?", (primary_person_id, row["id"]))
+        primary_keys[key] = moneyless_int(row["id"])
+        moved += 1
+    rows = conn.execute(
+        "SELECT * FROM pessoa_enderecos WHERE pessoa_id = ? ORDER BY principal DESC, id",
+        (primary_person_id,),
+    ).fetchall()
+    if rows:
+        rich_rows = [row for row in rows if _address_score(row) >= 3]
+        if rich_rows:
+            for row in rows:
+                if _address_score(row) <= 1:
+                    conn.execute("DELETE FROM pessoa_enderecos WHERE id = ?", (row["id"],))
+                    removed += 1
+            rows = conn.execute(
+                "SELECT * FROM pessoa_enderecos WHERE pessoa_id = ? ORDER BY principal DESC, id",
+                (primary_person_id,),
+            ).fetchall()
+        best_row = max(
+            rows,
+            key=lambda row: (
+                _address_score(row),
+                moneyless_int(row["principal"]),
+                -moneyless_int(row["id"]),
+            ),
+        )
+        best_id = moneyless_int(best_row["id"])
+        for row in rows:
+            desired = 1 if moneyless_int(row["id"]) == best_id else 0
+            conn.execute("UPDATE pessoa_enderecos SET principal = ? WHERE id = ?", (desired, row["id"]))
+    return {"moved": moved, "removed": removed}
+
+
+def _merge_duplicate_profiles(
+    conn: sqlite3.Connection,
+    *,
+    primary_person_id: int,
+    duplicate_person_id: int,
+) -> dict[str, int]:
+    existing = {
+        (normalize_query(row["perfil"]).lower(), moneyless_int(row["ativo"]))
+        for row in conn.execute(
+            "SELECT perfil, ativo FROM pessoa_perfis WHERE pessoa_id = ? ORDER BY id",
+            (primary_person_id,),
+        ).fetchall()
+    }
+    moved = 0
+    removed = 0
+    rows = conn.execute(
+        "SELECT id, perfil, ativo FROM pessoa_perfis WHERE pessoa_id = ? ORDER BY id",
+        (duplicate_person_id,),
+    ).fetchall()
+    for row in rows:
+        key = (normalize_query(row["perfil"]).lower(), moneyless_int(row["ativo"]))
+        if key in existing:
+            conn.execute("DELETE FROM pessoa_perfis WHERE id = ?", (row["id"],))
+            removed += 1
+            continue
+        conn.execute("UPDATE pessoa_perfis SET pessoa_id = ? WHERE id = ?", (primary_person_id, row["id"]))
+        existing.add(key)
+        moved += 1
+    return {"moved": moved, "removed": removed}
+
+
+def _normalize_merged_relationships(conn: sqlite3.Connection, primary_person_id: int) -> dict[str, int]:
+    deleted_self = conn.execute(
+        "DELETE FROM pessoa_relacionamentos WHERE pessoa_id = ? AND pessoa_relacionada_id = ?",
+        (primary_person_id, primary_person_id),
+    ).rowcount
+    rows = conn.execute(
+        """
+        SELECT MIN(id) AS keep_id, pessoa_id, pessoa_relacionada_id, tipo_relacionamento, ativo
+          FROM pessoa_relacionamentos
+         WHERE pessoa_id = ? OR pessoa_relacionada_id = ?
+         GROUP BY pessoa_id, pessoa_relacionada_id, tipo_relacionamento, ativo
+         HAVING COUNT(*) > 1
+        """,
+        (primary_person_id, primary_person_id),
+    ).fetchall()
+    deleted_duplicates = 0
+    for row in rows:
+        deleted_duplicates += conn.execute(
+            """
+            DELETE FROM pessoa_relacionamentos
+             WHERE pessoa_id = ?
+               AND pessoa_relacionada_id = ?
+               AND tipo_relacionamento = ?
+               AND ativo = ?
+               AND id <> ?
+            """,
+            (
+                row["pessoa_id"],
+                row["pessoa_relacionada_id"],
+                row["tipo_relacionamento"],
+                row["ativo"],
+                row["keep_id"],
+            ),
+        ).rowcount
+    return {"deleted_self": deleted_self or 0, "deleted_duplicates": deleted_duplicates}
+
+
+def merge_people(
+    primary_person_id: int,
+    duplicate_person_id: int,
+    *,
+    reason: str,
+    actor: str = "",
+    prefer_duplicate_name: bool = False,
+) -> dict[str, object]:
+    primary_person_id = moneyless_int(primary_person_id)
+    duplicate_person_id = moneyless_int(duplicate_person_id)
+    reason_text = normalize_query(reason)
+    if not primary_person_id or not duplicate_person_id:
+        raise LegacyWriteError("Escolha duas fichas validas para a mesclagem.")
+    if primary_person_id == duplicate_person_id:
+        raise LegacyWriteError("A ficha principal e a duplicada nao podem ser a mesma.")
+    if len(reason_text) < 8:
+        raise LegacyWriteError("Informe uma justificativa com pelo menos 8 caracteres para mesclar as fichas.")
+
+    with connect_legacy_write() as conn:
+        primary = get_person(conn, primary_person_id)
+        duplicate = get_person(conn, duplicate_person_id)
+        if primary is None or duplicate is None:
+            raise LegacyWriteError("Uma das fichas nao foi encontrada para a mesclagem.")
+        if not int(primary["ativo"] or 0):
+            raise LegacyWriteError("A ficha principal precisa estar ativa para receber a mesclagem.")
+        if not int(duplicate["ativo"] or 0):
+            raise LegacyWriteError("A ficha duplicada ja esta fora do cadastro operacional.")
+        primary_org = moneyless_int(primary["organizacao_id"])
+        duplicate_org = moneyless_int(duplicate["organizacao_id"])
+        if primary_org != duplicate_org:
+            raise LegacyWriteError("As duas fichas precisam pertencer a mesma organizacao.")
+        primary_cpf = clean_cpf(primary["cpf"])
+        duplicate_cpf = clean_cpf(duplicate["cpf"])
+        if primary_cpf and duplicate_cpf and primary_cpf != duplicate_cpf:
+            raise LegacyWriteError("As fichas possuem CPFs diferentes. Revise manualmente antes de qualquer merge.")
+        primary_birth = normalize_query(primary["data_nascimento"])
+        duplicate_birth = normalize_query(duplicate["data_nascimento"])
+        if primary_birth and duplicate_birth and primary_birth != duplicate_birth:
+            raise LegacyWriteError("As fichas possuem datas de nascimento diferentes. Revise manualmente antes de mesclar.")
+        primary_sex = normalize_query(primary["sexo"])
+        duplicate_sex = normalize_query(duplicate["sexo"])
+        if primary_sex and duplicate_sex and primary_sex != duplicate_sex:
+            raise LegacyWriteError("As fichas possuem sexo diferente. Revise manualmente antes de mesclar.")
+
+        before_primary = person_snapshot(conn, primary_person_id)
+        before_duplicate = person_snapshot(conn, duplicate_person_id)
+        merge_note = (
+            f"Ficha duplicada #{duplicate_person_id} ({normalize_query(duplicate['nome']) or 'sem nome'}) "
+            f"mesclada em {date.today().isoformat()} por {actor or 'django'}."
+        )
+        final_name = _merge_pick_name(primary["nome"], duplicate["nome"], prefer_duplicate_name=prefer_duplicate_name)
+        final_payload = {
+            "nome": final_name,
+            "nome_social": _merge_pick_text(primary["nome_social"], duplicate["nome_social"]),
+            "cpf": primary_cpf or duplicate_cpf,
+            "rg": _merge_pick_text(primary["rg"], duplicate["rg"]),
+            "data_nascimento": _merge_pick_text(primary["data_nascimento"], duplicate["data_nascimento"]),
+            "sexo": _merge_pick_text(primary["sexo"], duplicate["sexo"]),
+            "estado_civil": _merge_pick_text(primary["estado_civil"], duplicate["estado_civil"]),
+            "email_principal": _merge_pick_text(primary["email_principal"], duplicate["email_principal"]),
+            "telefone_principal": _merge_pick_text(primary["telefone_principal"], duplicate["telefone_principal"]),
+            "whatsapp_principal": _merge_pick_text(primary["whatsapp_principal"], duplicate["whatsapp_principal"]),
+            "observacoes": _merge_notes(
+                primary["observacoes"],
+                duplicate["observacoes"],
+                f"{merge_note} Codigo absorvido: {normalize_query(duplicate['codigo_interno']) or 'sem codigo'}. Justificativa: {reason_text}",
+            ),
+        }
+        primary_address_row = primary_address(conn, primary_person_id)
+        duplicate_address = primary_address(conn, duplicate_person_id)
+        chosen_address = duplicate_address if _address_score(duplicate_address) > _address_score(primary_address_row) else primary_address_row
+
+        counts: dict[str, int] = {}
+        try:
+            with conn:
+                ensure_secure_people_trash(conn)
+                trash_cursor = conn.execute(
+                    """
+                    INSERT INTO pessoas_lixeira_segura (
+                        organizacao_id, pessoa_id, nome, cpf, motivo, operador, snapshot_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        duplicate_org,
+                        duplicate_person_id,
+                        duplicate["nome"] or "",
+                        duplicate["cpf"] or "",
+                        f"Mesclada na ficha #{primary_person_id}. {reason_text}",
+                        actor,
+                        json.dumps(before_duplicate, ensure_ascii=False, default=str),
+                    ),
+                )
+                duplicate_trash_id = moneyless_int(trash_cursor.lastrowid)
+                conn.execute(
+                    """
+                    UPDATE pessoas
+                       SET nome = ?, nome_social = ?, cpf = ?, rg = ?, data_nascimento = ?, sexo = ?,
+                           estado_civil = ?, email_principal = ?, telefone_principal = ?, whatsapp_principal = ?,
+                           observacoes = ?, atualizado_em = CURRENT_TIMESTAMP
+                     WHERE id = ?
+                    """,
+                    (
+                        final_payload["nome"],
+                        final_payload["nome_social"],
+                        final_payload["cpf"],
+                        final_payload["rg"],
+                        final_payload["data_nascimento"],
+                        final_payload["sexo"],
+                        final_payload["estado_civil"],
+                        final_payload["email_principal"],
+                        final_payload["telefone_principal"],
+                        final_payload["whatsapp_principal"],
+                        final_payload["observacoes"],
+                        primary_person_id,
+                    ),
+                )
+                if chosen_address is not None and _address_score(chosen_address):
+                    update_primary_address(
+                        conn,
+                        primary_org,
+                        primary_person_id,
+                        {
+                            "cep": chosen_address["cep"],
+                            "logradouro": chosen_address["logradouro"],
+                            "numero": chosen_address["numero"],
+                            "complemento": chosen_address["complemento"],
+                            "bairro": chosen_address["bairro"],
+                            "cidade": chosen_address["cidade"],
+                            "uf": chosen_address["uf"],
+                        },
+                    )
+                update_primary_contact(conn, primary_org, primary_person_id, "email", final_payload["email_principal"])
+                update_primary_contact(conn, primary_org, primary_person_id, "telefone", final_payload["telefone_principal"])
+                update_primary_contact(conn, primary_org, primary_person_id, "whatsapp", final_payload["whatsapp_principal"])
+
+                counts["history"] = conn.execute(
+                    "UPDATE pessoa_historico SET pessoa_id = ? WHERE pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                counts["history_responsible"] = conn.execute(
+                    "UPDATE pessoa_historico SET responsavel_pessoa_id = ? WHERE responsavel_pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                counts["contributors"] = conn.execute(
+                    "UPDATE contribuintes SET pessoa_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                counts["contributor_identifiers"] = conn.execute(
+                    "UPDATE contribuintes_identificadores SET pessoa_id = ? WHERE pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                counts["contributions"] = conn.execute(
+                    "UPDATE contribuicoes SET pessoa_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                counts["receipts"] = conn.execute(
+                    "UPDATE recibos SET pessoa_id = ? WHERE pessoa_id = ?",
+                    (primary_person_id, duplicate_person_id),
+                ).rowcount or 0
+                if table_exists(conn, "lancamentos_financeiros"):
+                    counts["financial_entries"] = conn.execute(
+                        "UPDATE lancamentos_financeiros SET entidade_pessoa_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE entidade_pessoa_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                if table_exists(conn, "pix_movimentos"):
+                    counts["pix_suggested"] = conn.execute(
+                        "UPDATE pix_movimentos SET suggested_person_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE suggested_person_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                    counts["pix_resolved"] = conn.execute(
+                        "UPDATE pix_movimentos SET resolved_person_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE resolved_person_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                if table_exists(conn, "extrato_movimentos"):
+                    counts["statement_suggested"] = conn.execute(
+                        "UPDATE extrato_movimentos SET suggested_person_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE suggested_person_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                    counts["statement_resolved"] = conn.execute(
+                        "UPDATE extrato_movimentos SET resolved_person_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE resolved_person_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                if table_exists(conn, "envelope_atualizacoes_cadastrais"):
+                    counts["envelope_profile_updates"] = conn.execute(
+                        "UPDATE envelope_atualizacoes_cadastrais SET pessoa_id = ?, atualizado_em = CURRENT_TIMESTAMP WHERE pessoa_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                if table_exists(conn, "pessoa_relacionamentos"):
+                    counts["relationships_origin"] = conn.execute(
+                        "UPDATE pessoa_relacionamentos SET pessoa_id = ? WHERE pessoa_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+                    counts["relationships_related"] = conn.execute(
+                        "UPDATE pessoa_relacionamentos SET pessoa_relacionada_id = ? WHERE pessoa_relacionada_id = ?",
+                        (primary_person_id, duplicate_person_id),
+                    ).rowcount or 0
+
+                dedupe_contacts = _merge_duplicate_contacts(
+                    conn,
+                    primary_person_id=primary_person_id,
+                    duplicate_person_id=duplicate_person_id,
+                )
+                counts["contacts"] = dedupe_contacts["moved"]
+                dedupe_addresses = _merge_duplicate_addresses(
+                    conn,
+                    primary_person_id=primary_person_id,
+                    duplicate_person_id=duplicate_person_id,
+                )
+                counts["addresses"] = dedupe_addresses["moved"]
+                dedupe_profiles = _merge_duplicate_profiles(
+                    conn,
+                    primary_person_id=primary_person_id,
+                    duplicate_person_id=duplicate_person_id,
+                )
+                counts["profiles"] = dedupe_profiles["moved"]
+                relationship_cleanup = _normalize_merged_relationships(conn, primary_person_id)
+                ensure_member_profile(conn, primary_org, primary_person_id, primary["status"] or duplicate["status"] or "membro_ativo")
+                reconcile = reconcile_contributors_for_person(
+                    conn,
+                    primary_person_id,
+                    source="merge_de_pessoas_django",
+                    actor=actor,
+                )
+                conn.execute(
+                    """
+                    UPDATE pessoas
+                       SET ativo = 0,
+                           atualizado_em = CURRENT_TIMESTAMP,
+                           observacoes = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        _merge_notes(
+                            duplicate["observacoes"],
+                            "",
+                            f"Ficha mesclada na pessoa #{primary_person_id} em {date.today().isoformat()}. Justificativa: {reason_text}",
+                        ),
+                        duplicate_person_id,
+                    ),
+                )
+                after_primary = person_snapshot(conn, primary_person_id)
+                after_primary["merged_duplicate_person_id"] = duplicate_person_id
+                after_primary["merged_duplicate_trash_id"] = duplicate_trash_id
+                after_primary["merge_counts"] = {
+                    **counts,
+                    "contacts_deduped": dedupe_contacts,
+                    "addresses_deduped": dedupe_addresses,
+                    "profiles_deduped": dedupe_profiles,
+                    "relationships_cleaned": relationship_cleanup,
+                    "contributor_reconcile": reconcile,
+                }
+                after_primary["merge_reason"] = reason_text
+                after_duplicate = {
+                    "merged_into_person_id": primary_person_id,
+                    "trash_id": duplicate_trash_id,
+                    "ativo": 0,
+                    "nome": duplicate["nome"] or "",
+                    "codigo_interno": duplicate["codigo_interno"] or "",
+                    "merge_reason": reason_text,
+                }
+                write_audit_log(
+                    conn,
+                    primary_org,
+                    "mesclar_fichas_django",
+                    "pessoas",
+                    primary_person_id,
+                    {"principal": before_primary, "duplicada": before_duplicate},
+                    after_primary,
+                    actor=actor,
+                )
+                write_audit_log(
+                    conn,
+                    primary_org,
+                    "mesclar_ficha_origem_django",
+                    "pessoas",
+                    duplicate_person_id,
+                    before_duplicate,
+                    after_duplicate,
+                    actor=actor,
+                )
+                return {
+                    "primary_person_id": primary_person_id,
+                    "duplicate_person_id": duplicate_person_id,
+                    "duplicate_trash_id": duplicate_trash_id,
+                    "primary_name": final_name,
+                    "counts": {
+                        **counts,
+                        "contacts_deduped": dedupe_contacts,
+                        "addresses_deduped": dedupe_addresses,
+                        "profiles_deduped": dedupe_profiles,
+                        "relationships_cleaned": relationship_cleanup,
+                        "contributor_reconcile": reconcile,
+                    },
+                }
+        except sqlite3.IntegrityError as exc:
+            raise LegacyWriteError(f"Nao foi possivel mesclar as fichas: {exc}") from exc
 
 
 def create_person_relationship(person_id: int, payload: Any, actor: str = "") -> int:

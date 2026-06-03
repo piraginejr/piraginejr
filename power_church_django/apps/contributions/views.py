@@ -4,9 +4,11 @@ from django.conf import settings
 from django.contrib import messages
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
+from power_church_django.apps.contributions.models import ReceiptDispatch
 from power_church_core.normalization import normalize_query
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.legacy_write import (
@@ -56,9 +58,12 @@ from power_church_django.services.legacy import (
 from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_filename
 from power_church_django.services.pdf_reports import person_statement_pdf, person_statement_pdf_filename
 from power_church_django.services.receipt_delivery import (
+    email_runtime_snapshot,
     enrich_receipt_form,
+    refresh_receipt_dispatch_destination,
     queue_receipt_dispatches,
     receipt_dispatch_history,
+    send_receipt_dispatch,
     issue_and_optionally_send_receipts,
     update_receipt_email_template,
 )
@@ -256,6 +261,96 @@ def _generated_receipt_cards(receipt_ids: list[int]) -> list[dict[str, object]]:
             }
         )
     return cards
+
+
+def _receipt_queue_campaigns(limit: int = 12) -> list[str]:
+    values = (
+        ReceiptDispatch.objects.exclude(metadata__campaign_key="")
+        .order_by("-created_at", "-id")
+        .values_list("metadata__campaign_key", flat=True)[: max(50, int(limit or 12) * 20)]
+    )
+    seen: set[str] = set()
+    campaigns: list[str] = []
+    for value in values:
+        key = normalize_query(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        campaigns.append(key)
+        if len(campaigns) >= int(limit or 12):
+            break
+    return campaigns
+
+
+def _receipt_queue_snapshot(*, campaign_key: str = "", status: str = "", limit: int = 120) -> dict[str, object]:
+    selected_campaign = normalize_query(campaign_key)
+    selected_status = normalize_query(status)
+    base_qs = ReceiptDispatch.objects.all()
+    if selected_campaign:
+        base_qs = base_qs.filter(metadata__campaign_key=selected_campaign)
+    counts = {
+        "pendente": int(base_qs.filter(status=ReceiptDispatch.Status.PENDING).count()),
+        "enviado": int(base_qs.filter(status=ReceiptDispatch.Status.SENT).count()),
+        "falhou": int(base_qs.filter(status=ReceiptDispatch.Status.FAILED).count()),
+        "cancelado": int(base_qs.filter(status=ReceiptDispatch.Status.CANCELLED).count()),
+    }
+    total = sum(counts.values())
+    actionable_total = counts["pendente"] + counts["enviado"] + counts["falhou"]
+    progress = round((counts["enviado"] / actionable_total) * 100, 1) if actionable_total else 0.0
+    list_qs = base_qs
+    if selected_status:
+        list_qs = list_qs.filter(status=selected_status)
+    latest_attempt = base_qs.exclude(last_attempt_at__isnull=True).order_by("-last_attempt_at", "-id").first()
+    latest_sent = base_qs.exclude(sent_at__isnull=True).order_by("-sent_at", "-id").first()
+    items: list[dict[str, object]] = []
+    for item in list_qs.order_by("-created_at", "-id")[: max(1, int(limit or 120))]:
+        metadata = item.metadata or {}
+        campaign = normalize_query(metadata.get("campaign_key"))
+        items.append(
+            {
+                "id": int(item.pk or 0),
+                "campaign_key": campaign,
+                "person_name": item.person_name or f"Pessoa #{int(item.legacy_person_id or 0)}",
+                "person_id": int(item.legacy_person_id or 0),
+                "receipt_number": item.legacy_receipt_number or "",
+                "receipt_id": int(item.legacy_receipt_id or 0),
+                "period_label": item.period_label or "",
+                "email_to": item.email_to or item.person_email or "",
+                "status": item.get_status_display(),
+                "status_code": str(item.status or ""),
+                "trigger": item.get_trigger_display(),
+                "attempts": int(item.send_attempts or 0),
+                "created_at": timezone.localtime(item.created_at).strftime("%d/%m/%Y %H:%M") if item.created_at else "",
+                "updated_at": timezone.localtime(item.updated_at).strftime("%d/%m/%Y %H:%M") if item.updated_at else "",
+                "last_attempt_at": timezone.localtime(item.last_attempt_at).strftime("%d/%m/%Y %H:%M") if item.last_attempt_at else "",
+                "sent_at": timezone.localtime(item.sent_at).strftime("%d/%m/%Y %H:%M") if item.sent_at else "",
+                "last_error": item.last_error or "",
+                "person_url": f"/people/{int(item.legacy_person_id or 0)}/" if int(item.legacy_person_id or 0) else "",
+                "receipt_url": f"/receipts/{int(item.legacy_receipt_id or 0)}/" if int(item.legacy_receipt_id or 0) else "",
+            }
+        )
+    return {
+        "campaign_key": selected_campaign,
+        "status": selected_status,
+        "counts": counts,
+        "total": total,
+        "progress_percent": progress,
+        "latest_attempt": timezone.localtime(latest_attempt.last_attempt_at).strftime("%d/%m/%Y %H:%M") if latest_attempt and latest_attempt.last_attempt_at else "",
+        "latest_sent": timezone.localtime(latest_sent.sent_at).strftime("%d/%m/%Y %H:%M") if latest_sent and latest_sent.sent_at else "",
+        "items": items,
+        "campaigns": _receipt_queue_campaigns(),
+    }
+
+
+def _receipt_queue_filtered_queryset(*, campaign_key: str = "", status: str = ""):
+    selected_campaign = normalize_query(campaign_key)
+    selected_status = normalize_query(status)
+    queryset = ReceiptDispatch.objects.all()
+    if selected_campaign:
+        queryset = queryset.filter(metadata__campaign_key=selected_campaign)
+    if selected_status:
+        queryset = queryset.filter(status=selected_status)
+    return queryset
 
 
 def _statement_query(
@@ -904,9 +999,89 @@ def receipts(request: HttpRequest) -> HttpResponse:
                 context["selected_person_id"] = 0
                 messages.error(request, "Pessoa selecionada para gerar recibo nao foi encontrada.")
         context["generated_receipts"] = _generated_receipt_cards(context["generated_receipt_ids"])
+        latest_campaigns = _receipt_queue_campaigns(limit=1)
+        context["queue_overview"] = _receipt_queue_snapshot(
+            campaign_key=latest_campaigns[0] if latest_campaigns else "",
+            limit=10,
+        )
+        context["email_runtime"] = email_runtime_snapshot()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/receipts/list.html", context)
+
+
+def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
+    selected_campaign = normalize_query(request.GET.get("campaign", request.POST.get("campaign", "")))
+    selected_status = normalize_query(request.GET.get("status", request.POST.get("status", "")))
+    auto_refresh = str(request.GET.get("auto", "") or "") in {"1", "on", "true", "sim"}
+    if request.method == "POST":
+        actor = _actor(request)
+        action = normalize_query(request.POST.get("action", ""))
+        try:
+            if action == "reprocess_dispatch":
+                dispatch_id = int(request.POST.get("dispatch_id") or 0)
+                if not dispatch_id:
+                    raise LegacyWriteError("Selecione uma falha valida para reprocessar.")
+                item = ReceiptDispatch.objects.filter(pk=dispatch_id).first()
+                if item is None:
+                    raise LegacyWriteError("Registro de fila nao encontrado para reprocessamento.")
+                if str(item.status or "") not in {ReceiptDispatch.Status.FAILED, ReceiptDispatch.Status.PENDING}:
+                    raise LegacyWriteError("Somente falhas ou pendencias podem ser reprocessadas manualmente.")
+                updated = send_receipt_dispatch(item, actor=actor)
+                if str(updated.status or "") == ReceiptDispatch.Status.SENT:
+                    messages.success(request, f"Recibo {updated.legacy_receipt_number or updated.legacy_receipt_id} reprocessado com sucesso.")
+                else:
+                    messages.error(request, updated.last_error or "O reprocessamento nao concluiu o envio.")
+            elif action == "refresh_dispatch_destination":
+                dispatch_id = int(request.POST.get("dispatch_id") or 0)
+                if not dispatch_id:
+                    raise LegacyWriteError("Selecione um item valido para atualizar o destinatario.")
+                item = ReceiptDispatch.objects.filter(pk=dispatch_id).first()
+                if item is None:
+                    raise LegacyWriteError("Registro de fila nao encontrado para sincronizar destinatario.")
+                updated = refresh_receipt_dispatch_destination(item, actor=actor)
+                messages.success(request, f"Destino sincronizado para {updated.email_to or updated.person_email or 'sem e-mail'}.")
+            elif action == "reprocess_filtered":
+                queryset = _receipt_queue_filtered_queryset(campaign_key=selected_campaign, status=selected_status).filter(
+                    status__in=[ReceiptDispatch.Status.FAILED, ReceiptDispatch.Status.PENDING]
+                )
+                ids = list(queryset.order_by("created_at", "id").values_list("id", flat=True)[:100])
+                if not ids:
+                    raise LegacyWriteError("Nao ha falhas ou pendencias neste filtro para reprocessar.")
+                sent = 0
+                failed = 0
+                for dispatch_id in ids:
+                    updated = send_receipt_dispatch(int(dispatch_id), actor=actor)
+                    if str(updated.status or "") == ReceiptDispatch.Status.SENT:
+                        sent += 1
+                    else:
+                        failed += 1
+                messages.success(request, f"Reprocessamento do filtro concluido: {sent} enviado(s), {failed} ainda com falha.")
+            else:
+                raise LegacyWriteError("Acao de monitoramento invalida.")
+        except LegacyWriteError as exc:
+            messages.error(request, str(exc))
+        return redirect(
+            f"/receipts/queue/?campaign={selected_campaign}"
+            f"{'&status=' + selected_status if selected_status else ''}"
+            f"{'&auto=1' if str(request.POST.get('auto', '') or '') in {'1', 'on', 'true', 'sim'} else ''}"
+        )
+    campaigns = _receipt_queue_campaigns()
+    if not selected_campaign and campaigns:
+        selected_campaign = campaigns[0]
+    snapshot = _receipt_queue_snapshot(
+        campaign_key=selected_campaign,
+        status=selected_status,
+        limit=160,
+    )
+    snapshot["campaigns"] = campaigns
+    context = {
+        "title": "Monitor de fila de recibos",
+        "monitor": snapshot,
+        "auto_refresh": auto_refresh,
+        "email_runtime": email_runtime_snapshot(),
+    }
+    return render(request, "power_church_django/receipts/queue_monitor.html", context)
 
 
 def receipt_new(request: HttpRequest) -> HttpResponse:

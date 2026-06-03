@@ -361,6 +361,131 @@
         </div>
       </section>
 
+      <section class="panel no-print">
+        <div class="section-head">
+          <div>
+            <h2>Mesclar fichas do cadastro</h2>
+            <p class="muted">O procedimento fica em 3 passos: escolher a ficha principal que vai sobreviver, escolher a ficha duplicada que sera absorvida e depois abrir a comparacao completa antes de confirmar.</p>
+          </div>
+        </div>
+        <div class="summary-grid" style="margin-top:12px;">
+          <div class="card">
+            <span class="label">Passo 1</span>
+            <strong>Escolha a ficha principal</strong>
+            <div class="muted small">Esta ficha vai permanecer ativa depois da mesclagem.</div>
+          </div>
+          <div class="card">
+            <span class="label">Passo 2</span>
+            <strong>Escolha a ficha duplicada</strong>
+            <div class="muted small">Esta ficha sera absorvida e arquivada na lixeira segura.</div>
+          </div>
+          <div class="card">
+            <span class="label">Passo 3</span>
+            <strong>Abrir comparacao</strong>
+            <div class="muted small">Use o comando Abrir comparacao da mesclagem para revisar os dados lado a lado e informar a justificativa antes de confirmar.</div>
+          </div>
+        </div>
+
+        <div class="split" style="margin-top:16px;">
+          <div class="panel" style="margin:0;">
+            <h3>Ficha principal</h3>
+            <form class="toolbar" method="get">
+              <input type="hidden" name="merge_duplicate_lookup" value="{{ merge_duplicate_lookup }}">
+              <input type="hidden" name="merge_duplicate_id" value="{{ merge_duplicate_id }}">
+              <label class="wide">
+                Buscar ficha principal
+                <input name="merge_primary_lookup" value="{{ merge_primary_lookup }}" placeholder="Nome, codigo, CPF, telefone ou e-mail">
+              </label>
+              {% if merge_primary_id %}
+                <input type="hidden" name="merge_primary_id" value="{{ merge_primary_id }}">
+              {% endif %}
+              <button type="submit">Pesquisar principal</button>
+            </form>
+            {% if merge_primary_person %}
+              <div class="card" style="margin-top:12px;">
+                <span class="label">Selecionada para permanecer</span>
+                <strong>{{ merge_primary_person.nome }}</strong>
+                <div class="muted small">#{{ merge_primary_person.id }} · {{ merge_primary_person.codigo|default:"sem codigo" }} · {{ merge_primary_person.status }}</div>
+                <div class="muted small">{{ merge_primary_person.cpf|default:"sem CPF" }} · {{ merge_primary_person.email|default:"sem e-mail" }}</div>
+              </div>
+            {% endif %}
+            {% if merge_primary_people %}
+              <div class="summary-grid" style="margin-top:12px;">
+                {% for person in merge_primary_people %}
+                  <a class="card" href="/audit/?merge_primary_lookup={{ merge_primary_lookup|urlencode }}&merge_primary_id={{ person.id }}{% if merge_duplicate_lookup %}&merge_duplicate_lookup={{ merge_duplicate_lookup|urlencode }}{% endif %}{% if merge_duplicate_id %}&merge_duplicate_id={{ merge_duplicate_id }}{% endif %}">
+                    <span class="label">{{ person.sigla }} · {{ person.status }}</span>
+                    <strong>{{ person.nome }}</strong>
+                    <div class="muted small">#{{ person.id }} · {{ person.codigo|default:"sem codigo" }}</div>
+                    <div class="muted small">{{ person.cpf|default:"sem CPF" }} · {{ person.email|default:"sem e-mail" }}</div>
+                    <div class="muted small">{% if merge_primary_id == person.id %}Selecionada{% else %}Clique para escolher{% endif %}</div>
+                  </a>
+                {% endfor %}
+              </div>
+            {% elif merge_primary_lookup %}
+              <p class="muted" style="margin-top:12px;">Nenhuma ficha ativa encontrada para esta busca principal.</p>
+            {% endif %}
+          </div>
+
+          <div class="panel" style="margin:0;">
+            <h3>Ficha duplicada</h3>
+            <form class="toolbar" method="get">
+              <input type="hidden" name="merge_primary_lookup" value="{{ merge_primary_lookup }}">
+              <input type="hidden" name="merge_primary_id" value="{{ merge_primary_id }}">
+              <label class="wide">
+                Buscar ficha duplicada
+                <input name="merge_duplicate_lookup" value="{{ merge_duplicate_lookup }}" placeholder="Nome, codigo, CPF, telefone ou e-mail">
+              </label>
+              {% if merge_duplicate_id %}
+                <input type="hidden" name="merge_duplicate_id" value="{{ merge_duplicate_id }}">
+              {% endif %}
+              <button type="submit">Pesquisar duplicada</button>
+            </form>
+            {% if merge_duplicate_person %}
+              <div class="card" style="margin-top:12px;">
+                <span class="label">Selecionada para ser absorvida</span>
+                <strong>{{ merge_duplicate_person.nome }}</strong>
+                <div class="muted small">#{{ merge_duplicate_person.id }} · {{ merge_duplicate_person.codigo|default:"sem codigo" }} · {{ merge_duplicate_person.status }}</div>
+                <div class="muted small">{{ merge_duplicate_person.cpf|default:"sem CPF" }} · {{ merge_duplicate_person.email|default:"sem e-mail" }}</div>
+              </div>
+            {% endif %}
+            {% if merge_duplicate_people %}
+              <div class="summary-grid" style="margin-top:12px;">
+                {% for person in merge_duplicate_people %}
+                  <a class="card" href="/audit/?{% if merge_primary_lookup %}merge_primary_lookup={{ merge_primary_lookup|urlencode }}&{% endif %}{% if merge_primary_id %}merge_primary_id={{ merge_primary_id }}&{% endif %}merge_duplicate_lookup={{ merge_duplicate_lookup|urlencode }}&merge_duplicate_id={{ person.id }}">
+                    <span class="label">{{ person.sigla }} · {{ person.status }}</span>
+                    <strong>{{ person.nome }}</strong>
+                    <div class="muted small">#{{ person.id }} · {{ person.codigo|default:"sem codigo" }}</div>
+                    <div class="muted small">{{ person.cpf|default:"sem CPF" }} · {{ person.email|default:"sem e-mail" }}</div>
+                    <div class="muted small">{% if merge_duplicate_id == person.id %}Selecionada{% else %}Clique para escolher{% endif %}</div>
+                  </a>
+                {% endfor %}
+              </div>
+            {% elif merge_duplicate_lookup %}
+              <p class="muted" style="margin-top:12px;">Nenhuma ficha ativa encontrada para esta busca duplicada.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <span class="label">Resumo da mesclagem</span>
+          {% if merge_primary_person and merge_duplicate_person %}
+            <strong>{{ merge_primary_person.nome }} recebera os dados de {{ merge_duplicate_person.nome }}</strong>
+            <div class="muted small">A ficha principal continua ativa. A duplicada sera absorvida, auditada e arquivada na lixeira segura.</div>
+            <div class="legend no-print" style="margin-top:12px;">
+              <a class="button" href="/people/{{ merge_primary_id }}/merge/?{% if merge_duplicate_lookup %}merge_lookup={{ merge_duplicate_lookup|urlencode }}&{% endif %}selected_duplicate_id={{ merge_duplicate_id }}">Abrir comparacao da mesclagem</a>
+              <a class="button secondary" href="/people/{{ merge_primary_id }}/">Abrir ficha principal</a>
+              <a class="button secondary" href="/people/{{ merge_duplicate_id }}/">Abrir ficha duplicada</a>
+            </div>
+          {% else %}
+            <strong>Selecione as duas fichas para continuar</strong>
+            <div class="muted small">Quando a ficha principal e a duplicada estiverem definidas, o sistema libera o atalho para a comparacao completa.</div>
+          {% endif %}
+          <div class="legend no-print" style="margin-top:12px;">
+            <a class="button secondary" href="/audit/">Limpar selecao de mesclagem</a>
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <h2>{{ audit.people|length }} ficha(s) com ajuste ou revisao</h2>
         <div class="table-wrap">
@@ -373,7 +498,7 @@
                   <td class="num"><span class="badge {% if row.avisos %}danger{% else %}ok{% endif %}">{{ row.total }}</span></td>
                   <td><span class="badge danger">{{ row.avisos }} aviso(s)</span> <span class="badge">{{ row.infos }} info</span></td>
                   <td>{{ row.tipos }}</td>
-                  <td><a class="button secondary" href="/people/{{ row.pessoa_id }}/">Abrir ficha</a></td>
+                  <td><a class="button secondary" href="/people/{{ row.pessoa_id }}/">Abrir ficha</a> <a class="button secondary" href="/people/{{ row.pessoa_id }}/merge/">Mesclar ficha</a></td>
                 </tr>
               {% empty %}
                 <tr><td colspan="5">Nenhuma ficha pendente encontrada.</td></tr>

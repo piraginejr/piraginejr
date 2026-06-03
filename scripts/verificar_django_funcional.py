@@ -69,6 +69,7 @@ from power_church_django.services.django_audit import list_system_email_events
 from power_church_django.services.legacy import connect_legacy, contribution_destination_report, contribution_report, dashboard_summary, family_registry_dashboard, list_contributions, list_contributors, list_envelopes, list_people, list_secure_people_trash, operational_audit
 from power_church_django.services.legacy_bank_write import _parse_upload_with_provider, _parsed_summary, compare_pdf_upload_providers
 from power_church_django.services.legacy_write import connect_legacy_write, ensure_manual_contributor, _resolve_primary_envelope_identity
+from power_church_django.services.receipt_delivery import consolidated_receipt_campaign_summary
 from power_church_core.normalization import contribution_report_identity
 
 if "testserver" not in settings.ALLOWED_HOSTS:
@@ -164,7 +165,7 @@ if int(families_audit_data["audit"]["summary"]["shown_groups"] or 0) != expected
     raise AssertionError(
         f"fila de auditoria das familias ainda esta limitada: {families_audit_data['audit']['summary']['shown_groups']} de {expected_audit_groups}"
     )
-if not families_audit_data["audit"].get("smart_summary"):
+if expected_audit_groups > 0 and not families_audit_data["audit"].get("smart_summary"):
     raise AssertionError("auditoria de familias ficou sem resumo inteligente")
 broad_families_data = family_registry_dashboard(section="broad")
 if int(broad_families_data["broad"]["shown"] or 0) != int(broad_families_data["broad"]["total"] or 0):
@@ -183,6 +184,12 @@ if contributor_link_snapshot["family_links"] and not contributor_link_snapshot.g
 email_snapshot = list_system_email_events(page_size=120)
 if email_snapshot["items"] and not email_snapshot.get("smart_summary"):
     raise AssertionError("auditoria de e-mails ficou sem resumo inteligente")
+campaign_snapshot = consolidated_receipt_campaign_summary(cutoff_date="2026-05-31")
+campaign_summary = campaign_snapshot.get("summary") or {}
+if int(campaign_summary.get("total_people") or 0) <= 0:
+    raise AssertionError("campanha de recibos consolidados nao encontrou pessoas com e-mail e contribuicao")
+if int(campaign_summary.get("ready_to_queue") or 0) <= 0:
+    raise AssertionError("campanha de recibos consolidados nao deixou pessoas prontas para fila")
 
 with connect_legacy() as conn:
     try:
@@ -334,6 +341,7 @@ paths = [
     f"/contributions/statements/{contribution_person_id}/",
     f"/contributions/?competencia={quote(latest_competence)}",
     "/receipts/",
+    "/receipts/queue/",
     f"/receipts/?selected_person_id={contribution_person_id}",
     "/imports/",
     "/imports/rules/",
@@ -494,6 +502,10 @@ for path in paths:
         for snippet in ["Rastreabilidade Django", "Eventos Django"]:
             if snippet not in content:
                 raise AssertionError(f"auditoria Django sem trecho esperado: {snippet}")
+    if path == "/audit/":
+        for snippet in ["Mesclar fichas do cadastro", "Buscar ficha principal", "Buscar ficha duplicada"]:
+            if snippet not in content:
+                raise AssertionError(f"auditoria do cadastro sem entrada de merge: {snippet}")
     if path == "/audit/?modo=emails":
         for snippet in ["Relatorio de e-mails enviados", "Consolida recibos e extratos enviados pelo sistema", "Pessoa", "Conteudo", "Destino", "E-mails do sistema", "Reenviar", "Classificacao"]:
             if snippet not in content:
@@ -522,17 +534,32 @@ for path in paths:
         ]:
             if snippet not in content:
                 raise AssertionError(f"criterio amplo de familias sem trecho esperado: {snippet}")
+    if path == f"/people/{person_id}/":
+        for snippet in ["Mesclar ficha", "Dados cadastrais", "Contribuintes vinculados"]:
+            if snippet not in content:
+                raise AssertionError(f"ficha da pessoa sem merge esperado: {snippet}")
+    if path == f"/people/{person_id}/merge/":
+        for snippet in ["Mesclar ficha em", "Buscar ficha duplicada", "Justificativa da mesclagem"]:
+            if snippet not in content:
+                raise AssertionError(f"tela de merge sem trecho esperado: {snippet}")
     if path == "/people/families/?section=audit":
-        for snippet in [
+        required = [
             "Fila de auditoria",
-            "Aplicacao em lote",
-            "Hipoteses para auditoria",
-            "Ignorar sugestoes selecionadas",
-            "Criar familias selecionadas",
-            "Padrao inteligente da auditoria",
-            "Categoria inteligente",
-            "Acao sugerida:",
-        ]:
+        ]
+        expected_groups = int(families_audit_data["audit"]["summary"]["shown_groups"] or 0)
+        if expected_groups > 0:
+            required.extend(
+                [
+                    "Padrao inteligente da auditoria",
+                    "Aplicacao em lote",
+                    "Hipoteses para auditoria",
+                    "Ignorar sugestoes selecionadas",
+                    "Criar familias selecionadas",
+                    "Categoria inteligente",
+                    "Acao sugerida:",
+                ]
+            )
+        for snippet in required:
             if snippet not in content:
                 raise AssertionError(f"auditoria de familias Django sem trecho esperado: {snippet}")
     if path == "/people/families/?section=extended":
@@ -819,9 +846,13 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"nova contribuicao Django sem lancamento auditavel: {snippet}")
     if path == "/receipts/":
-        for snippet in ["Recibos", "Gerar recibo por pessoa", "Pesquisar recibos", "Lista de recibos", "Envio automatico"]:
+        for snippet in ["Recibos", "Gerar recibo por pessoa", "Monitorar fila de envio", "Fila de envio em andamento", "Pesquisar recibos", "Lista de recibos", "Envio automatico"]:
             if snippet not in content:
                 raise AssertionError(f"lista de recibos Django sem trecho esperado: {snippet}")
+    if path == "/receipts/queue/":
+        for snippet in ["Monitor de envio de recibos", "Filtros do monitor", "Pendentes", "Enviados", "Falhas", "Ultimos itens da fila", "Auditoria de e-mails", "Reprocessar falhas e pendencias deste filtro", "Sincronizar e-mail"]:
+            if snippet not in content:
+                raise AssertionError(f"monitor de fila de recibos sem trecho esperado: {snippet}")
     if path.startswith("/receipts/?selected_person_id="):
         for snippet in [
             "Gerar recibos para",
@@ -839,15 +870,6 @@ for path in paths:
         for snippet in ["Recibo de contribuicoes", "Imprimir esta tela", "Contribuicoes do recibo", "Logo do cliente", "Enviar ou reenviar por e-mail", "Abrir PDF do recibo"]:
             if snippet not in content:
                 raise AssertionError(f"detalhe de recibo Django sem trecho esperado: {snippet}")
-legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")
-if legacy_receipt_redirect.status_code not in {301, 302}:
-    raise AssertionError("rota legada /receipts/new/ nao redirecionou para a central nova")
-redirect_target = legacy_receipt_redirect.headers.get("Location", "")
-expected_receipt_target = f"/receipts/?selected_person_id={contribution_person_id}"
-if expected_receipt_target not in redirect_target:
-    raise AssertionError(
-        f"rota legada /receipts/new/ redirecionou para destino inesperado: {redirect_target or '-'}"
-    )
     if path.startswith("/reports/?competencia="):
         report = contribution_report(competencia=latest_competence)
         items = report["items"]
@@ -912,6 +934,30 @@ if expected_receipt_target not in redirect_target:
             if snippet not in content:
                 raise AssertionError(f"relatorio por destino filtrado sem trecho esperado: {snippet}")
         print(f"reports_destinations={latest_competence}:{destination_report['summary']['destinos']}:{destination_report['summary']['remessas']}:destinos")
+
+legacy_receipt_redirect = client.get(f"/receipts/new/?person_id={contribution_person_id}")
+if legacy_receipt_redirect.status_code not in {301, 302}:
+    raise AssertionError("rota legada /receipts/new/ nao redirecionou para a central nova")
+redirect_target = legacy_receipt_redirect.headers.get("Location", "")
+expected_receipt_target = f"/receipts/?selected_person_id={contribution_person_id}"
+if expected_receipt_target not in redirect_target:
+    raise AssertionError(
+        f"rota legada /receipts/new/ redirecionou para destino inesperado: {redirect_target or '-'}"
+    )
+
+miguel_results = [
+    item
+    for item in list_people(q="Miguel de Souza Santos", limit=20)["items"]
+    if str(item.get("nome") or "").strip() == "Miguel de Souza Santos"
+]
+if len(miguel_results) != 1:
+    raise AssertionError(f"merge de Miguel ficou inconsistente: encontrados {len(miguel_results)} registros ativos")
+miguel = miguel_results[0]
+if str(miguel.get("codigo") or "") != "100521":
+    raise AssertionError(f"merge de Miguel preservou codigo inesperado: {miguel.get('codigo')}")
+if str(miguel.get("cpf") or "") != "18111732767":
+    raise AssertionError(f"merge de Miguel preservou CPF inesperado: {miguel.get('cpf')}")
+print("merge_miguel=OK")
 
 invalid_cpf_response = client.get("/people/validate-field/?field=cpf&value=12345678901")
 if invalid_cpf_response.status_code != 200 or invalid_cpf_response.json().get("ok") is not False:

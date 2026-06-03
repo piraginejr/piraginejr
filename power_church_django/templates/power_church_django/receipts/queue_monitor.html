@@ -1,0 +1,183 @@
+{% extends "power_church_django/base.html" %}
+
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="badge">Campanha e fila</p>
+      <h1>Monitor de envio de recibos</h1>
+      <p>Acompanhe o andamento da fila, veja o progresso por campanha e identifique rapidamente o que ficou pendente, falhou ou ja foi entregue.</p>
+      {% if monitor.campaign_key %}
+        <p class="muted"><strong>Campanha ativa:</strong> {{ monitor.campaign_key }}</p>
+      {% endif %}
+    </div>
+    <div class="actions no-print">
+      <a class="button secondary" href="/receipts/">Voltar para recibos</a>
+      <a class="button secondary" href="/audit/?modo=emails">Auditoria de e-mails</a>
+      <a class="button" href="/receipts/queue/?campaign={{ monitor.campaign_key|urlencode }}{% if monitor.status %}&status={{ monitor.status|urlencode }}{% endif %}{% if auto_refresh %}&auto=1{% endif %}">Atualizar agora</a>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><span class="label">Provedor</span><strong style="font-size:20px">{{ email_runtime.provider|default:"-" }}</strong></div>
+    <div class="card"><span class="label">Campanha</span><strong style="font-size:20px">{{ monitor.campaign_key|default:"Fila geral" }}</strong></div>
+    <div class="card"><span class="label">Progresso</span><strong>{{ monitor.progress_percent }}%</strong><span class="muted small">Enviados sobre a fila acionavel</span></div>
+    <div class="card"><span class="label">Ultimo envio</span><strong style="font-size:20px">{{ monitor.latest_sent|default:"-" }}</strong></div>
+  </section>
+
+  <section class="panel no-print">
+    <div class="section-head">
+      <div>
+        <h2>Filtros do monitor</h2>
+        <p class="muted">Filtre por campanha e status para acompanhar uma operacao especifica ou revisar o que falhou.</p>
+      </div>
+      {% if auto_refresh %}
+        <span class="badge">Autoatualizando a cada 15 segundos</span>
+      {% endif %}
+    </div>
+    <form class="toolbar" method="get">
+      <label>
+        Campanha
+        <select name="campaign">
+          <option value="">Fila geral do sistema</option>
+          {% for item in monitor.campaigns %}
+            <option value="{{ item }}" {% if item == monitor.campaign_key %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Status
+        <select name="status">
+          <option value="">Todos</option>
+          <option value="pendente" {% if monitor.status == "pendente" %}selected{% endif %}>Pendentes</option>
+          <option value="enviado" {% if monitor.status == "enviado" %}selected{% endif %}>Enviados</option>
+          <option value="falhou" {% if monitor.status == "falhou" %}selected{% endif %}>Falhas</option>
+          <option value="cancelado" {% if monitor.status == "cancelado" %}selected{% endif %}>Cancelados</option>
+        </select>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; padding-bottom:4px;">
+        <input type="checkbox" name="auto" value="1" {% if auto_refresh %}checked{% endif %}>
+        Autoatualizar
+      </label>
+      <button type="submit">Aplicar filtros</button>
+      <a class="button secondary" href="/receipts/queue/{% if monitor.campaign_key %}?campaign={{ monitor.campaign_key|urlencode }}{% endif %}">Limpar status</a>
+      <a class="button secondary" href="/receipts/queue/">Ver tudo</a>
+    </form>
+    <div class="actions">
+      <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="reprocess_filtered">
+        <input type="hidden" name="campaign" value="{{ monitor.campaign_key }}">
+        <input type="hidden" name="status" value="{{ monitor.status }}">
+        {% if auto_refresh %}<input type="hidden" name="auto" value="1">{% endif %}
+        <button type="submit">Reprocessar falhas e pendencias deste filtro</button>
+      </form>
+      <span class="muted small">O reprocessamento em lote trata ate 100 registros do filtro atual e sincroniza primeiro o e-mail com a ficha.</span>
+    </div>
+  </section>
+
+  <section class="grid">
+    <a class="card" href="/receipts/queue/?campaign={{ monitor.campaign_key|urlencode }}&status=pendente{% if auto_refresh %}&auto=1{% endif %}">
+      <span class="label">Pendentes</span>
+      <strong>{{ monitor.counts.pendente }}</strong>
+      <span class="muted small">Abrir somente os pendentes</span>
+    </a>
+    <a class="card" href="/receipts/queue/?campaign={{ monitor.campaign_key|urlencode }}&status=enviado{% if auto_refresh %}&auto=1{% endif %}">
+      <span class="label">Enviados</span>
+      <strong>{{ monitor.counts.enviado }}</strong>
+      <span class="muted small">Abrir somente os enviados</span>
+    </a>
+    <a class="card" href="/receipts/queue/?campaign={{ monitor.campaign_key|urlencode }}&status=falhou{% if auto_refresh %}&auto=1{% endif %}">
+      <span class="label">Falhas</span>
+      <strong>{{ monitor.counts.falhou }}</strong>
+      <span class="muted small">Abrir somente as falhas</span>
+    </a>
+    <a class="card" href="/receipts/queue/?campaign={{ monitor.campaign_key|urlencode }}&status=cancelado{% if auto_refresh %}&auto=1{% endif %}">
+      <span class="label">Cancelados</span>
+      <strong>{{ monitor.counts.cancelado }}</strong>
+      <span class="muted small">Abrir somente os cancelados</span>
+    </a>
+  </section>
+
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <h2>Ultimos itens da fila</h2>
+        <p class="muted">Mostra os registros mais recentes da campanha selecionada. Use para localizar rapidamente uma pessoa ou um recibo com problema.</p>
+      </div>
+      <span class="badge">{{ monitor.items|length }} item(ns)</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Pessoa / recibo</th>
+            <th>Campanha</th>
+            <th>Status</th>
+            <th>Destinatario</th>
+            <th>Tentativas</th>
+            <th>Ultima tentativa</th>
+            <th>Enviado em</th>
+            <th>Erro</th>
+            <th class="no-print">Acoes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in monitor.items %}
+            <tr>
+              <td>
+                <strong>{{ item.person_name }}</strong>
+                <div class="muted small">
+                  {% if item.receipt_number %}{{ item.receipt_number }}{% else %}recibo #{{ item.receipt_id }}{% endif %}
+                  {% if item.period_label %} · {{ item.period_label }}{% endif %}
+                </div>
+              </td>
+              <td><span class="badge">{{ item.campaign_key|default:"fila geral" }}</span></td>
+              <td><span class="badge">{{ item.status }}</span></td>
+              <td>{{ item.email_to|default:"sem e-mail" }}</td>
+              <td>{{ item.attempts }}</td>
+              <td>{{ item.last_attempt_at|default:"-" }}</td>
+              <td>{{ item.sent_at|default:"-" }}</td>
+              <td class="small" style="max-width:280px;">{{ item.last_error|default:"-" }}</td>
+              <td class="no-print">
+                <span class="actions" style="margin-top:0;">
+                  {% if item.person_url %}<a class="badge" href="{{ item.person_url }}">Ficha</a>{% endif %}
+                  {% if item.receipt_url %}<a class="badge" href="{{ item.receipt_url }}">Recibo</a>{% endif %}
+                  <form method="post" style="display:inline;">
+                    {% csrf_token %}
+                    <input type="hidden" name="campaign" value="{{ monitor.campaign_key }}">
+                    <input type="hidden" name="status" value="{{ monitor.status }}">
+                    {% if auto_refresh %}<input type="hidden" name="auto" value="1">{% endif %}
+                    <input type="hidden" name="dispatch_id" value="{{ item.id }}">
+                    <input type="hidden" name="action" value="refresh_dispatch_destination">
+                    <button type="submit" class="badge" style="background:#fffaf1; color:var(--brand); border:1px solid #decfb9; padding:8px 10px;">Sincronizar e-mail</button>
+                  </form>
+                  {% if item.status_code == "falhou" or item.status_code == "pendente" %}
+                    <form method="post" style="display:inline;">
+                      {% csrf_token %}
+                      <input type="hidden" name="campaign" value="{{ monitor.campaign_key }}">
+                      <input type="hidden" name="status" value="{{ monitor.status }}">
+                      {% if auto_refresh %}<input type="hidden" name="auto" value="1">{% endif %}
+                      <input type="hidden" name="dispatch_id" value="{{ item.id }}">
+                      <input type="hidden" name="action" value="reprocess_dispatch">
+                      <button type="submit" class="badge" style="background:#fffaf1; color:var(--brand); border:1px solid #decfb9; padding:8px 10px;">Reprocessar</button>
+                    </form>
+                  {% endif %}
+                </span>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9">Nenhum item encontrado para este filtro.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if auto_refresh %}
+    <script>
+      window.setTimeout(function () {
+        window.location.reload();
+      }, 15000);
+    </script>
+  {% endif %}
+{% endblock %}

@@ -112,6 +112,8 @@ Padrao operacional:
 
 ### Etapa 2 - Cadastro e familias
 
+- `scripts/sincronizar_espelho_cadastro_postgres.py`
+- `scripts/verificar_espelho_cadastro_postgres.py`
 - `manage.py check`
 - `scripts/verificar_django_funcional.py`
 - `scripts/verificar_django_escrita_pessoas.py`

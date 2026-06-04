@@ -53,6 +53,8 @@ STAGES: dict[str, dict[str, object]] = {
         "title": "Etapa 2 - Cadastro, buscas, familias e merge",
         "roteiro": ROOT / "data" / "homologacao" / "ROTEIRO_OPERADOR_ETAPA2_CADASTRO_FAMILIAS_V1.md",
         "steps": (
+            ("Sincronizar espelho cadastral Postgres", lambda db: [sys.executable, str(ROOT / "scripts" / "sincronizar_espelho_cadastro_postgres.py"), "--db", str(db), "--report"]),
+            ("Verificar espelho cadastral Postgres", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_espelho_cadastro_postgres.py"), "--db", str(db), "--report"]),
             ("manage.py check", lambda db: [str(DJANGO_VENV_PYTHON), str(MANAGE_PY), "check"]),
             ("Django funcional", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_django_funcional.py"), "--db", str(db), "--report"]),
             ("Escrita de pessoas Django", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_django_escrita_pessoas.py"), "--db", str(db), "--report"]),

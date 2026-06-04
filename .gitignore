@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.power_church_django.local
+.env.power_church_django.postgres.local
 __pycache__/
 *.pyc
 *.pyo

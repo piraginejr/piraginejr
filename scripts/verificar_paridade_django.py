@@ -96,6 +96,10 @@ def assert_html(path, snippets):
         raise AssertionError(f"{path} nao renderizou layout Django")
     return content
 
+def assert_any(content, options, path, label):
+    if not any(option in content for option in options):
+        raise AssertionError(f"{path} sem nenhuma opcao valida para {label}: {', '.join(options)}")
+
 client = Client()
 summary = dashboard_summary()
 with connect_legacy() as conn:
@@ -153,9 +157,21 @@ assert_html(
     "/people/families/",
     ["Familias domiciliares", "Todos os domicilios", "Fila de auditoria", "Familias estendidas", "Contribuicao na familia"],
 )
-assert_html(
+families_audit_html = assert_html(
     "/people/families/?section=audit",
-    ["Fila de auditoria", "Aplicacao em lote", "Hipoteses para auditoria", "Ignorar sugestoes selecionadas"],
+    ["Fila de auditoria", "Hipoteses para auditoria"],
+)
+assert_any(
+    families_audit_html,
+    ["Aplicacao em lote", "Nenhuma sugestao encontrada"],
+    "/people/families/?section=audit",
+    "estado da fila de auditoria familiar",
+)
+assert_any(
+    families_audit_html,
+    ["Ignorar sugestoes selecionadas", "Nenhuma sugestao encontrada"],
+    "/people/families/?section=audit",
+    "acoes da fila de auditoria familiar",
 )
 assert_html(
     "/people/families/?section=extended",

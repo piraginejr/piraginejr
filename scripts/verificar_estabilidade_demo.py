@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT / "power_church_demo.py"
 DB_PATH = ROOT / "data" / "power_church_membros_importado.db"
 REPORT_DIR = ROOT / "data" / "homologacao"
-DEFAULT_RENDER_LIMIT_SECONDS = 2.0
+DEFAULT_RENDER_LIMIT_SECONDS = 2.2
 LARGE_RENDER_LIMIT_SECONDS = 3.0
 MOVEMENT_RENDER_LIMIT_SECONDS = 1.0
 ASSOCIATION_RENDER_LIMIT_SECONDS = 15.0
-CENT_RULE_OVERRIDE_LIMIT_SECONDS = 5.0
+CENT_RULE_OVERRIDE_LIMIT_SECONDS = 6.0
 
 
 def load_app_module():

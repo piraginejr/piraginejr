@@ -4,7 +4,8 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 DJANGO_DIR="$BASE_DIR/power_church_django"
 PYTHON_BIN="$DJANGO_DIR/.venv/bin/python"
-ENV_FILE="$BASE_DIR/.env.power_church_django.local"
+BASE_ENV_FILE="$BASE_DIR/.env.power_church_django.local"
+EXTRA_ENV_FILE="${POWER_CHURCH_DJANGO_EXTRA_ENV_FILE:-}"
 HOST="${POWER_CHURCH_DJANGO_HOST:-127.0.0.1}"
 PORT="${POWER_CHURCH_DJANGO_PORT:-63620}"
 URL="http://$HOST:$PORT/"
@@ -12,9 +13,15 @@ HEALTH_URL="$URL"
 
 cd "$BASE_DIR"
 
-if [[ -f "$ENV_FILE" ]]; then
+if [[ -f "$BASE_ENV_FILE" ]]; then
   set -a
-  source "$ENV_FILE"
+  source "$BASE_ENV_FILE"
+  set +a
+fi
+
+if [[ -n "$EXTRA_ENV_FILE" && -f "$EXTRA_ENV_FILE" ]]; then
+  set -a
+  source "$EXTRA_ENV_FILE"
   set +a
 fi
 

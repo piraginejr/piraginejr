@@ -9,6 +9,20 @@ Objetivo: validar o que ja foi implantado antes de retomar novas evolucoes, redu
 - Sempre usar uma base de teste conhecida e, quando houver risco financeiro, gerar backup antes.
 - So considerar um modulo "homologado" quando os cenarios abaixo estiverem verdes.
 
+## Uso na migracao acelerada
+
+Durante a migracao para `Django + PostgreSQL`, esta matriz continua sendo a visao macro de cobertura.
+
+Mas cada etapa da migracao passa a exigir tambem:
+
+- um relatorio tecnico automatico por etapa via [executar_homologacao_migracao.py](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/executar_homologacao_migracao.py);
+- um roteiro curto do operador por etapa, salvo em `data/homologacao`;
+- liberacao apenas quando `scripts + roteiro do operador` estiverem `OK`.
+
+Indice operacional da migracao:
+
+- [PLANO_HOMOLOGACAO_OPERADOR_MIGRACAO_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/PLANO_HOMOLOGACAO_OPERADOR_MIGRACAO_V1.md)
+
 ## Massa de prova recomendada
 
 - Lotes PIX Sicoob ja auditados e reconstruidos

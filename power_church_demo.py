@@ -12246,13 +12246,13 @@ def render_contributors(db: PowerChurchDB, query: dict[str, list[str]]) -> str:
             if section_key == "periodo":
                 return (
                     "<div class='actions' style='margin-top:12px'>"
-                    f"<a class='button primary' href='{section_pdf_print_href(section_key)}' target='_blank' rel='noopener'>Abrir PDF p/ imprimir</a>"
+                    f"<a class='button primary' href='{section_pdf_print_href(section_key)}' target='_blank' rel='noopener'>Abrir PDF oficial para imprimir</a>"
                     f"<a class='button' href='{section_href(section_key, pdf=True)}'>Baixar PDF</a>"
                     "</div>"
                 )
             return (
                 "<div class='actions' style='margin-top:12px'>"
-                "<button class='button' type='button' onclick='window.print()'>Imprimir lista</button>"
+                "<button class='button' type='button' onclick='window.print()'>Imprimir esta lista filtrada</button>"
                 f"<a class='button' href='{section_href(section_key, pdf=True)}'>Baixar PDF</a>"
                 "</div>"
             )
@@ -15024,7 +15024,7 @@ def render_contributions(db: PowerChurchDB, query: dict[str, list[str]]) -> str:
         period_report_params["person_query"] = q
     period_report_href = "/contribuintes?" + urllib.parse.urlencode(period_report_params)
     body = f"""
-      <div class="actions">{action_html}<a class="button" href="/pessoas">Pessoas</a><a class="button primary" href="{h(period_report_href)}">Relatorio alfabetico por periodo</a><button class="button" type="button" onclick="window.print()">Imprimir lista filtrada</button></div>
+      <div class="actions">{action_html}<a class="button" href="/pessoas">Pessoas</a><a class="button primary" href="{h(period_report_href)}">Relatorio alfabetico por periodo</a><button class="button" type="button" onclick="window.print()">Imprimir esta lista filtrada</button></div>
       {message_box(query)}
       <h1>Contribuicoes</h1>
       <div class="hint">Cada lancamento pode guardar duas camadas ao mesmo tempo: a pessoa creditada e a origem financeira real que apareceu no banco. Isso permite registrar, por exemplo, um PIX vindo do CNPJ da empresa, mas ainda contar a contribuicao no extrato do membro.</div>
@@ -15148,12 +15148,14 @@ def render_contribution_statement(db: PowerChurchDB, query: dict[str, list[str]]
         doseq=True,
     )
     pdf_href = f"/extrato/contribuicoes.pdf?{pdf_query}"
+    pdf_print_href = f"{pdf_href}&inline=1" if pdf_query else "/extrato/contribuicoes.pdf?inline=1"
     body += f"""
       <div class="actions">
         <a class="button primary" href="/pessoa?id={person_id}">Voltar para ficha</a>
         <a class="button" href="/contribuicao/nova?person_id={person_id}">Lancar contribuicao</a>
-        <button class="button" type="button" onclick="window.print()">Imprimir extrato</button>
+        <a class="button primary" href="{h(pdf_print_href)}" target="_blank" rel="noopener">Abrir PDF do extrato</a>
         <a class="button" href="{h(pdf_href)}">Baixar PDF</a>
+        <button class="button" type="button" onclick="window.print()">Imprimir esta tela</button>
       </div>
       <div class="panel">
         <h2>Membro</h2>

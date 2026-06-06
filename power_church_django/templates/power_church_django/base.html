@@ -855,18 +855,18 @@
         </div>
       </div>
       <nav aria-label="Navegacao principal">
-        <a href="/">Dashboard</a>
-        <a href="/people/">Pessoas</a>
-        <a href="/contributors/">Contribuintes</a>
-        <a href="/contributions/">Contribuicoes</a>
-        <a href="/contributions/envelopes/new/">Subir envelope</a>
-        <a href="/receipts/">Recibos</a>
-        <a href="/imports/">Importacoes</a>
-        <a href="/reports/">Relatorios</a>
-        <a href="/audit/">Auditoria</a>
-        <a href="/accounts/">Usuarios</a>
-        <button class="button secondary no-print" type="button" onclick="window.print()">Imprimir esta tela</button>
         {% if request.user.is_authenticated %}
+          <a href="/">Dashboard</a>
+          <a href="/people/">Pessoas</a>
+          <a href="/contributors/">Contribuintes</a>
+          <a href="/contributions/">Contribuicoes</a>
+          <a href="/contributions/envelopes/new/">Subir envelope</a>
+          <a href="/receipts/">Recibos</a>
+          <a href="/imports/">Importacoes</a>
+          <a href="/reports/">Relatorios</a>
+          <a href="/audit/">Auditoria</a>
+          <a href="/accounts/">Usuarios</a>
+          <button class="button secondary no-print" type="button" onclick="window.print()">Imprimir esta tela</button>
           <form method="post" action="/accounts/logout/" style="display:inline">{% csrf_token %}<button class="button secondary" type="submit">{{ request.user.username }} · sair</button></form>
         {% else %}
           <a href="/accounts/login/">Entrar</a>

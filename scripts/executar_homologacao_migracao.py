@@ -67,8 +67,12 @@ STAGES: dict[str, dict[str, object]] = {
         "title": "Etapa 3 - Contribuicoes, envelopes, recibos e extratos",
         "roteiro": ROOT / "data" / "homologacao" / "ROTEIRO_OPERADOR_ETAPA3_FINANCEIRO_RECIBOS_V1.md",
         "steps": (
+            ("Sincronizar espelho cadastral Postgres", lambda db: [sys.executable, str(ROOT / "scripts" / "sincronizar_espelho_cadastro_postgres.py"), "--db", str(db), "--report"]),
+            ("Sincronizar snapshots financeiros Postgres", lambda db: [sys.executable, str(ROOT / "scripts" / "sincronizar_snapshots_financeiros_postgres.py"), "--db", str(db), "--report"]),
             ("manage.py check", lambda db: [str(DJANGO_VENV_PYTHON), str(MANAGE_PY), "check"]),
             ("Dados operacionais", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_dados_operacionais.py"), "--db", str(db), "--report"]),
+            ("Piloto Bradesco controlado", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_piloto_financeiro_bradesco.py"), "--report"]),
+            ("Snapshots financeiros Postgres", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_snapshots_financeiros_postgres.py"), "--db", str(db), "--report"]),
             ("Django funcional", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_django_funcional.py"), "--db", str(db), "--report"]),
             ("Paridade Django", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_paridade_django.py"), "--db", str(db), "--report"]),
             ("Funcionalidade total", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_funcionalidade_total.py"), "--db", str(db), "--report"]),
@@ -107,6 +111,15 @@ def load_env_file(path: Path) -> dict[str, str]:
         if value.startswith(("\"", "'")) and value.endswith(("\"", "'")) and len(value) >= 2:
             value = value[1:-1]
         env[key] = value
+    return env
+
+
+def prefer_local_postgres_socket(env: dict[str, str]) -> dict[str, str]:
+    host = str(env.get("POWER_CHURCH_POSTGRES_HOST") or "").strip()
+    port = str(env.get("POWER_CHURCH_POSTGRES_PORT") or "5432").strip() or "5432"
+    socket_path = Path(f"/tmp/.s.PGSQL.{port}")
+    if host in {"127.0.0.1", "localhost"} and socket_path.exists():
+        env["POWER_CHURCH_POSTGRES_HOST"] = "/tmp"
     return env
 
 
@@ -197,7 +210,7 @@ def main() -> int:
 
     extra_env = load_env_file(env_file)
     env = dict(os.environ)
-    env.update(extra_env)
+    env.update(prefer_local_postgres_socket(extra_env))
     env.setdefault("PYTHONPYCACHEPREFIX", "/private/tmp/pycache_powerchurch")
     env["POWER_CHURCH_LEGACY_DB_PATH"] = str(db_path)
 

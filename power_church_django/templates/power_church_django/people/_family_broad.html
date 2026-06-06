@@ -9,26 +9,26 @@
 </section>
 
 <section class="grid">
-  <div class="card">
+  <a class="card" href="/people/families/?section=broad{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
     <span class="label">Grupos amplos</span>
     <strong>{{ families.broad.total }}</strong>
     <div class="muted small">{{ families.broad.total_people }} pessoa(s)</div>
-  </div>
-  <div class="card">
+  </a>
+  <a class="card" href="/people/families/?section=broad&review=audit{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
     <span class="label">Consolidaveis</span>
     <strong>{{ families.broad.pending_groups }}</strong>
     <div class="muted small">pedem decisao humana</div>
-  </div>
-  <div class="card">
+  </a>
+  <a class="card" href="/people/families/?section=broad&review=alinhados{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
     <span class="label">Ja alinhados</span>
     <strong>{{ families.broad.consolidated_groups }}</strong>
     <div class="muted small">ja cobertos por vinculos</div>
-  </div>
-  <div class="card">
+  </a>
+  <a class="card" href="/people/families/?section=broad&person_status=membro_ativo{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review and review != 'all' %}&review={{ review|urlencode }}{% endif %}">
     <span class="label">SA na lista</span>
     <strong>{{ families.broad.shown_status.sa }}</strong>
     <div class="muted small">{{ families.broad.shown_status.outros }} em outras modalidades</div>
-  </div>
+  </a>
 </section>
 
 {% if families.broad.smart_summary %}
@@ -41,12 +41,12 @@
     </div>
     <div class="summary-grid">
       {% for item in families.broad.smart_summary %}
-        <div class="card">
+        <a class="card" href="/people/families/?section=broad{% if item.key %}&q={{ item.key|urlencode }}{% endif %}{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
           <span class="label">{{ item.label }}</span>
           <strong>{{ item.count }}</strong>
           <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
           <div class="muted small">{{ item.suggested_action }}</div>
-        </div>
+        </a>
       {% endfor %}
     </div>
   </section>
@@ -62,6 +62,7 @@
     <input type="hidden" name="mode" value="{{ mode }}">
     <input type="hidden" name="category" value="{{ category }}">
     <input type="hidden" name="household_kind" value="{{ household_kind }}">
+    <input type="hidden" name="person_status" value="{{ person_status }}">
     <section class="panel no-print">
       <div class="section-head">
         <div>

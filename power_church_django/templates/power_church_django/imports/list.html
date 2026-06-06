@@ -14,16 +14,10 @@
 
   <section class="panel">
     <h2>Importar extrato bancario</h2>
-    <p class="muted">Use esta entrada para novos lotes Bradesco, Sicoob Recebimentos e Santander. Bancos novos devem nascer no Django com parser portavel, sem criar novas dependencias no prototipo antigo.</p>
+    <p class="muted">Use esta entrada para novos lotes Bradesco, Sicoob e Santander pelo extrato bancario completo. Nesta versao, o PIX isolado saiu da operacao porque o extrato e a fonte mais completa e cobre TED, transferencia e outros recebimentos.</p>
     <form class="toolbar" method="post" enctype="multipart/form-data">
       {% csrf_token %}
-      <label>
-        Tipo
-        <select name="import_kind">
-          <option value="statement">Extrato bancario</option>
-          <option value="pix_sicoob">Sicoob PIX historico</option>
-        </select>
-      </label>
+      <input type="hidden" name="import_kind" value="statement">
       <label>
         Layout do extrato
         <select name="layout_code">
@@ -47,7 +41,7 @@
       <button type="submit">Criar lote</button>
     </form>
     <p class="muted small">Chave segura: use "Comparar Swift x PyMuPDF antes de gravar" quando estiver homologando a leitura portavel. Se houver divergencia, o lote nao e gravado.</p>
-    <p class="muted small">Para extratos novos, prefira Sicoob Extrato Completo em vez do PDF PIX isolado ou do relatorio apenas de recebimentos, para evitar lacunas de TED, transferencia e outras remessas.</p>
+    <p class="muted small">Padrao desta versao: sempre usar o extrato completo do banco, mesmo quando houver PDF separado so de PIX.</p>
   </section>
 
   {% if lots %}
@@ -70,6 +64,9 @@
                 <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/"><strong>#{{ lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
                 <td>
                   <span class="badge">{{ lot.tipo }}</span>
+                  {% if lot.snapshot_backend %}
+                    <span class="badge ok">Snapshot Postgres</span>
+                  {% endif %}
                   <div><strong>{{ lot.banco }}</strong></div>
                   <div class="muted small">{{ lot.layout }}</div>
                 </td>

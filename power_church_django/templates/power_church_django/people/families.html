@@ -22,22 +22,22 @@
   </section>
 
   <section class="grid">
-    <a class="card" href="/people/families/?section=organized{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}">
+    <a class="card" href="/people/families/?section=organized{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
       <span class="label">Todos os domicilios</span>
       <strong>{{ families.summary.organized_groups }}</strong>
       <div class="muted small">{{ families.summary.organized_people }} pessoa(s)</div>
     </a>
-    <a class="card" href="/people/families/?section=audit{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if mode %}&mode={{ mode|urlencode }}{% endif %}">
+    <a class="card" href="/people/families/?section=audit{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if mode %}&mode={{ mode|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
       <span class="label">Fila de auditoria</span>
       <strong>{{ families.summary.audit_groups }}</strong>
       <div class="muted small">{{ families.summary.audit_people }} pessoa(s)</div>
     </a>
-    <a class="card" href="/people/families/?section=extended{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}">
+    <a class="card" href="/people/families/?section=extended{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if household_kind and household_kind != 'all' %}&household_kind={{ household_kind|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
       <span class="label">Familias estendidas</span>
       <strong>{{ families.summary.extended_groups }}</strong>
       <div class="muted small">{{ families.summary.extended_nuclei }} nucleo(s)</div>
     </a>
-    <a class="card" href="/people/families/?section=broad{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}">
+    <a class="card" href="/people/families/?section=broad{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if review %}&review={{ review|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
       <span class="label">Criterio amplo</span>
       <strong>{{ families.summary.broad_groups }}</strong>
       <div class="muted small">{{ families.summary.broad_pending_groups }} pedem consolidacao manual</div>
@@ -45,6 +45,7 @@
   </section>
 
   {% include "power_church_django/people/_family_tabs.html" %}
+  {% include "power_church_django/people/_family_filter_tags.html" %}
 
   <section class="panel no-print">
     <form class="toolbar" method="get">
@@ -53,10 +54,18 @@
         Pesquisar
         <input name="q" value="{{ q }}" placeholder="Pessoa, ficha, CPF, nome da familia, CEP, rua, numero, complemento, bairro ou cidade">
       </label>
-      <label>
-        Filtrar CEP
-        <input name="cep" value="{{ cep }}" placeholder="Ex.: 24220">
-      </label>
+        <label>
+          Filtrar CEP
+          <input name="cep" value="{{ cep }}" placeholder="Ex.: 24220">
+        </label>
+        <label>
+          Perfil das pessoas
+          <select name="person_status">
+            {% for value, label in person_status_options %}
+              <option value="{{ value }}" {% if person_status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
       {% if families.section == "audit" %}
         <label>
           Tipo de lista

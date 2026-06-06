@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.http import HttpRequest, HttpResponse
 from django.contrib import messages
+from django.contrib.auth import logout
 from django.contrib.auth.models import Group, User
 from django.shortcuts import redirect, render
 
@@ -18,6 +19,13 @@ def index(request: HttpRequest) -> HttpResponse:
         "access": access_control_snapshot(),
     }
     return render(request, "power_church_django/accounts/index.html", context)
+
+
+def relogin(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        logout(request)
+    request.session.flush()
+    return redirect("/accounts/login/")
 
 
 def _handle_user_creation(request: HttpRequest) -> None:

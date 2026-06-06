@@ -15,6 +15,11 @@ from power_church_django.apps.people.models import (
     HouseholdProfile,
     PersonAddressSnapshot,
     PersonContactSnapshot,
+    PersonContributionSnapshot,
+    PersonContributorSnapshot,
+    PersonHistorySnapshot,
+    PersonIdentifierSnapshot,
+    PersonProfileSnapshot,
     PersonRelationshipSnapshot,
     PersonSnapshot,
 )
@@ -29,6 +34,11 @@ class SyncStats:
     addresses_total: int
     relationships_total: int
     relationships_active: int
+    profiles_total: int
+    history_total: int
+    contributors_total: int
+    identifiers_total: int
+    contributions_total: int
     household_profiles_total: int
 
 
@@ -107,8 +117,56 @@ def sync_people_snapshots(legacy_db_path: Path, actor: str = "django:etapa2_sync
              ORDER BY id
             """
         ).fetchall()
+        profile_rows = conn.execute(
+            """
+            SELECT id, organizacao_id, pessoa_id, perfil, data_inicio, data_fim, observacoes, ativo
+              FROM pessoa_perfis
+             ORDER BY id
+            """
+        ).fetchall()
+        history_rows = conn.execute(
+            """
+            SELECT id, organizacao_id, pessoa_id, tipo_evento, data_evento, titulo, descricao, origem, destino, criado_em
+              FROM pessoa_historico
+             ORDER BY id
+            """
+        ).fetchall()
+        contributor_rows = conn.execute(
+            """
+            SELECT id, organizacao_id, pessoa_id, nome, tipo, documento_principal, documento_tipo, origem, qualidade, status, ativo
+              FROM contribuintes
+             ORDER BY id
+            """
+        ).fetchall()
+        identifier_rows = conn.execute(
+            """
+            SELECT id, organizacao_id, pessoa_id, contribuinte_id, tipo, valor, principal, observacoes, ativo
+              FROM contribuintes_identificadores
+             ORDER BY id
+            """
+        ).fetchall()
+        contribution_rows = conn.execute(
+            """
+            SELECT co.id, co.organizacao_id, co.pessoa_id, co.contribuinte_id, co.data_recebimento, co.competencia,
+                   co.competencia_ordem, co.valor, co.status_operacional, co.ativo,
+                   COALESCE(tc.nome, '') AS tipo_nome,
+                   COALESCE(fr.nome, '') AS forma_nome,
+                   COALESCE(c.nome, '') AS origem_nome
+              FROM contribuicoes co
+              LEFT JOIN tipos_contribuicao tc ON tc.id = co.tipo_contribuicao_id
+              LEFT JOIN formas_recebimento fr ON fr.id = co.forma_recebimento_id
+              LEFT JOIN contribuintes c ON c.id = co.contribuinte_id
+             WHERE co.pessoa_id IS NOT NULL
+             ORDER BY co.id
+            """
+        ).fetchall()
 
     with transaction.atomic():
+        PersonIdentifierSnapshot.objects.all().delete()
+        PersonContributionSnapshot.objects.all().delete()
+        PersonContributorSnapshot.objects.all().delete()
+        PersonHistorySnapshot.objects.all().delete()
+        PersonProfileSnapshot.objects.all().delete()
         PersonRelationshipSnapshot.objects.all().delete()
         PersonAddressSnapshot.objects.all().delete()
         PersonContactSnapshot.objects.all().delete()
@@ -214,6 +272,108 @@ def sync_people_snapshots(legacy_db_path: Path, actor: str = "django:etapa2_sync
             batch_size=1000,
         )
 
+        PersonProfileSnapshot.objects.bulk_create(
+            [
+                PersonProfileSnapshot(
+                    legacy_id=int(row["id"]),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    person=people_map[int(row["pessoa_id"])],
+                    profile=normalize_query(row["perfil"]),
+                    start_date_raw=normalize_query(row["data_inicio"]),
+                    end_date_raw=normalize_query(row["data_fim"]),
+                    notes=normalize_query(row["observacoes"]),
+                    is_active=bool(int(row["ativo"] or 0)),
+                )
+                for row in profile_rows
+                if int(row["pessoa_id"]) in people_map
+            ],
+            batch_size=1000,
+        )
+
+        PersonHistorySnapshot.objects.bulk_create(
+            [
+                PersonHistorySnapshot(
+                    legacy_id=int(row["id"]),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    person=people_map[int(row["pessoa_id"])],
+                    event_type=normalize_query(row["tipo_evento"]),
+                    event_date_raw=normalize_query(row["data_evento"]),
+                    title=normalize_query(row["titulo"]),
+                    description=normalize_query(row["descricao"]),
+                    origin=normalize_query(row["origem"]),
+                    destination=normalize_query(row["destino"]),
+                    created_at_legacy=_parse_datetime(row["criado_em"]),
+                )
+                for row in history_rows
+                if int(row["pessoa_id"]) in people_map
+            ],
+            batch_size=1000,
+        )
+
+        PersonContributorSnapshot.objects.bulk_create(
+            [
+                PersonContributorSnapshot(
+                    legacy_id=int(row["id"]),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    person=people_map[int(row["pessoa_id"])],
+                    name=normalize_query(row["nome"]),
+                    contributor_type=normalize_query(row["tipo"]),
+                    primary_document=normalize_query(row["documento_principal"]),
+                    document_type=normalize_query(row["documento_tipo"]),
+                    origin=normalize_query(row["origem"]),
+                    quality=normalize_query(row["qualidade"]),
+                    status=normalize_query(row["status"]),
+                    is_active=bool(int(row["ativo"] or 0)),
+                )
+                for row in contributor_rows
+                if row["pessoa_id"] is not None and int(row["pessoa_id"]) in people_map
+            ],
+            batch_size=1000,
+        )
+
+        PersonIdentifierSnapshot.objects.bulk_create(
+            [
+                PersonIdentifierSnapshot(
+                    legacy_id=int(row["id"]),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    person=people_map[int(row["pessoa_id"])],
+                    contributor_legacy_id=int(row["contribuinte_id"]) if row["contribuinte_id"] is not None else None,
+                    identifier_type=normalize_query(row["tipo"]),
+                    value=normalize_query(row["valor"]),
+                    is_primary=bool(int(row["principal"] or 0)),
+                    notes=normalize_query(row["observacoes"]),
+                    is_active=bool(int(row["ativo"] or 0)),
+                )
+                for row in identifier_rows
+                if row["pessoa_id"] is not None and int(row["pessoa_id"]) in people_map
+            ],
+            batch_size=1000,
+        )
+
+        PersonContributionSnapshot.objects.bulk_create(
+            [
+                PersonContributionSnapshot(
+                    legacy_id=int(row["id"]),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    person=people_map[int(row["pessoa_id"])],
+                    contributor_legacy_id=int(row["contribuinte_id"]) if row["contribuinte_id"] is not None else None,
+                    received_at=_parse_date(row["data_recebimento"]),
+                    received_at_raw=normalize_query(row["data_recebimento"]),
+                    competence=normalize_query(row["competencia"]),
+                    competence_order=int(row["competencia_ordem"] or 0),
+                    amount=row["valor"] or 0,
+                    operational_status=normalize_query(row["status_operacional"]),
+                    contribution_type_name=normalize_query(row["tipo_nome"]),
+                    receipt_method_name=normalize_query(row["forma_nome"]),
+                    source_name=normalize_query(row["origem_nome"]),
+                    is_active=bool(int(row["ativo"] or 0)),
+                )
+                for row in contribution_rows
+                if row["pessoa_id"] is not None and int(row["pessoa_id"]) in people_map
+            ],
+            batch_size=1000,
+        )
+
     stats = compare_people_snapshots(legacy_db_path)
     record_django_audit_event(
         actor=actor,
@@ -234,6 +394,33 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
         legacy_addresses_total = int(conn.execute("SELECT COUNT(*) FROM pessoa_enderecos").fetchone()[0] or 0)
         legacy_relationships_total = int(conn.execute("SELECT COUNT(*) FROM pessoa_relacionamentos").fetchone()[0] or 0)
         legacy_relationships_active = int(conn.execute("SELECT COUNT(*) FROM pessoa_relacionamentos WHERE ativo = 1").fetchone()[0] or 0)
+        legacy_profiles_total = int(conn.execute("SELECT COUNT(*) FROM pessoa_perfis WHERE ativo = 1").fetchone()[0] or 0)
+        legacy_history_total = int(conn.execute("SELECT COUNT(*) FROM pessoa_historico").fetchone()[0] or 0)
+        legacy_contributors_total = int(
+            conn.execute("SELECT COUNT(*) FROM contribuintes WHERE ativo = 1 AND pessoa_id IS NOT NULL").fetchone()[0] or 0
+        )
+        legacy_identifiers_total = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                  FROM contribuintes_identificadores
+                 WHERE ativo = 1
+                   AND pessoa_id IS NOT NULL
+                """
+            ).fetchone()[0]
+            or 0
+        )
+        legacy_contributions_total = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                  FROM contribuicoes
+                 WHERE ativo = 1
+                   AND pessoa_id IS NOT NULL
+                """
+            ).fetchone()[0]
+            or 0
+        )
 
     postgres_people_total = PersonSnapshot.objects.count()
     postgres_people_active = PersonSnapshot.objects.filter(is_active=True).count()
@@ -241,6 +428,11 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
     postgres_addresses_total = PersonAddressSnapshot.objects.count()
     postgres_relationships_total = PersonRelationshipSnapshot.objects.count()
     postgres_relationships_active = PersonRelationshipSnapshot.objects.filter(is_active=True).count()
+    postgres_profiles_total = PersonProfileSnapshot.objects.filter(is_active=True).count()
+    postgres_history_total = PersonHistorySnapshot.objects.count()
+    postgres_contributors_total = PersonContributorSnapshot.objects.filter(is_active=True).count()
+    postgres_identifiers_total = PersonIdentifierSnapshot.objects.filter(is_active=True).count()
+    postgres_contributions_total = PersonContributionSnapshot.objects.filter(is_active=True).count()
     household_profiles_total = HouseholdProfile.objects.count()
 
     return {
@@ -256,6 +448,16 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
         "postgres_relationships_total": postgres_relationships_total,
         "legacy_relationships_active": legacy_relationships_active,
         "postgres_relationships_active": postgres_relationships_active,
+        "legacy_profiles_total": legacy_profiles_total,
+        "postgres_profiles_total": postgres_profiles_total,
+        "legacy_history_total": legacy_history_total,
+        "postgres_history_total": postgres_history_total,
+        "legacy_contributors_total": legacy_contributors_total,
+        "postgres_contributors_total": postgres_contributors_total,
+        "legacy_identifiers_total": legacy_identifiers_total,
+        "postgres_identifiers_total": postgres_identifiers_total,
+        "legacy_contributions_total": legacy_contributions_total,
+        "postgres_contributions_total": postgres_contributions_total,
         "household_profiles_total": household_profiles_total,
         "counts_match": all(
             [
@@ -265,6 +467,11 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
                 legacy_addresses_total == postgres_addresses_total,
                 legacy_relationships_total == postgres_relationships_total,
                 legacy_relationships_active == postgres_relationships_active,
+                legacy_profiles_total == postgres_profiles_total,
+                legacy_history_total == postgres_history_total,
+                legacy_contributors_total == postgres_contributors_total,
+                legacy_identifiers_total == postgres_identifiers_total,
+                legacy_contributions_total == postgres_contributions_total,
             ]
         ),
     }

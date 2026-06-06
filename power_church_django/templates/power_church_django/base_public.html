@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title|default:"Power Church Django" }}</title>
+  <style>
+    :root {
+      --ink: #202837;
+      --muted: #667085;
+      --panel: rgba(255, 253, 248, .96);
+      --line: #e7dece;
+      --brand: #275c53;
+      --paper: #fffdf8;
+      --alert: #9f2f2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 10%, rgba(178, 112, 53, .15), transparent 28%),
+        radial-gradient(circle at 85% 0%, rgba(39, 92, 83, .16), transparent 30%),
+        linear-gradient(135deg, #f9f5ed 0%, #fffdf8 48%, #eef5f1 100%);
+    }
+    .shell {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 38px 18px 54px;
+    }
+    .public-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      justify-content: center;
+      margin-bottom: 26px;
+    }
+    .public-brand img {
+      width: 62px;
+      height: 62px;
+      object-fit: contain;
+      border-radius: 16px;
+      box-shadow: 0 10px 26px rgba(32, 40, 55, .10);
+      background: rgba(255, 255, 255, .74);
+    }
+    .public-brand-copy {
+      min-width: 0;
+    }
+    .public-brand-title {
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: -.02em;
+    }
+    .public-brand-subtitle {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    .hero, .panel {
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--panel);
+      box-shadow: 0 22px 52px rgba(32, 40, 55, .09);
+      padding: 26px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(32px, 4vw, 48px);
+      letter-spacing: -.025em;
+    }
+    p {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid #decfb9;
+      background: #fff8eb;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 900;
+      padding: 5px 9px;
+      white-space: nowrap;
+    }
+    .toolbar {
+      display: grid;
+      gap: 14px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    input, button {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fffaf1;
+      color: var(--ink);
+      font: inherit;
+      padding: 11px 12px;
+    }
+    button {
+      background: var(--brand);
+      color: white;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .alert {
+      border: 1px solid rgba(159, 47, 47, .18);
+      border-radius: 16px;
+      background: rgba(159, 47, 47, .08);
+      color: var(--alert);
+      font-weight: 800;
+      padding: 12px 14px;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="public-brand">
+      {% if brand_logo_available %}
+        <img src="{{ brand_logo_url }}" alt="{{ brand_title }}">
+      {% endif %}
+      <div class="public-brand-copy">
+        <div class="public-brand-title">{{ brand_title }}</div>
+        <div class="public-brand-subtitle">{{ brand_subtitle }}</div>
+      </div>
+    </div>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
@@ -24,8 +25,15 @@ from power_church_django.services.legacy import (
     get_import_lot_detail,
     list_import_lots,
 )
+from .services import (
+    get_statement_movement_detail_from_snapshot,
+    get_statement_lot_detail_from_snapshot,
+    overlay_statement_lot_snapshots,
+    sync_statement_lot_snapshot_from_legacy,
+)
 
 
+@login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
     context = {"title": "Power Church Django", "layouts": STATEMENT_LAYOUT_LABELS}
     try:
@@ -52,11 +60,13 @@ def index(request: HttpRequest) -> HttpResponse:
             ),
             "Comparar Swift x PyMuPDF antes de gravar",
         )
+        if import_kind == "pix_sicoob":
+            messages.error(
+                request,
+                "Nesta versao, o caminho oficial e o extrato bancario completo. O PIX isolado ficou fora da operacao para evitar lacunas de TED, transferencia e outros recebimentos.",
+            )
+            return redirect("/imports/")
         try:
-            if import_kind == "pix_sicoob":
-                lot_id = create_pix_lot_from_upload(upload.name, payload, pdf_provider_mode=pdf_provider_mode)
-                messages.success(request, f"Lote PIX #{lot_id} criado com sucesso no Django. Motor PDF: {provider_label}.")
-                return redirect(f"/imports/pix/{lot_id}/?status=pendencias")
             layout_code = str(request.POST.get("layout_code") or "SICOOB_CONTA_CORRENTE").strip().upper()
             lot_id = create_statement_lot_from_upload(
                 upload.name,
@@ -64,6 +74,7 @@ def index(request: HttpRequest) -> HttpResponse:
                 layout_code=layout_code,
                 pdf_provider_mode=pdf_provider_mode,
             )
+            sync_statement_lot_snapshot_from_legacy(lot_id)
             layout_label = STATEMENT_LAYOUT_LABELS.get(layout_code, layout_code)
             messages.success(request, f"Lote de extrato #{lot_id} ({layout_label}) criado com sucesso no Django. Motor PDF: {provider_label}.")
             return redirect(f"/imports/statement/{lot_id}/?status=pendencias")
@@ -81,7 +92,7 @@ def index(request: HttpRequest) -> HttpResponse:
         "pdf_provider_modes": PDF_PROVIDER_MODES,
     }
     try:
-        context["lots"] = list_import_lots()
+        context["lots"] = overlay_statement_lot_snapshots(list_import_lots())
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/imports/list.html", context)
@@ -116,12 +127,16 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
         try:
             if action == "reprocess":
                 updated = reprocess_bank_lot(kind, lot_id)
+                if kind == "statement":
+                    sync_statement_lot_snapshot_from_legacy(lot_id)
                 messages.success(request, f"Lote reprocessado. {updated} movimento(s) foram revistos e o financeiro foi sincronizado.")
             elif action == "approve_movement":
                 movement_id = int(request.POST.get("movement_id") or 0)
                 if not movement_id:
                     raise LegacyBankWriteError("Movimento nao informado para confirmacao.")
                 imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
+                if kind == "statement":
+                    sync_statement_lot_snapshot_from_legacy(lot_id)
                 if imported_contribution_id:
                     messages.success(request, f"Movimento #{movement_id} confirmado no lote e sincronizado com a contribuicao #{imported_contribution_id}.")
                 else:
@@ -131,6 +146,8 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
                 messages.success(request, f"Financeiro do lote PIX sincronizado. {imported} movimento(s) receberam lancamento.")
             elif action == "close":
                 result = close_bank_lot(kind, lot_id)
+                if kind == "statement":
+                    sync_statement_lot_snapshot_from_legacy(lot_id)
                 messages.success(
                     request,
                     f"Lote encerrado. {result.get('importados', 0)} movimento(s) sincronizados e {result.get('movidos_contribuintes', 0)} pendencia(s) preservadas na central de contribuintes.",
@@ -147,7 +164,14 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
         "status": request.GET.get("status", ""),
     }
     try:
-        context["detail"] = get_import_lot_detail(kind=kind, lot_id=lot_id, status=context["status"])
+        if kind == "statement":
+            context["detail"] = get_statement_lot_detail_from_snapshot(lot_id=lot_id, status=context["status"]) or get_import_lot_detail(
+                kind=kind,
+                lot_id=lot_id,
+                status=context["status"],
+            )
+        else:
+            context["detail"] = get_import_lot_detail(kind=kind, lot_id=lot_id, status=context["status"])
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/imports/lot_detail.html", context)
@@ -160,8 +184,11 @@ def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpRe
         if not return_to.startswith("/imports/"):
             return_to = f"/imports/{kind}/"
         action = str(request.POST.get("action") or "approve").strip()
+        lot_id = int(request.POST.get("lot_id") or 0)
         try:
             imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
+            if kind == "statement" and lot_id:
+                sync_statement_lot_snapshot_from_legacy(lot_id)
             if action == "same_owner":
                 messages.success(request, "Movimento classificado como mesma titularidade / origem interna.")
             elif action == "ignore":
@@ -186,11 +213,18 @@ def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpRe
         "return_to": return_to,
     }
     try:
-        context["detail"] = get_bank_movement_detail(
-            kind=kind,
-            movement_id=movement_id,
-            lookup=context["lookup"],
-        )
+        if kind == "statement":
+            context["detail"] = get_statement_movement_detail_from_snapshot(movement_id=movement_id, lookup=context["lookup"]) or get_bank_movement_detail(
+                kind=kind,
+                movement_id=movement_id,
+                lookup=context["lookup"],
+            )
+        else:
+            context["detail"] = get_bank_movement_detail(
+                kind=kind,
+                movement_id=movement_id,
+                lookup=context["lookup"],
+            )
         if context["detail"] and context["return_to"] == default_return_to:
             context["return_to"] = context["detail"]["lot_url"]
     except LegacyDatabaseError as exc:

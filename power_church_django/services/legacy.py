@@ -10,6 +10,8 @@ from typing import Any
 from urllib.parse import quote
 
 from django.conf import settings
+from django.core.exceptions import AppRegistryNotReady
+from django.db.utils import OperationalError as DjangoOperationalError, ProgrammingError as DjangoProgrammingError
 
 from power_church_core.formatting import br_date, br_datetime, br_money, competencia_from_date
 from power_church_core.family import (
@@ -47,6 +49,21 @@ PENDING_REVIEW_STATUSES = {
     "revisar_duplicidade",
     "classificacao_pendente",
 }
+
+HUMAN_PENDING_REVIEW_STATUSES = (
+    "pendente",
+    "revisar_pessoa",
+    "revisar_destinacao",
+    "classificacao_pendente",
+)
+
+
+def human_pending_review_sql(alias: str = "m") -> str:
+    direct_statuses = ",".join(f"'{value}'" for value in HUMAN_PENDING_REVIEW_STATUSES)
+    return (
+        f"({alias}.review_status IN ({direct_statuses}) "
+        f"OR ({alias}.review_status = 'revisar_duplicidade' AND COALESCE({alias}.imported_contribution_id, 0) = 0))"
+    )
 
 
 STATUS_LABELS = {
@@ -145,6 +162,8 @@ def _person_search_clause(alias: str = "") -> str:
     prefix = f"{alias}." if alias else ""
     return f"""
     (
+        CAST({prefix}id AS TEXT) = ?
+        OR
         NORMALIZE_MATCH(COALESCE({prefix}nome, '')) LIKE ?
         OR NORMALIZE_MATCH(COALESCE({prefix}nome_social, '')) LIKE ?
         OR COALESCE({prefix}codigo_interno, '') LIKE ?
@@ -161,7 +180,385 @@ def _person_search_params(query: str) -> list[str]:
     normalized_like = f"%{normalize_match_name(clean)}%"
     raw_like = f"%{clean}%"
     digit_like = f"%{digits or clean}%"
-    return [normalized_like, normalized_like, raw_like, digit_like, normalized_like, digit_like]
+    exact_id = digits or clean
+    return [exact_id, normalized_like, normalized_like, raw_like, digit_like, normalized_like, digit_like]
+
+
+def _people_snapshot_models() -> dict[str, Any] | None:
+    try:
+        from django.apps import apps
+
+        models = {
+            "person": apps.get_model("people", "PersonSnapshot"),
+            "contact": apps.get_model("people", "PersonContactSnapshot"),
+            "address": apps.get_model("people", "PersonAddressSnapshot"),
+            "relationship": apps.get_model("people", "PersonRelationshipSnapshot"),
+            "profile": apps.get_model("people", "PersonProfileSnapshot"),
+            "history": apps.get_model("people", "PersonHistorySnapshot"),
+            "contributor": apps.get_model("people", "PersonContributorSnapshot"),
+            "identifier": apps.get_model("people", "PersonIdentifierSnapshot"),
+            "contribution": apps.get_model("people", "PersonContributionSnapshot"),
+        }
+        models["person"].objects.only("id").first()
+        return models
+    except (LookupError, AppRegistryNotReady, DjangoOperationalError, DjangoProgrammingError):
+        return None
+
+
+def _people_snapshot_available() -> bool:
+    models = _people_snapshot_models()
+    if not models:
+        return False
+    try:
+        return models["person"].objects.exists()
+    except (DjangoOperationalError, DjangoProgrammingError):
+        return False
+
+
+def _person_snapshot_search_q(query: str):
+    from django.db.models import Q
+
+    clean = normalize_query(query)
+    digits = "".join(ch for ch in clean if ch.isdigit())
+    normalized = normalize_match_name(clean)
+    query_filter = (
+        Q(legacy_id=moneyless_int(digits or clean))
+        | Q(normalized_name__icontains=normalized)
+        | Q(name__icontains=clean)
+        | Q(social_name__icontains=clean)
+        | Q(internal_code__icontains=clean)
+        | Q(cpf__icontains=digits or clean)
+        | Q(normalized_email__icontains=clean.lower())
+        | Q(primary_email__icontains=clean)
+        | Q(primary_phone__icontains=digits or clean)
+        | Q(primary_whatsapp__icontains=digits or clean)
+    )
+    return query_filter
+
+
+def _status_options_from_snapshots(person_model) -> list[dict[str, Any]]:
+    from django.db.models import Count
+
+    rows = (
+        person_model.objects.filter(is_active=True)
+        .values("status")
+        .annotate(total=Count("id"))
+        .order_by("-total", "status")
+    )
+    return [
+        {
+            "value": row["status"] or "",
+            "label": format_status(row["status"]),
+            "count": int(row["total"] or 0),
+        }
+        for row in rows
+    ]
+
+
+def _list_people_from_snapshots(q: str = "", status: str = "", city: str = "", limit: int | None = None) -> dict[str, Any]:
+    from django.db.models import Q
+
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    person_model = models["person"]
+    address_model = models["address"]
+
+    queryset = person_model.objects.filter(is_active=True)
+    if status:
+        queryset = queryset.filter(status=status)
+    if city:
+        normalized_city = normalize_match_name(city)
+        city_ids = list(
+            {
+                row["person_id"]
+                for row in address_model.objects.values("person_id", "city")
+                if normalize_match_name(row["city"] or "") == normalized_city
+            }
+        )
+        queryset = queryset.filter(id__in=city_ids)
+    if q:
+        queryset = queryset.filter(_person_snapshot_search_q(q))
+    total = queryset.count()
+    queryset = queryset.order_by("normalized_name", "legacy_id")
+    limit_value = moneyless_int(limit) if limit is not None else 0
+    if limit_value > 0:
+        queryset = queryset[:limit_value]
+    rows = list(queryset)
+    items = [
+        {
+            "id": row.legacy_id,
+            "codigo": row.internal_code or "",
+            "nome": row.name or "",
+            "cpf": row.cpf or "",
+            "status": format_status(row.status),
+            "status_raw": row.status or "",
+            "sigla": status_sigla(row.status, True),
+            "ativo": "Sim" if row.is_active else "Nao",
+            "email": row.primary_email or "",
+            "telefone": row.primary_phone or "",
+        }
+        for row in rows
+    ]
+    return {
+        "items": items,
+        "total": total,
+        "shown": len(items),
+        "q": q,
+        "status": status,
+        "city": city,
+        "status_options": _status_options_from_snapshots(person_model),
+        "limit": limit_value or total,
+    }
+
+
+def _search_people_for_relationship_from_snapshots(person_id: int, q: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    person_model = models["person"]
+    relationship_model = models["relationship"]
+
+    current = person_model.objects.filter(legacy_id=person_id, is_active=True).first()
+    if current is None:
+        return []
+    related_ids = set(
+        relationship_model.objects.filter(is_active=True, person=current).values_list("related_person__legacy_id", flat=True)
+    )
+    related_ids.update(
+        relationship_model.objects.filter(is_active=True, related_person=current).values_list("person__legacy_id", flat=True)
+    )
+    queryset = (
+        person_model.objects.filter(organization_id=current.organization_id, is_active=True)
+        .exclude(legacy_id=current.legacy_id)
+        .exclude(legacy_id__in=related_ids)
+        .filter(_person_snapshot_search_q(q))
+        .order_by("normalized_name", "legacy_id")[:limit]
+    )
+    return [
+        {
+            "id": moneyless_int(row.legacy_id),
+            "nome": row.name or "",
+            "codigo": row.internal_code or "",
+            "cpf": format_cpf(row.cpf),
+            "status": format_status(row.status),
+            "sigla": status_sigla(row.status, True),
+            "label": " · ".join(
+                part
+                for part in [
+                    row.name or "",
+                    status_sigla(row.status, True),
+                    f"CPF {format_cpf(row.cpf)}" if row.cpf else "CPF -",
+                    f"Cod. {row.internal_code}" if row.internal_code else "",
+                ]
+                if part
+            ),
+        }
+        for row in queryset
+    ]
+
+
+def _family_relationships_from_snapshots(person_snapshot, relationship_model) -> tuple[list[dict[str, Any]], set[int]]:
+    rows = list(
+        relationship_model.objects.filter(is_active=True)
+        .filter(person=person_snapshot)
+        .select_related("related_person")
+    ) + list(
+        relationship_model.objects.filter(is_active=True)
+        .filter(related_person=person_snapshot)
+        .select_related("person")
+    )
+    relationships: list[dict[str, Any]] = []
+    related_ids: set[int] = set()
+    for row in rows:
+        related = row.related_person if row.person_id == person_snapshot.id else row.person
+        related_ids.add(int(related.legacy_id or 0))
+        relationships.append(
+            {
+                "id": moneyless_int(row.legacy_id),
+                "related_id": moneyless_int(related.legacy_id),
+                "related_nome": related.name or "",
+                "codigo": related.internal_code or "",
+                "cpf": format_cpf(related.cpf),
+                "status": format_status(related.status),
+                "sigla": status_sigla(related.status, True),
+                "tipo": row.relationship_type or "",
+                "tipo_label": FAMILY_RELATIONSHIP_LABELS.get(row.relationship_type or "", row.relationship_type or ""),
+                "observacoes": row.notes or "",
+                "automatico_endereco": "AUTOMATICAMENTE POR ENDERECO" in normalize_match_name(row.notes or ""),
+                "criado_em": br_datetime(row.created_at_legacy),
+            }
+        )
+    relationships.sort(key=lambda item: (normalize_match_name(item["related_nome"]), item["id"]))
+    return relationships, related_ids
+
+
+def _suppressed_family_ids_from_snapshots(person_snapshot, relationship_model) -> set[int]:
+    suppressed_rows = list(
+        relationship_model.objects.filter(is_active=False, relationship_type="nucleo_familiar")
+        .filter(person=person_snapshot)
+        .select_related("related_person")
+    ) + list(
+        relationship_model.objects.filter(is_active=False, relationship_type="nucleo_familiar")
+        .filter(related_person=person_snapshot)
+        .select_related("person")
+    )
+    suppressed: set[int] = set()
+    for row in suppressed_rows:
+        if MANUAL_FAMILY_SUPPRESSION_MARKER not in normalize_match_name(row.notes or ""):
+            continue
+        related = row.related_person if row.person_id == person_snapshot.id else row.person
+        suppressed.add(int(related.legacy_id or 0))
+    return suppressed
+
+
+def _family_suggestions_from_snapshots(person_snapshot, address_model, relationship_model) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    person_addresses = list(address_model.objects.filter(person=person_snapshot).order_by("-is_primary", "legacy_id"))
+    address_keys = {
+        _address_match_key(
+            {
+                "cep": address.cep,
+                "logradouro": address.street,
+                "numero": address.number,
+                "complemento": address.complement,
+                "bairro": address.neighborhood,
+                "cidade": address.city,
+                "uf": address.state,
+            }
+        ): _format_address_line(
+            {
+                "cep": address.cep,
+                "logradouro": address.street,
+                "numero": address.number,
+                "complemento": address.complement,
+                "bairro": address.neighborhood,
+                "cidade": address.city,
+                "uf": address.state,
+            }
+        )
+        for address in person_addresses
+        if _address_match_key(
+            {
+                "cep": address.cep,
+                "logradouro": address.street,
+                "numero": address.number,
+                "complemento": address.complement,
+                "bairro": address.neighborhood,
+                "cidade": address.city,
+                "uf": address.state,
+            }
+        )
+    }
+    relationships, related_ids = _family_relationships_from_snapshots(person_snapshot, relationship_model)
+    suppressed_related_ids = _suppressed_family_ids_from_snapshots(person_snapshot, relationship_model)
+    people_options: list[dict[str, Any]] = []
+    if not address_keys:
+        return relationships, [], people_options
+    suggestions: list[dict[str, Any]] = []
+    seen_people: set[int] = set()
+    candidate_addresses = (
+        address_model.objects.filter(person__organization_id=person_snapshot.organization_id, person__is_active=True)
+        .exclude(person=person_snapshot)
+        .select_related("person")
+        .order_by("person__normalized_name", "-is_primary", "legacy_id")
+    )
+    for address in candidate_addresses:
+        related_legacy_id = int(address.person.legacy_id or 0)
+        if related_legacy_id in related_ids or related_legacy_id in suppressed_related_ids or related_legacy_id in seen_people:
+            continue
+        row = {
+            "cep": address.cep,
+            "logradouro": address.street,
+            "numero": address.number,
+            "complemento": address.complement,
+            "bairro": address.neighborhood,
+            "cidade": address.city,
+            "uf": address.state,
+        }
+        key = _address_match_key(row)
+        if key not in address_keys:
+            continue
+        seen_people.add(related_legacy_id)
+        suggestions.append(
+            {
+                "related_id": related_legacy_id,
+                "related_nome": address.person.name or "",
+                "codigo": address.person.internal_code or "",
+                "cpf": format_cpf(address.person.cpf),
+                "status": format_status(address.person.status),
+                "sigla": status_sigla(address.person.status, True),
+                "address": _format_address_line(row),
+                "reason": "Endereco completo igual ao da ficha.",
+            }
+        )
+    return relationships, suggestions[:40], people_options
+
+
+def _family_rows_from_snapshots() -> list[dict[str, Any]]:
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    person_model = models["person"]
+    address_model = models["address"]
+
+    address_index: dict[int, list[Any]] = defaultdict(list)
+    for address in address_model.objects.order_by("person_id", "-is_primary", "legacy_id"):
+        address_index[moneyless_int(address.person_id)].append(address)
+
+    rows: list[dict[str, Any]] = []
+    for person in person_model.objects.filter(is_active=True).order_by("legacy_id"):
+        person_id = moneyless_int(person.legacy_id)
+        addresses = address_index.get(moneyless_int(person.id)) or [None]
+        for address in addresses:
+            rows.append(
+                {
+                    "id": person_id,
+                    "codigo_interno": person.internal_code or "",
+                    "nome": person.name or "",
+                    "cpf": person.cpf or "",
+                    "status": person.status or "",
+                    "data_nascimento": person.birth_date_raw or "",
+                    "cep": address.cep if address else "",
+                    "logradouro": address.street if address else "",
+                    "numero": address.number if address else "",
+                    "complemento": address.complement if address else "",
+                    "bairro": address.neighborhood if address else "",
+                    "cidade": address.city if address else "",
+                    "uf": address.state if address else "",
+                }
+            )
+    return rows
+
+
+def _family_relationship_sets_from_snapshots() -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    relationship_model = models["relationship"]
+    relationship_pairs = {
+        _relationship_pair(row.person.legacy_id, row.related_person.legacy_id)
+        for row in relationship_model.objects.filter(is_active=True).select_related("person", "related_person")
+    }
+    suppressed_pairs = {
+        _relationship_pair(row.person.legacy_id, row.related_person.legacy_id)
+        for row in relationship_model.objects.filter(is_active=False, relationship_type="nucleo_familiar").select_related("person", "related_person")
+        if MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row.notes or "")
+    }
+    return relationship_pairs, suppressed_pairs
+
+
+def _nucleus_relationship_rows_from_snapshots() -> list[dict[str, Any]]:
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    relationship_model = models["relationship"]
+    return [
+        {
+            "pessoa_id": moneyless_int(row.person.legacy_id),
+            "pessoa_relacionada_id": moneyless_int(row.related_person.legacy_id),
+        }
+        for row in relationship_model.objects.filter(is_active=True, relationship_type="nucleo_familiar").select_related("person", "related_person")
+    ]
 
 
 ENVELOPE_STATUS_LABELS = {
@@ -262,9 +659,8 @@ def dashboard_summary() -> dict[str, Any]:
                 SELECT COUNT(*)
                   FROM pix_movimentos
                  WHERE ativo = 1
-                   AND review_status IN ({','.join('?' for _ in PENDING_REVIEW_STATUSES)})
+                   AND {human_pending_review_sql('pix_movimentos')}
                 """,
-                tuple(PENDING_REVIEW_STATUSES),
             )
             or 0
         )
@@ -275,9 +671,8 @@ def dashboard_summary() -> dict[str, Any]:
                 SELECT COUNT(*)
                   FROM extrato_movimentos
                  WHERE ativo = 1
-                   AND review_status IN ({','.join('?' for _ in PENDING_REVIEW_STATUSES)})
+                   AND {human_pending_review_sql('extrato_movimentos')}
                 """,
-                tuple(PENDING_REVIEW_STATUSES),
             )
             or 0
         )
@@ -348,6 +743,11 @@ def list_people(q: str = "", status: str = "", city: str = "", limit: int | None
     q = (q or "").strip()
     status = (status or "").strip()
     city = normalize_query(city)
+    if _people_snapshot_available():
+        try:
+            return _list_people_from_snapshots(q=q, status=status, city=city, limit=limit)
+        except LegacyDatabaseError:
+            pass
     clauses = ["ativo = 1"]
     params: list[Any] = []
     if status:
@@ -430,6 +830,11 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
     digits = "".join(ch for ch in query if ch.isdigit())
     if not person_id or (len(query) < 2 and len(digits) < 2):
         return []
+    if _people_snapshot_available():
+        try:
+            return _search_people_for_relationship_from_snapshots(person_id, q=query, limit=limit)
+        except LegacyDatabaseError:
+            pass
     limit = max(1, min(moneyless_int(limit) or 20, 50))
     with connect_legacy() as conn:
         person = conn.execute(
@@ -496,6 +901,151 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
 
 
 def get_person_detail(person_id: int) -> dict[str, Any] | None:
+    snapshot_models = _people_snapshot_models() if _people_snapshot_available() else None
+    if snapshot_models:
+        person_snapshot = snapshot_models["person"].objects.filter(legacy_id=person_id, is_active=True).first()
+        if person_snapshot is not None:
+            contacts = list(snapshot_models["contact"].objects.filter(person=person_snapshot).order_by("-is_primary", "contact_type", "legacy_id"))
+            addresses = list(snapshot_models["address"].objects.filter(person=person_snapshot).order_by("-is_primary", "legacy_id"))
+            profiles = list(snapshot_models["profile"].objects.filter(person=person_snapshot, is_active=True).order_by("profile", "legacy_id"))
+            history = list(snapshot_models["history"].objects.filter(person=person_snapshot).order_by("-created_at_legacy", "-legacy_id")[:12])
+            contributors = list(snapshot_models["contributor"].objects.filter(person=person_snapshot, is_active=True).order_by("name", "legacy_id"))
+            identifiers = list(snapshot_models["identifier"].objects.filter(person=person_snapshot, is_active=True).order_by("-is_primary", "identifier_type", "legacy_id")[:30])
+            contributions = list(
+                snapshot_models["contribution"].objects.filter(person=person_snapshot, is_active=True).order_by(
+                    "-competence_order", "-received_at", "-legacy_id"
+                )[:40]
+            )
+            family_relationships, family_suggestions, family_people_options = _family_suggestions_from_snapshots(
+                person_snapshot,
+                snapshot_models["address"],
+                snapshot_models["relationship"],
+            )
+            contribution_summary_map: dict[str, dict[str, Any]] = {}
+            total_value = 0.0
+            for contribution in snapshot_models["contribution"].objects.filter(person=person_snapshot, is_active=True):
+                competence_key = contribution.competence or ""
+                item = contribution_summary_map.setdefault(
+                    competence_key,
+                    {
+                        "competencia": competence_key or "Sem competencia",
+                        "remessas": 0,
+                        "total_valor": 0.0,
+                        "ordem": int(contribution.competence_order or 0),
+                    },
+                )
+                item["remessas"] += 1
+                item["total_valor"] += float(contribution.amount or 0)
+                item["ordem"] = max(int(item["ordem"]), int(contribution.competence_order or 0))
+                total_value += float(contribution.amount or 0)
+            return {
+                "person": {
+                    "id": person_snapshot.legacy_id,
+                    "codigo": person_snapshot.internal_code or "",
+                    "nome": person_snapshot.name or "",
+                    "nome_social": person_snapshot.social_name or "",
+                    "cpf": person_snapshot.cpf or "",
+                    "rg": person_snapshot.rg or "",
+                    "data_nascimento": br_date(person_snapshot.birth_date_raw),
+                    "sexo": person_snapshot.sex or "",
+                    "estado_civil": person_snapshot.marital_status or "",
+                    "email": person_snapshot.primary_email or "",
+                    "telefone": person_snapshot.primary_phone or "",
+                    "whatsapp": person_snapshot.primary_whatsapp or "",
+                    "status": format_status(person_snapshot.status),
+                    "status_raw": person_snapshot.status or "",
+                    "sigla": status_sigla(person_snapshot.status, True),
+                    "ativo": "Sim" if person_snapshot.is_active else "Nao",
+                    "observacoes": person_snapshot.notes or "",
+                    "criado_em": br_datetime(person_snapshot.created_at_legacy),
+                    "atualizado_em": br_datetime(person_snapshot.updated_at_legacy),
+                    "photo_url": member_photo_url(person_snapshot.legacy_id, person_snapshot.cpf, person_snapshot.name),
+                },
+                "profiles": [
+                    {
+                        "perfil": row.profile or "",
+                        "data_inicio": row.start_date_raw or "",
+                        "data_fim": row.end_date_raw or "",
+                        "observacoes": row.notes or "",
+                    }
+                    for row in profiles
+                ],
+                "contacts": [
+                    {
+                        "tipo": row.contact_type,
+                        "valor": row.value,
+                        "principal": row.is_primary,
+                        "observacoes": row.notes,
+                    }
+                    for row in contacts
+                ],
+                "addresses": [
+                    {
+                        "tipo": row.address_type,
+                        "cep": row.cep,
+                        "logradouro": row.street,
+                        "numero": row.number,
+                        "complemento": row.complement,
+                        "bairro": row.neighborhood,
+                        "cidade": row.city,
+                        "uf": row.state,
+                        "principal": row.is_primary,
+                    }
+                    for row in addresses
+                ],
+                "family_relationships": family_relationships,
+                "family_suggestions": family_suggestions,
+                "family_people_options": family_people_options,
+                "family_relationship_type_options": FAMILY_RELATIONSHIP_OPTIONS,
+                "history": [
+                    {
+                        "tipo_evento": row.event_type or "",
+                        "data_evento": br_date(row.event_date_raw),
+                        "titulo": row.title or "",
+                        "descricao": row.description or "",
+                        "origem": row.origin or "",
+                        "destino": row.destination or "",
+                        "criado_em": br_datetime(row.created_at_legacy),
+                    }
+                    for row in history
+                ],
+                "contributors": [
+                    {
+                        "id": moneyless_int(row.legacy_id),
+                        "nome": row.name or "",
+                        "tipo": row.contributor_type or "",
+                        "documento_principal": row.primary_document or "",
+                        "documento_tipo": row.document_type or "",
+                        "origem": row.origin or "",
+                        "qualidade": row.quality or "",
+                        "status": row.status or "",
+                    }
+                    for row in contributors
+                ],
+                "identifiers": [
+                    {
+                        "tipo": row.identifier_type or "",
+                        "valor": row.value or "",
+                        "principal": row.is_primary,
+                        "observacoes": row.notes or "",
+                    }
+                    for row in identifiers
+                ],
+                "contributions": [_format_snapshot_contribution_row(row) for row in contributions],
+                "contribution_summary": [
+                    {
+                        "competencia": row["competencia"] or "Sem competencia",
+                        "remessas": int(row["remessas"] or 0),
+                        "total_fmt": _money(row["total_valor"]),
+                    }
+                    for row in sorted(
+                        contribution_summary_map.values(),
+                        key=lambda item: (-int(item["ordem"]), str(item["competencia"])),
+                    )[:12]
+                ],
+                "total_contributions_fmt": _money(total_value),
+                "audit": [],
+            }
     with connect_legacy() as conn:
         person = conn.execute(
             """
@@ -1034,6 +1584,13 @@ def _family_query_matches(query_key: str, digits: str, text_values: list[object]
     return not query_key and not digits
 
 
+def _group_matches_person_status(payload: dict[str, Any], person_status: str) -> bool:
+    status_filter = normalize_query(person_status)
+    if not status_filter or status_filter == "all":
+        return True
+    return any(normalize_query(person.get("status_raw")) == status_filter for person in payload.get("people") or [])
+
+
 def _family_group_matches_query(payload: dict[str, Any], query_key: str, digits: str) -> bool:
     people = payload.get("people") or []
     text_values: list[object] = [payload.get("label"), payload.get("address"), payload.get("reason"), payload.get("confidence")]
@@ -1287,6 +1844,7 @@ def family_nuclei_dashboard(
     q: str = "",
     limit: int | None = None,
     category: str = "all",
+    person_status: str = "all",
 ) -> dict[str, Any]:
     cep_filter = "".join(ch for ch in str(cep or "") if ch.isdigit())
     mode = normalize_query(mode) or "all"
@@ -1294,45 +1852,54 @@ def family_nuclei_dashboard(
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            """
-            SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                   p.data_nascimento,
-                   e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-              FROM pessoas p
-              JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-             WHERE p.ativo = 1
-             ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
-            """
-        ).fetchall()
-        relationship_pairs: set[tuple[int, int]] = set()
-        suppressed_pairs: set[tuple[int, int]] = set()
-        if table_exists(conn, "pessoa_relacionamentos"):
-            relationship_rows = conn.execute(
+    if _people_snapshot_available():
+        try:
+            rows = _family_rows_from_snapshots()
+            relationship_pairs, suppressed_pairs = _family_relationship_sets_from_snapshots()
+        except LegacyDatabaseError:
+            rows = []
+            relationship_pairs = set()
+            suppressed_pairs = set()
+    else:
+        with connect_legacy() as conn:
+            rows = conn.execute(
                 """
-                SELECT pessoa_id, pessoa_relacionada_id
-                  FROM pessoa_relacionamentos
-                 WHERE ativo = 1
-                """
-            ).fetchall()
-            relationship_pairs = {
-                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                for row in relationship_rows
-            }
-            suppressed_rows = conn.execute(
-                """
-                SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
-                  FROM pessoa_relacionamentos
-                 WHERE ativo = 0
+                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                       p.data_nascimento,
+                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+                  FROM pessoas p
+                  JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+                 WHERE p.ativo = 1
+                 ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
                 """
             ).fetchall()
-            suppressed_pairs = {
-                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                for row in suppressed_rows
-                if row["tipo_relacionamento"] == "nucleo_familiar"
-                and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
-            }
+            relationship_pairs: set[tuple[int, int]] = set()
+            suppressed_pairs: set[tuple[int, int]] = set()
+            if table_exists(conn, "pessoa_relacionamentos"):
+                relationship_rows = conn.execute(
+                    """
+                    SELECT pessoa_id, pessoa_relacionada_id
+                      FROM pessoa_relacionamentos
+                     WHERE ativo = 1
+                    """
+                ).fetchall()
+                relationship_pairs = {
+                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                    for row in relationship_rows
+                }
+                suppressed_rows = conn.execute(
+                    """
+                    SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
+                      FROM pessoa_relacionamentos
+                     WHERE ativo = 0
+                    """
+                ).fetchall()
+                suppressed_pairs = {
+                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                    for row in suppressed_rows
+                    if row["tipo_relacionamento"] == "nucleo_familiar"
+                    and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
+                }
     if cep_filter:
         rows = [
             row for row in rows
@@ -1391,6 +1958,9 @@ def family_nuclei_dashboard(
     if query_key or digits:
         exact_payloads = [payload for payload in exact_payloads if _family_group_matches_query(payload, query_key, digits)]
         hypothesis_payloads = [payload for payload in hypothesis_payloads if _family_group_matches_query(payload, query_key, digits)]
+    if person_status and person_status != "all":
+        exact_payloads = [payload for payload in exact_payloads if _group_matches_person_status(payload, person_status)]
+        hypothesis_payloads = [payload for payload in hypothesis_payloads if _group_matches_person_status(payload, person_status)]
     if category != "all":
         hypothesis_payloads = [
             payload
@@ -1435,51 +2005,60 @@ def family_nuclei_dashboard(
     }
 
 
-def broad_family_candidates(q: str = "", cep: str = "", review: str = "all") -> dict[str, Any]:
+def broad_family_candidates(q: str = "", cep: str = "", review: str = "all", person_status: str = "all") -> dict[str, Any]:
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
     cep_filter = _digits_only(cep)
     review = normalize_query(review) or "all"
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            """
-            SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                   p.data_nascimento,
-                   e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-              FROM pessoas p
-              JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-             WHERE p.ativo = 1
-             ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
-            """
-        ).fetchall()
-        relationship_pairs: set[tuple[int, int]] = set()
-        suppressed_pairs: set[tuple[int, int]] = set()
-        if table_exists(conn, "pessoa_relacionamentos"):
-            relationship_rows = conn.execute(
+    if _people_snapshot_available():
+        try:
+            rows = _family_rows_from_snapshots()
+            relationship_pairs, suppressed_pairs = _family_relationship_sets_from_snapshots()
+        except LegacyDatabaseError:
+            rows = []
+            relationship_pairs = set()
+            suppressed_pairs = set()
+    else:
+        with connect_legacy() as conn:
+            rows = conn.execute(
                 """
-                SELECT pessoa_id, pessoa_relacionada_id
-                  FROM pessoa_relacionamentos
-                 WHERE ativo = 1
-                """
-            ).fetchall()
-            relationship_pairs = {
-                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                for row in relationship_rows
-            }
-            suppressed_rows = conn.execute(
-                """
-                SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
-                  FROM pessoa_relacionamentos
-                 WHERE ativo = 0
+                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                       p.data_nascimento,
+                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+                  FROM pessoas p
+                  JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+                 WHERE p.ativo = 1
+                 ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
                 """
             ).fetchall()
-            suppressed_pairs = {
-                _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                for row in suppressed_rows
-                if row["tipo_relacionamento"] == "nucleo_familiar"
-                and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
-            }
+            relationship_pairs: set[tuple[int, int]] = set()
+            suppressed_pairs: set[tuple[int, int]] = set()
+            if table_exists(conn, "pessoa_relacionamentos"):
+                relationship_rows = conn.execute(
+                    """
+                    SELECT pessoa_id, pessoa_relacionada_id
+                      FROM pessoa_relacionamentos
+                     WHERE ativo = 1
+                    """
+                ).fetchall()
+                relationship_pairs = {
+                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                    for row in relationship_rows
+                }
+                suppressed_rows = conn.execute(
+                    """
+                    SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
+                      FROM pessoa_relacionamentos
+                     WHERE ativo = 0
+                    """
+                ).fetchall()
+                suppressed_pairs = {
+                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
+                    for row in suppressed_rows
+                    if row["tipo_relacionamento"] == "nucleo_familiar"
+                    and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
+                }
     if cep_filter:
         rows = [
             row for row in rows
@@ -1515,6 +2094,8 @@ def broad_family_candidates(q: str = "", cep: str = "", review: str = "all") -> 
     total_consolidated = sum(1 for group in payloads if group["is_consolidated"])
     if query_key or digits:
         payloads = [payload for payload in payloads if _family_group_matches_query(payload, query_key, digits)]
+    if person_status and person_status != "all":
+        payloads = [payload for payload in payloads if _group_matches_person_status(payload, person_status)]
     if review == "audit":
         payloads = [payload for payload in payloads if payload["can_consolidate"]]
     elif review == "alinhados":
@@ -1542,32 +2123,47 @@ def broad_family_candidates(q: str = "", cep: str = "", review: str = "all") -> 
     }
 
 
-def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all", household_kind: str = "all") -> dict[str, Any]:
+def organized_family_nuclei(
+    q: str = "",
+    cep: str = "",
+    review: str = "all",
+    household_kind: str = "all",
+    person_status: str = "all",
+) -> dict[str, Any]:
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
     cep_filter = _digits_only(cep)
     review = normalize_query(review) or "all"
     household_kind = normalize_query(household_kind) or "all"
+    if _people_snapshot_available():
+        try:
+            person_rows = _family_rows_from_snapshots()
+            relationship_rows = _nucleus_relationship_rows_from_snapshots()
+        except LegacyDatabaseError:
+            person_rows = []
+            relationship_rows = []
+    else:
+        with connect_legacy() as conn:
+            person_rows = conn.execute(
+                """
+                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
+                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
+                  FROM pessoas p
+                  LEFT JOIN pessoa_enderecos e ON e.pessoa_id = p.id
+                 WHERE p.ativo = 1
+                 ORDER BY p.id, COALESCE(e.principal, 0) DESC, e.id
+                """
+            ).fetchall()
+            relationship_rows = conn.execute(
+                """
+                SELECT pessoa_id, pessoa_relacionada_id
+                  FROM pessoa_relacionamentos
+                 WHERE ativo = 1
+                   AND tipo_relacionamento = 'nucleo_familiar'
+                """
+            ).fetchall()
     with connect_legacy() as conn:
-        person_rows = conn.execute(
-            """
-            SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                   e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-              FROM pessoas p
-              LEFT JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-             WHERE p.ativo = 1
-             ORDER BY p.id, COALESCE(e.principal, 0) DESC, e.id
-            """
-        ).fetchall()
-        relationship_rows = conn.execute(
-            """
-            SELECT pessoa_id, pessoa_relacionada_id
-              FROM pessoa_relacionamentos
-             WHERE ativo = 1
-               AND tipo_relacionamento = 'nucleo_familiar'
-            """
-        ).fetchall()
         contribution_rows = conn.execute(
             """
             SELECT pessoa_id,
@@ -1657,6 +2253,8 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all", hou
         ]
     if query_key or digits:
         nuclei = [group for group in nuclei if _organized_family_matches_query(group, query_key, digits)]
+    if person_status and person_status != "all":
+        nuclei = [group for group in nuclei if _group_matches_person_status(group, person_status)]
     if household_kind == "familiar":
         nuclei = [group for group in nuclei if group.get("household_kind") == "familiar"]
     elif household_kind == "unipessoal":
@@ -1686,7 +2284,12 @@ def organized_family_nuclei(q: str = "", cep: str = "", review: str = "all", hou
     }
 
 
-def extended_family_clusters(nuclei: list[dict[str, Any]], q: str = "", review: str = "all") -> dict[str, Any]:
+def extended_family_clusters(
+    nuclei: list[dict[str, Any]],
+    q: str = "",
+    review: str = "all",
+    person_status: str = "all",
+) -> dict[str, Any]:
     query = normalize_query(q)
     query_key = normalize_match_name(query)
     digits = _digits_only(query)
@@ -1701,6 +2304,8 @@ def extended_family_clusters(nuclei: list[dict[str, Any]], q: str = "", review: 
     for key, members in grouped.items():
         label = (members[0].get("surname_label") or key.title()).title()
         filtered_members = list(members)
+        if person_status and person_status != "all":
+            filtered_members = [member for member in filtered_members if _group_matches_person_status(member, person_status)]
         if review == "audit":
             filtered_members = [member for member in filtered_members if member["needs_review"]]
         elif review == "alinhados":
@@ -1754,14 +2359,20 @@ def family_registry_dashboard(
     review: str = "all",
     category: str = "all",
     household_kind: str = "all",
+    person_status: str = "all",
 ) -> dict[str, Any]:
     section = normalize_query(section) or "organized"
     if section not in {"organized", "audit", "extended", "broad"}:
         section = "organized"
-    audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q, category=category)
-    organized = organized_family_nuclei(q=q, cep=cep, review=review, household_kind=household_kind)
-    broad = broad_family_candidates(q=q, cep=cep, review=review)
-    extended = extended_family_clusters(organized_family_nuclei(q="", cep=cep, review="all", household_kind="all")["items"], q=q, review=review)
+    audit = family_nuclei_dashboard(cep=cep, mode=mode, q=q, category=category, person_status=person_status)
+    organized = organized_family_nuclei(q=q, cep=cep, review=review, household_kind=household_kind, person_status=person_status)
+    broad = broad_family_candidates(q=q, cep=cep, review=review, person_status=person_status)
+    extended = extended_family_clusters(
+        organized_family_nuclei(q="", cep=cep, review="all", household_kind="all", person_status=person_status)["items"],
+        q=q,
+        review=review,
+        person_status=person_status,
+    )
     return {
         "section": section,
         "q": normalize_query(q),
@@ -1770,6 +2381,7 @@ def family_registry_dashboard(
         "review": review,
         "category": category,
         "household_kind": household_kind,
+        "person_status": person_status,
         "audit": audit,
         "organized": organized,
         "broad": broad,
@@ -1825,6 +2437,19 @@ def _format_contribution_row(row: sqlite3.Row) -> dict[str, Any]:
         "tipo": row["tipo_nome"] or "Sem tipo",
         "forma": row["forma_nome"] or "Sem forma",
         "origem": row["origem_nome"] or "",
+    }
+
+
+def _format_snapshot_contribution_row(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.legacy_id,
+        "data": br_date(row.received_at_raw),
+        "competencia": row.competence or "",
+        "valor_fmt": _money(row.amount),
+        "status": row.operational_status or "regular",
+        "tipo": row.contribution_type_name or "Sem tipo",
+        "forma": row.receipt_method_name or "Sem forma",
+        "origem": row.source_name or "",
     }
 
 
@@ -3773,6 +4398,29 @@ def search_receipt_people(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
     if len(query) < 2 and len(digits) < 2:
         return []
     limit = max(1, min(moneyless_int(limit) or 20, 80))
+    models = _people_snapshot_models()
+    if models:
+        try:
+            rows = (
+                models["person"].objects.filter(is_active=True)
+                .filter(_person_snapshot_search_q(query))
+                .order_by("normalized_name", "legacy_id")[:limit]
+            )
+            return [
+                {
+                    "id": moneyless_int(row.legacy_id),
+                    "nome": row.name or "",
+                    "codigo": row.internal_code or "",
+                    "cpf": format_cpf(row.cpf),
+                    "status": format_status(row.status),
+                    "sigla": status_sigla(row.status, True),
+                    "email": row.primary_email or "",
+                    "telefone": row.primary_phone or "",
+                }
+                for row in rows
+            ]
+        except (DjangoOperationalError, DjangoProgrammingError):
+            pass
     with connect_legacy() as conn:
         rows = conn.execute(
             """
@@ -4258,13 +4906,27 @@ def list_contributors(
             ),
             pix_stats AS (
                 SELECT contributor_id AS contribuinte_id,
-                       SUM(CASE WHEN review_status IN ('revisar_pessoa', 'revisar_destinacao', 'revisar_duplicidade') THEN 1 ELSE 0 END) AS pix_pendentes,
+                       SUM(
+                           CASE
+                               WHEN review_status IN ('revisar_pessoa', 'revisar_destinacao')
+                                    OR (review_status = 'revisar_duplicidade' AND COALESCE(imported_contribution_id, 0) = 0)
+                               THEN 1
+                               ELSE 0
+                           END
+                       ) AS pix_pendentes,
                        SUM(CASE WHEN review_status = 'revisar_pessoa' THEN 1 ELSE 0 END) AS pix_pendentes_pessoa,
                        SUM(CASE WHEN review_status = 'revisar_destinacao' THEN 1 ELSE 0 END) AS pix_pendentes_destinacao,
-                       SUM(CASE WHEN review_status = 'revisar_duplicidade' THEN 1 ELSE 0 END) AS pix_pendentes_duplicidade
+                       SUM(
+                           CASE
+                               WHEN review_status = 'revisar_duplicidade' AND COALESCE(imported_contribution_id, 0) = 0
+                               THEN 1
+                               ELSE 0
+                           END
+                       ) AS pix_pendentes_duplicidade
                   FROM (
                         SELECT COALESCE(resolved_contribuinte_id, suggested_contribuinte_id) AS contributor_id,
-                               review_status
+                               review_status,
+                               imported_contribution_id
                           FROM pix_movimentos
                          WHERE ativo = 1
                            AND COALESCE(resolved_contribuinte_id, suggested_contribuinte_id) IS NOT NULL
@@ -4643,8 +5305,6 @@ def get_contributor_detail(contributor_id: int) -> dict[str, Any] | None:
 
 def list_import_lots(limit: int = 80) -> dict[str, Any]:
     lots: list[dict[str, Any]] = []
-    pending_params = tuple(PENDING_REVIEW_STATUSES)
-    pending_placeholders = ",".join("?" for _ in PENDING_REVIEW_STATUSES)
     with connect_legacy() as conn:
         for row in conn.execute(
             f"""
@@ -4655,7 +5315,7 @@ def list_import_lots(limit: int = 80) -> dict[str, Any]:
                          FROM extrato_movimentos m
                         WHERE m.lote_id = l.id
                           AND m.ativo = 1
-                          AND m.review_status IN ({pending_placeholders})
+                          AND {human_pending_review_sql('m')}
                    ) AS pendentes,
                    (
                        SELECT COUNT(*)
@@ -4666,7 +5326,6 @@ def list_import_lots(limit: int = 80) -> dict[str, Any]:
                    ) AS ignorados
               FROM extrato_lotes l
             """,
-            pending_params,
         ).fetchall():
             lots.append(_format_lot_row(row, "Extrato"))
         for row in conn.execute(
@@ -4678,7 +5337,7 @@ def list_import_lots(limit: int = 80) -> dict[str, Any]:
                          FROM pix_movimentos m
                         WHERE m.lote_id = l.id
                           AND m.ativo = 1
-                          AND m.review_status IN ({pending_placeholders})
+                          AND {human_pending_review_sql('m')}
                    ) AS pendentes,
                    (
                        SELECT COUNT(*)
@@ -4689,7 +5348,6 @@ def list_import_lots(limit: int = 80) -> dict[str, Any]:
                    ) AS ignorados
               FROM pix_lotes l
             """,
-            pending_params,
         ).fetchall():
             lots.append(_format_lot_row(row, "PIX"))
     lots.sort(key=lambda item: (item["criado_em_raw"], item["id"]), reverse=True)
@@ -4790,7 +5448,6 @@ def _format_lot_row(row: sqlite3.Row, tipo: str) -> dict[str, Any]:
 def get_import_lot_detail(kind: str, lot_id: int, status: str = "", limit: int = 500) -> dict[str, Any] | None:
     kind = "pix" if kind == "pix" else "statement"
     status = (status or "").strip()
-    pending_placeholders = ",".join("?" for _ in PENDING_REVIEW_STATUSES)
     with connect_legacy() as conn:
         if kind == "pix":
             lot = conn.execute(
@@ -4807,8 +5464,7 @@ def get_import_lot_detail(kind: str, lot_id: int, status: str = "", limit: int =
             clauses = ["m.lote_id = ?", "m.ativo = 1"]
             params: list[Any] = [lot_id]
             if status == "pendencias":
-                clauses.append(f"m.review_status IN ({pending_placeholders})")
-                params.extend(sorted(PENDING_REVIEW_STATUSES))
+                clauses.append(human_pending_review_sql("m"))
             elif status:
                 clauses.append("m.review_status = ?")
                 params.append(status)
@@ -4848,6 +5504,20 @@ def get_import_lot_detail(kind: str, lot_id: int, status: str = "", limit: int =
                 """,
                 (lot_id,),
             ).fetchall()
+            pending_count = int(
+                scalar(
+                    conn,
+                    f"""
+                    SELECT COUNT(*)
+                      FROM pix_movimentos m
+                     WHERE m.lote_id = ?
+                       AND m.ativo = 1
+                       AND {human_pending_review_sql('m')}
+                    """,
+                    (lot_id,),
+                )
+                or 0
+            )
         else:
             lot = conn.execute(
                 """
@@ -4863,8 +5533,7 @@ def get_import_lot_detail(kind: str, lot_id: int, status: str = "", limit: int =
             clauses = ["m.lote_id = ?", "m.ativo = 1"]
             params = [lot_id]
             if status == "pendencias":
-                clauses.append(f"m.review_status IN ({pending_placeholders})")
-                params.extend(sorted(PENDING_REVIEW_STATUSES))
+                clauses.append(human_pending_review_sql("m"))
             elif status:
                 clauses.append("m.review_status = ?")
                 params.append(status)
@@ -4904,7 +5573,20 @@ def get_import_lot_detail(kind: str, lot_id: int, status: str = "", limit: int =
                 """,
                 (lot_id,),
             ).fetchall()
-    pending_count = sum(int(row["total"] or 0) for row in status_rows if row["review_status"] in PENDING_REVIEW_STATUSES)
+            pending_count = int(
+                scalar(
+                    conn,
+                    f"""
+                    SELECT COUNT(*)
+                      FROM extrato_movimentos m
+                     WHERE m.lote_id = ?
+                       AND m.ativo = 1
+                       AND {human_pending_review_sql('m')}
+                    """,
+                    (lot_id,),
+                )
+                or 0
+            )
     status_options = [{"value": "pendencias", "count": pending_count}]
     status_options.extend(
         {"value": row["review_status"] or "", "count": int(row["total"] or 0)}

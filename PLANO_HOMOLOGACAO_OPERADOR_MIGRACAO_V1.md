@@ -68,6 +68,7 @@ Padrao operacional:
 ### Etapa 2
 
 - roteiro: [ROTEIRO_OPERADOR_ETAPA2_CADASTRO_FAMILIAS_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/ROTEIRO_OPERADOR_ETAPA2_CADASTRO_FAMILIAS_V1.md)
+- fechamento tecnico: [FECHAMENTO_ETAPA2_CADASTRO_FAMILIAS_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA2_CADASTRO_FAMILIAS_V1.md)
 - foco:
   - buscas
   - ficha da pessoa
@@ -77,9 +78,15 @@ Padrao operacional:
   - auditoria familiar
   - merge
 
+Observacao operacional:
+
+- o fechamento tecnico da etapa ja separa o que ficou para o dominio financeiro da `Etapa 3`;
+- se o `merge` for adiado por cautela com a base, isso nao impede o corte tecnico para o financeiro, mas deixa uma pendencia humana de homologacao a ser encerrada depois.
+
 ### Etapa 3
 
 - roteiro: [ROTEIRO_OPERADOR_ETAPA3_FINANCEIRO_RECIBOS_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/ROTEIRO_OPERADOR_ETAPA3_FINANCEIRO_RECIBOS_V1.md)
+- piloto financeiro real: [PLANO_ETAPA3_PILOTO_FINANCEIRO_MAIO2026_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/PLANO_ETAPA3_PILOTO_FINANCEIRO_MAIO2026_V1.md)
 - foco:
   - contribuicoes
   - envelopes
@@ -88,6 +95,13 @@ Padrao operacional:
   - extratos
   - fila de envio
   - auditoria de e-mails
+
+Observacao operacional:
+
+- a Etapa 3 passa a usar os extratos reais de `maio/2026` como massa de prova principal;
+- antes de qualquer corte financeiro definitivo, o piloto deve classificar os bancos entre `apto`, `apto com auditoria` e `bloqueado por portabilidade`.
+- nesta versao, o caminho operacional oficial fica sendo o `extrato bancario completo`;
+- o `PIX isolado` fica fora da entrada corrente para evitar lacunas entre meios de recebimento.
 
 ### Etapa 4
 
@@ -122,11 +136,15 @@ Padrao operacional:
 
 ### Etapa 3 - Financeiro, recibos e extratos
 
+- `scripts/sincronizar_espelho_cadastro_postgres.py`
+- `scripts/sincronizar_snapshots_financeiros_postgres.py`
 - `manage.py check`
 - `scripts/verificar_dados_operacionais.py`
+- `scripts/verificar_snapshots_financeiros_postgres.py`
 - `scripts/verificar_django_funcional.py`
 - `scripts/verificar_paridade_django.py`
 - `scripts/verificar_funcionalidade_total.py`
+- fechamento tecnico: [FECHAMENTO_ETAPA3_FINANCEIRO_RECIBOS_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA3_FINANCEIRO_RECIBOS_V1.md)
 
 ### Etapa 4 - Importacoes e conciliacoes
 

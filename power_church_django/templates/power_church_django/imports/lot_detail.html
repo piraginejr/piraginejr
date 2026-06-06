@@ -5,6 +5,9 @@
     <section class="hero">
       <div>
         <p class="badge">{{ detail.kind_label }} · {{ detail.lot.banco }}</p>
+        {% if detail.snapshot_backend %}
+          <p class="muted small">Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.</p>
+        {% endif %}
         <h1>Lote #{{ detail.lot.id }}</h1>
         <p>{{ detail.lot.nome_arquivo }} · {{ detail.lot.periodo }}</p>
       </div>

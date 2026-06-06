@@ -13,6 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "data" / "homologacao"
 DJANGO_DIR = ROOT / "power_church_django"
 DJANGO_VENV_PYTHON = DJANGO_DIR / ".venv" / "bin" / "python"
+DEFAULT_ENV_FILE = ROOT / ".env.power_church_django.postgres.local"
+
+
+def _prefer_local_postgres_socket(env: dict[str, str]) -> dict[str, str]:
+    host = str(env.get("POWER_CHURCH_POSTGRES_HOST") or "").strip()
+    port = str(env.get("POWER_CHURCH_POSTGRES_PORT") or "5432").strip() or "5432"
+    socket_path = Path(f"/tmp/.s.PGSQL.{port}")
+    if host in {"127.0.0.1", "localhost"} and socket_path.exists():
+        env["POWER_CHURCH_POSTGRES_HOST"] = "/tmp"
+    return env
 
 
 @dataclass
@@ -30,6 +40,23 @@ def run_with_venv(args: list[str], db_path: Path) -> tuple[bool, str]:
     if not DJANGO_VENV_PYTHON.exists():
         return False, f"Python da venv Django nao encontrado: {DJANGO_VENV_PYTHON}"
     env = dict(os.environ)
+    env_file = Path(env.get("POWER_CHURCH_ENV_FILE") or DEFAULT_ENV_FILE)
+    if env_file.exists():
+        for raw_line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if value.startswith(("\"", "'")) and value.endswith(("\"", "'")) and len(value) >= 2:
+                value = value[1:-1]
+            env[key] = value
+    env = _prefer_local_postgres_socket(env)
     env.setdefault("PYTHONPYCACHEPREFIX", "/private/tmp/pycache_powerchurch")
     env["POWER_CHURCH_LEGACY_DB_PATH"] = str(db_path)
     completed = subprocess.run(
@@ -62,6 +89,7 @@ import django
 django.setup()
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.test import Client
 
 from power_church_django.services.access_control import access_control_snapshot
@@ -76,6 +104,10 @@ if "testserver" not in settings.ALLOWED_HOSTS:
     settings.ALLOWED_HOSTS.append("testserver")
 if int(getattr(settings, "DATA_UPLOAD_MAX_NUMBER_FILES", 0) or 0) < 1000:
     raise AssertionError("Django esta com limite baixo para upload multiplo de envelopes")
+if not getattr(settings, "SESSION_EXPIRE_AT_BROWSER_CLOSE", False):
+    raise AssertionError("sessao do Django deveria expirar ao fechar o navegador")
+if int(getattr(settings, "POWER_CHURCH_SESSION_IDLE_SECONDS", 0) or 0) <= 0:
+    raise AssertionError("timeout de inatividade da sessao nao foi configurado")
 
 summary = dashboard_summary()
 if summary["people_total"] <= 0:
@@ -202,6 +234,76 @@ with connect_legacy() as conn:
         raise AssertionError("conexao legada permitiu escrita")
 
 client = Client()
+anonymous_client = Client()
+anonymous_root = anonymous_client.get("/", follow=False)
+if anonymous_root.status_code not in {301, 302}:
+    raise AssertionError(f"dashboard raiz sem autenticacao deveria redirecionar para login, mas retornou {anonymous_root.status_code}")
+redirect_target = str(anonymous_root.headers.get("Location") or "")
+if "/accounts/login/" not in redirect_target:
+    raise AssertionError(f"dashboard raiz redirecionou para destino inesperado: {redirect_target}")
+for protected_path in (
+    "/people/",
+    "/contributors/",
+    "/contributions/",
+    "/receipts/",
+    "/imports/",
+    "/reports/",
+    "/audit/",
+):
+    anonymous_response = anonymous_client.get(protected_path, follow=False)
+    if anonymous_response.status_code not in {301, 302}:
+        raise AssertionError(
+            f"rota protegida {protected_path} deveria redirecionar para login, mas retornou {anonymous_response.status_code}"
+        )
+    protected_redirect = str(anonymous_response.headers.get("Location") or "")
+    if "/accounts/login/" not in protected_redirect:
+        raise AssertionError(
+            f"rota protegida {protected_path} redirecionou para destino inesperado: {protected_redirect}"
+        )
+user_model = get_user_model()
+probe_user = (
+    user_model.objects.filter(is_active=True, is_superuser=True).order_by("id").first()
+    or user_model.objects.filter(is_active=True, is_staff=True).order_by("id").first()
+    or user_model.objects.filter(is_active=True).order_by("id").first()
+)
+if probe_user is None:
+    raise AssertionError("nao ha usuario ativo para autenticar a bateria funcional do Django")
+client.force_login(probe_user)
+authenticated_login = client.get("/accounts/login/", follow=False)
+if authenticated_login.status_code != 200:
+    raise AssertionError(
+        f"usuario autenticado deveria conseguir ver a tela publica de login, mas recebeu status {authenticated_login.status_code}"
+    )
+authenticated_login_body = authenticated_login.content.decode("utf-8", errors="ignore")
+if any(marker in authenticated_login_body for marker in ("Pessoas", "Contribuicoes", "Auditoria")):
+    raise AssertionError(
+        "tela publica de login nao deveria exibir navegacao funcional do sistema"
+    )
+cached_probe = client.get("/people/", follow=False)
+cache_control = str(cached_probe.headers.get("Cache-Control") or "")
+if "no-store" not in cache_control:
+    raise AssertionError(f"pagina autenticada deveria sair sem cache, mas retornou Cache-Control={cache_control!r}")
+authenticated_relogin = client.get("/accounts/relogin/", follow=False)
+if authenticated_relogin.status_code not in {301, 302}:
+    raise AssertionError(
+        f"rota /accounts/relogin/ deveria redirecionar para login, mas recebeu status {authenticated_relogin.status_code}"
+    )
+authenticated_relogin_target = str(authenticated_relogin.headers.get("Location") or "")
+if "/accounts/login/" not in authenticated_relogin_target:
+    raise AssertionError(
+        f"rota /accounts/relogin/ redirecionou para destino inesperado: {authenticated_relogin_target}"
+    )
+post_relogin_response = client.get("/people/", follow=False)
+if post_relogin_response.status_code not in {301, 302}:
+    raise AssertionError(
+        f"rota protegida deveria exigir novo login apos relogin, mas retornou {post_relogin_response.status_code}"
+    )
+post_relogin_target = str(post_relogin_response.headers.get("Location") or "")
+if "/accounts/login/" not in post_relogin_target:
+    raise AssertionError(
+        f"rota protegida nao exigiu login apos relogin: {post_relogin_target}"
+    )
+client.force_login(probe_user)
 with connect_legacy() as conn:
     person_id = conn.execute("SELECT id FROM pessoas WHERE ativo = 1 ORDER BY id LIMIT 1").fetchone()[0]
     cpf_person = conn.execute(
@@ -318,7 +420,7 @@ paths = [
     f"/people/{person_id}/edit/",
     "/people/?q=Maria",
     "/people/export/?format=csv",
-    "/people/export/?q=Maria&format=xlsx",
+    "/people/export/?format=xlsx",
     "/people/export/?preset=familias_votacao&column=nome&column=familia_domiciliar&column=familia_tem_contribuinte&format=csv",
     "/people/imports/",
     "/contributors/",
@@ -577,13 +679,15 @@ for path in paths:
             if snippet not in content:
                 raise AssertionError(f"ficha de pessoa Django sem relacao familiar: {snippet}")
     if path == "/imports/":
-        for snippet in ["Importar extrato bancario", "Sicoob PIX historico", "Criar lote", "SICOOB_CONTA_CORRENTE", "SICOOB_RECEBIMENTOS", "Motor de leitura PDF", "Comparar Swift x PyMuPDF", "Abrir lote", "Arquivo e periodo", "Financeiro", "Fila", "Status do lote"]:
+        for snippet in ["Importar extrato bancario", "extrato bancario completo", "Criar lote", "SICOOB_CONTA_CORRENTE", "SICOOB_RECEBIMENTOS", "Motor de leitura PDF", "Comparar Swift x PyMuPDF", "Abrir lote", "Arquivo e periodo", "Financeiro", "Fila", "Status do lote"]:
             if snippet not in content:
                 raise AssertionError(f"central de importacoes Django sem trecho esperado: {snippet}")
         if not re.search(r'<option value="compare_pymupdf"[^>]*selected', content):
             raise AssertionError("central de importacoes nao usa comparacao Swift x PyMuPDF como default")
         if "Regras de centavos" not in content:
             raise AssertionError("central de importacoes Django sem atalho para regras de centavos")
+        if "pix_sicoob" in content or "Sicoob PIX historico" in content:
+            raise AssertionError("central de importacoes manteve o caminho PIX isolado nesta versao")
     if path == "/contributors/":
         for snippet in ["compact-marker-grid", "compact-check"]:
             if snippet not in content:

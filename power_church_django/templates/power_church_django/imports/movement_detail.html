@@ -5,6 +5,9 @@
     <section class="hero">
       <div>
         <p class="badge">{{ detail.kind_label }} · movimento #{{ detail.movement.id }}</p>
+        {% if detail.snapshot_backend %}
+          <p class="muted small">Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.</p>
+        {% endif %}
         <h1>{{ detail.movement.nome_origem }}</h1>
         <p>{{ detail.movement.banco }} · lote #{{ detail.movement.lote_id }} · {{ detail.movement.nome_arquivo }}</p>
       </div>
@@ -64,6 +67,7 @@
       <form method="post">
         {% csrf_token %}
         <input type="hidden" name="movement_id" value="{{ detail.movement.id }}">
+        <input type="hidden" name="lot_id" value="{{ detail.movement.lote_id }}">
         <input type="hidden" name="return_to" value="{{ return_to|default:detail.lot_url }}">
 
         <div class="table-wrap" style="margin-top:16px">

@@ -2,7 +2,7 @@
 
 ## 1. Objetivo
 
-Planejar a passagem do Power Church do ambiente local no Mac para uma maquina virtual Linux na nuvem, com acesso multiusuario, mantendo a continuidade do desenvolvimento e reduzindo o risco operacional.
+Planejar a passagem do Power Church do ambiente local no Mac para uma infraestrutura Linux/containerizada na nuvem, com acesso multiusuario, mantendo a continuidade do desenvolvimento e reduzindo o risco operacional.
 
 ## 2. Leitura Atual Do Projeto
 
@@ -20,13 +20,42 @@ Conclusao pratica:
 - o projeto ja tem um bom ponto de partida para `staging` em nuvem;
 - para `producao multiusuario real`, o principal cuidado nao e o Django em si, e sim a dependencia funcional do banco legado SQLite.
 
+## 2.1 Demandas Ja Recebidas Do Gestor Do Servidor
+
+Pedidos explicitamente recebidos para a etapa de hospedagem:
+
+- gerar `aplicacao + banco` para rodar em `Docker/container`;
+- entregar manifesto de orquestracao do ambiente;
+- entregar arquivo de `dump` do banco para migracao ao banco do servidor de producao.
+
+Confirmacao obtida com o provedor:
+
+- o pacote esperado e `Dockerfile + docker-compose.yml`;
+- `composer.json` nao faz parte da entrega deste projeto.
+
+Traducao tecnica fechada para este projeto:
+
+- `Dockerfile` da aplicacao;
+- `docker-compose.yml` do ambiente;
+- `docker-compose.django.yml` enquanto o Django/PostgreSQL ainda conviver com o legado;
+- arquivo de `dump` do banco-alvo de producao;
+- snapshot/backup do legado enquanto a transicao ainda existir.
+
+Bundle final de entrega para o servidor:
+
+- `Dockerfile`;
+- `docker-compose.yml`;
+- `.env`/`env.example` com variaveis exigidas;
+- dump do banco de producao alvo;
+- roteiro de restauracao e subida.
+
 ## 3. Recomendacao Arquitetural
 
 ### 3.1 Fase de staging recomendada
 
 Para a primeira subida na nuvem:
 
-- `1 VM Linux` Ubuntu 24.04;
+- `1 ambiente Linux/containerizado` Ubuntu 24.04 ou equivalente;
 - `Docker + Docker Compose`;
 - `Django + Gunicorn`;
 - `PostgreSQL` para o banco Django;
@@ -120,7 +149,7 @@ Saida:
 - pacote de recuperacao testado;
 - versao base de staging identificada.
 
-### Etapa 2: definir o perfil da VM
+### Etapa 2: definir o perfil da infraestrutura alvo
 
 Perfil recomendado inicial:
 
@@ -131,7 +160,7 @@ Perfil recomendado inicial:
 
 Observacao:
 
-- para `staging`, pode ser uma VM unica;
+- para `staging`, pode ser um ambiente unico;
 - para `producao`, depois podemos separar banco e aplicacao se o uso crescer.
 
 ### Etapa 3: preparar a rede e seguranca
@@ -156,6 +185,14 @@ Publicacao recomendada:
 - migrations do Django;
 - criacao de usuario administrador.
 
+Entregaveis obrigatorios desta etapa para o gestor do servidor:
+
+- `Dockerfile` da aplicacao aprovado;
+- `docker-compose.yml` aprovado para o ambiente alvo;
+- `.env`/segredos entregues por canal seguro;
+- instrucao objetiva de `up`, `restart`, `logs` e `healthcheck`.
+- comando validado para restaurar o dump do banco no servidor.
+
 ### Etapa 5: organizar os dados persistentes
 
 Separar claramente:
@@ -168,6 +205,10 @@ Separar claramente:
 - logs.
 
 Nada disso deve depender do filesystem interno descartavel do container.
+
+Entregavel adicional exigido pelo servidor:
+
+- mapa de volumes persistentes com caminho de montagem e politica de backup.
 
 ### Etapa 6: filas, automacoes e tarefas recorrentes
 
@@ -199,7 +240,12 @@ Antes de abrir para uso:
 - envio de e-mail;
 - monitor de fila;
 - backup + restore de teste;
-- reinicio da VM e subida automatica.
+- reinicio do ambiente e subida automatica.
+
+O aceite dessa etapa precisa incluir tambem:
+
+- `docker compose up -d` reproduzivel no servidor;
+- validacao de restauracao a partir do dump entregue ao gestor.
 
 ### Etapa 8: decidir o corte operacional
 
@@ -216,7 +262,7 @@ Hoje a aplicacao ainda conversa com um banco legado `SQLite` para regras centrai
 
 Isso significa:
 
-- em uma VM unica Linux, com poucos usuarios, ainda pode funcionar para staging e ate operacao inicial muito controlada;
+- em um ambiente unico Linux/containerizado, com poucos usuarios, ainda pode funcionar para staging e ate operacao inicial muito controlada;
 - para producao multiusuario mais confiavel, o ideal e migrar essa camada de dados para `PostgreSQL` ou reduzir fortemente a dependencia dela.
 
 Traduzindo:
@@ -258,6 +304,33 @@ Mesmo depois da migracao:
 ### Curto prazo
 
 - Git + deploy manual controlado;
+
+## 10. Entregaveis Obrigatorios Para O Servidor De Producao
+
+Antes da ida real para a infraestrutura hospedada, o projeto precisa entregar:
+
+1. `bundle de containerizacao`
+   - `Dockerfile`
+   - `docker-compose.yml`
+   - `env.example`
+   - documentacao de start/stop
+
+2. `dump de migracao`
+   - `PostgreSQL`: dump logico do banco que sera restaurado no servidor de producao;
+   - `SQLite legado`: backup/snapshot separado enquanto o legado ainda existir como contingencia.
+
+3. `roteiro de restauracao`
+   - comando de restauracao no banco do servidor;
+   - ordem correta de subida da aplicacao apos restore;
+   - smoke tests minimos pos-restore.
+
+4. `checklist de aceite do provedor`
+   - container sobe;
+   - banco responde;
+   - volumes persistem;
+   - aplicacao responde;
+   - login funciona;
+   - fila/recibos e importacoes criticas passam.
 - `powerbackup`;
 - atualizacao por script de release;
 - restart controlado dos containers/servicos.
@@ -271,7 +344,7 @@ Mesmo depois da migracao:
 ## 10. Ordem Recomendada Dos Trabalhos
 
 1. consolidar o plano e escolher o provedor
-2. criar VM de staging
+2. criar ambiente de staging
 3. subir stack com Docker Compose
 4. configurar HTTPS, dominio e segredos
 5. validar backups
@@ -285,9 +358,9 @@ Mesmo depois da migracao:
 
 Antes de executar, ainda precisamos fechar:
 
-- qual provedor de nuvem sera usado;
-- se staging e producao serao VMs separadas;
-- se o banco ficara na mesma VM ou separado;
+- qual provedor/infraestrutura sera usado;
+- se staging e producao serao ambientes separados;
+- se o banco ficara no mesmo ambiente ou separado;
 - onde ficarão os backups;
 - quem tera acesso SSH;
 - qual dominio/subdominio sera usado;

@@ -21,11 +21,14 @@
           </p>
           <div class="legend">
             <span class="badge {% if group.needs_review %}warn{% else %}ok{% endif %}">{{ group.alignment_badge }}</span>
-            <span class="badge">{{ group.household_kind_label }}</span>
+            {% if group.household_kind == "familiar" and not group.needs_review %}
+              <a class="badge ok" href="/people/families/?section=organized&household_kind=familiar&review=alinhados{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">Familia consolidada</a>
+            {% endif %}
+            <a class="badge" href="/people/families/?section=organized&household_kind={{ group.household_kind|urlencode }}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">{{ group.household_kind_label }}</a>
             <span class="badge">Pessoas {{ group.member_count }}</span>
             <span class="badge">Membros {{ group.member_tag }}</span>
-            <span class="badge">SA {{ group.status_summary.sa }}</span>
-            <span class="badge">Outros {{ group.status_summary.outros }}</span>
+            <a class="badge" href="/people/families/?section=organized&person_status=membro_ativo">SA {{ group.status_summary.sa }}</a>
+            <a class="badge" href="/people/families/?section=organized&review=all">Outros {{ group.status_summary.outros }}</a>
             {% if group.head_person_name %}
               <span class="badge">Cabeca {{ group.head_person_name }}</span>
             {% endif %}
@@ -58,6 +61,7 @@
           <input type="hidden" name="q" value="{{ q }}">
           <input type="hidden" name="review" value="{{ review }}">
           <input type="hidden" name="household_kind" value="{{ household_kind }}">
+          <input type="hidden" name="person_status" value="{{ person_status }}">
           <input type="hidden" name="cep" value="{{ cep }}">
           <input type="hidden" name="mode" value="{{ mode }}">
           <input type="hidden" name="person_ids" value="{{ group.person_ids }}">

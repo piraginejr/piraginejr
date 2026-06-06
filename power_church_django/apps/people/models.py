@@ -111,6 +111,123 @@ class PersonRelationshipSnapshot(models.Model):
         return f"{self.person_id}->{self.related_person_id} ({self.relationship_type})"
 
 
+class PersonProfileSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="profiles")
+    profile = models.CharField("perfil", max_length=120, db_index=True)
+    start_date_raw = models.CharField("data inicio bruta", max_length=32, blank=True)
+    end_date_raw = models.CharField("data fim bruta", max_length=32, blank=True)
+    notes = models.TextField("observacoes", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de perfil da pessoa"
+        verbose_name_plural = "espelhos de perfis da pessoa"
+        ordering = ["person_id", "profile", "legacy_id"]
+        db_table = "people_personprofilesnapshot"
+
+    def __str__(self) -> str:
+        return f"{self.person_id}:{self.profile}"
+
+
+class PersonHistorySnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="history_entries")
+    event_type = models.CharField("tipo de evento", max_length=120, blank=True, db_index=True)
+    event_date_raw = models.CharField("data do evento bruta", max_length=32, blank=True)
+    title = models.CharField("titulo", max_length=240, blank=True)
+    description = models.TextField("descricao", blank=True)
+    origin = models.CharField("origem", max_length=240, blank=True)
+    destination = models.CharField("destino", max_length=240, blank=True)
+    created_at_legacy = models.DateTimeField("criado em legado", null=True, blank=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de historico da pessoa"
+        verbose_name_plural = "espelhos de historico da pessoa"
+        ordering = ["person_id", "-created_at_legacy", "-legacy_id"]
+        db_table = "people_personhistorysnapshot"
+
+    def __str__(self) -> str:
+        return self.title or f"Historico #{self.legacy_id}"
+
+
+class PersonContributorSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="contributors")
+    name = models.CharField("nome", max_length=240)
+    contributor_type = models.CharField("tipo", max_length=64, blank=True, db_index=True)
+    primary_document = models.CharField("documento principal", max_length=64, blank=True)
+    document_type = models.CharField("tipo do documento", max_length=32, blank=True)
+    origin = models.CharField("origem", max_length=120, blank=True)
+    quality = models.CharField("qualidade", max_length=120, blank=True)
+    status = models.CharField("status", max_length=64, blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de contribuinte vinculado"
+        verbose_name_plural = "espelhos de contribuintes vinculados"
+        ordering = ["person_id", "name", "legacy_id"]
+        db_table = "people_personcontributorsnapshot"
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class PersonIdentifierSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="identifiers")
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    identifier_type = models.CharField("tipo", max_length=64, db_index=True)
+    value = models.CharField("valor", max_length=240)
+    is_primary = models.BooleanField("principal", default=False, db_index=True)
+    notes = models.TextField("observacoes", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de identificador financeiro"
+        verbose_name_plural = "espelhos de identificadores financeiros"
+        ordering = ["person_id", "-is_primary", "identifier_type", "legacy_id"]
+        db_table = "people_personidentifiersnapshot"
+
+    def __str__(self) -> str:
+        return f"{self.identifier_type}:{self.value}"
+
+
+class PersonContributionSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="contributions")
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    received_at = models.DateField("data de recebimento", null=True, blank=True, db_index=True)
+    received_at_raw = models.CharField("data de recebimento bruta", max_length=32, blank=True)
+    competence = models.CharField("competencia", max_length=32, blank=True, db_index=True)
+    competence_order = models.IntegerField("ordem da competencia", default=0, db_index=True)
+    amount = models.DecimalField("valor", max_digits=14, decimal_places=2, default=0)
+    operational_status = models.CharField("status operacional", max_length=64, blank=True, db_index=True)
+    contribution_type_name = models.CharField("tipo", max_length=160, blank=True)
+    receipt_method_name = models.CharField("forma", max_length=160, blank=True)
+    source_name = models.CharField("origem", max_length=240, blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de contribuicao da pessoa"
+        verbose_name_plural = "espelhos de contribuicoes da pessoa"
+        ordering = ["person_id", "-competence_order", "-received_at", "-legacy_id"]
+        db_table = "people_personcontributionsnapshot"
+
+    def __str__(self) -> str:
+        return f"{self.person_id}:{self.amount}"
+
+
 class HouseholdProfile(models.Model):
     signature = models.CharField("assinatura do nucleo", max_length=500, unique=True)
     head_person_id = models.IntegerField("cabeca da familia", null=True, blank=True, db_index=True)

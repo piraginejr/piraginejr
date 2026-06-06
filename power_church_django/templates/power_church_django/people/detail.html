@@ -11,7 +11,7 @@
       <div>
         <p class="badge">{{ detail.person.sigla }} · {{ detail.person.status }}</p>
         <h1>{{ detail.person.nome }}</h1>
-        <p>{{ detail.person.codigo|default:"Sem numero" }} · CPF {{ detail.person.cpf|default:"nao informado" }} · {{ detail.person.email|default:"sem e-mail" }}</p>
+        <p>ID {{ detail.person.id }} · Codigo {{ detail.person.codigo|default:"sem codigo" }} · CPF {{ detail.person.cpf|default:"nao informado" }} · {{ detail.person.email|default:"sem e-mail" }}</p>
       </div>
       <div class="actions no-print">
         <a class="button secondary" href="/people/">Voltar para pessoas</a>
@@ -42,6 +42,8 @@
               <tr><th>Sexo</th><td>{{ detail.person.sexo|default:"-" }}</td></tr>
               <tr><th>Estado civil</th><td>{{ detail.person.estado_civil|default:"-" }}</td></tr>
               <tr><th>Ativo</th><td>{{ detail.person.ativo }}</td></tr>
+              <tr><th>ID da ficha</th><td>{{ detail.person.id }}</td></tr>
+              <tr><th>Codigo interno</th><td>{{ detail.person.codigo|default:"-" }}</td></tr>
               <tr><th>Criado em</th><td>{{ detail.person.criado_em }}</td></tr>
               <tr><th>Atualizado em</th><td>{{ detail.person.atualizado_em|default:"-" }}</td></tr>
             </tbody>

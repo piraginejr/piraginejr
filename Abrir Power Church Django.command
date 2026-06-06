@@ -8,8 +8,8 @@ BASE_ENV_FILE="$BASE_DIR/.env.power_church_django.local"
 EXTRA_ENV_FILE="${POWER_CHURCH_DJANGO_EXTRA_ENV_FILE:-}"
 HOST="${POWER_CHURCH_DJANGO_HOST:-127.0.0.1}"
 PORT="${POWER_CHURCH_DJANGO_PORT:-63620}"
-URL="http://$HOST:$PORT/"
-HEALTH_URL="$URL"
+URL="http://$HOST:$PORT/accounts/relogin/"
+HEALTH_URL="http://$HOST:$PORT/"
 
 cd "$BASE_DIR"
 
@@ -27,8 +27,8 @@ fi
 
 HOST="${POWER_CHURCH_DJANGO_HOST:-127.0.0.1}"
 PORT="${POWER_CHURCH_DJANGO_PORT:-63620}"
-URL="http://$HOST:$PORT/"
-HEALTH_URL="$URL"
+URL="http://$HOST:$PORT/accounts/relogin/"
+HEALTH_URL="http://$HOST:$PORT/"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "Nao encontrei o Python do Django em:"

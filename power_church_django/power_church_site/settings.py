@@ -76,6 +76,8 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "power_church_site.middleware.AppLoginRequiredMiddleware",
+    "power_church_site.middleware.SessionSecurityMiddleware",
     "auditlog.middleware.AuditlogMiddleware",
     "waffle.middleware.WaffleMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -142,6 +144,8 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+POWER_CHURCH_SESSION_IDLE_SECONDS = int(os.environ.get("POWER_CHURCH_SESSION_IDLE_SECONDS", "300"))
 
 AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",

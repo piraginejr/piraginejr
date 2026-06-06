@@ -9,24 +9,37 @@
 </section>
 
 <section class="grid">
-  <div class="card">
+  <a class="card" href="/people/families/?section=audit&mode=automaticos{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if category and category != 'all' %}&category={{ category|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
     <span class="label">Alta confianca</span>
     <strong>{{ families.audit.summary.automatic_groups }}</strong>
     <div class="muted small">{{ families.audit.summary.automatic_people }} pessoa(s)</div>
-  </div>
-  <div class="card">
+  </a>
+  <a class="card" href="/people/families/?section=audit&mode=hipoteses{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if category and category != 'all' %}&category={{ category|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
     <span class="label">Hipoteses para auditoria</span>
     <strong>{{ families.audit.summary.hypothesis_groups }}</strong>
     <div class="muted small">{{ families.audit.summary.hypothesis_people }} pessoa(s)</div>
-  </div>
-  <div class="card">
+  </a>
+  <a class="card" href="/people/families/?section=audit&person_status=membro_ativo{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if mode and mode != 'all' %}&mode={{ mode|urlencode }}{% endif %}{% if category and category != 'all' %}&category={{ category|urlencode }}{% endif %}">
     <span class="label">Membros ativos na lista</span>
     <strong>{{ families.audit.summary.shown_status.sa }}</strong>
     <div class="muted small">{{ families.audit.summary.shown_status.outros }} em outras modalidades</div>
-  </div>
+  </a>
 </section>
 
 {% if families.audit.smart_summary %}
+  <section class="panel no-print">
+    <div class="section-head">
+      <div>
+        <h2>Categorias inteligentes</h2>
+        <p class="muted">Estas tags ficam separadas das antigas para nao atrapalhar a operacao por camada.</p>
+      </div>
+    </div>
+    <div class="legend">
+      {% for item in families.audit.smart_summary %}
+        <a class="badge {% if category == item.key %}danger{% endif %}" href="/people/families/?section=audit&category={{ item.key|urlencode }}{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if mode and mode != 'all' %}&mode={{ mode|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">{{ item.label }} {{ item.count }}</a>
+      {% endfor %}
+    </div>
+  </section>
   <section class="panel">
     <div class="section-head">
       <div>
@@ -36,12 +49,12 @@
     </div>
     <div class="summary-grid">
       {% for item in families.audit.smart_summary %}
-        <div class="card">
+        <a class="card" href="/people/families/?section=audit&category={{ item.key|urlencode }}{% if cep %}&cep={{ cep|urlencode }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% if mode and mode != 'all' %}&mode={{ mode|urlencode }}{% endif %}{% if person_status and person_status != 'all' %}&person_status={{ person_status|urlencode }}{% endif %}">
           <span class="label">{{ item.label }}</span>
           <strong>{{ item.count }}</strong>
           <div class="muted small">{{ item.risk_label }} · {{ item.confidence_label }}</div>
           <div class="muted small">{{ item.suggested_action }}</div>
-        </div>
+        </a>
       {% endfor %}
     </div>
   </section>
@@ -56,6 +69,7 @@
     <input type="hidden" name="cep" value="{{ cep }}">
     <input type="hidden" name="mode" value="{{ mode }}">
     <input type="hidden" name="category" value="{{ category }}">
+    <input type="hidden" name="person_status" value="{{ person_status }}">
     <section class="panel no-print">
       <div class="section-head">
         <div>

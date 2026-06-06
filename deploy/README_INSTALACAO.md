@@ -15,6 +15,23 @@ Este diretorio existe para preparar a futura instalacao em servidores de cliente
 - dependencias instaladas por script;
 - validacao automatica antes de liberar uso real.
 
+## Pacote Confirmado Pelo Provedor
+
+O gestor do servidor confirmou que a entrega esperada para hospedagem deve vir em:
+
+- `Dockerfile`
+- `docker-compose.yml`
+
+Complementos obrigatorios do nosso lado:
+
+- variaveis de ambiente;
+- dump do banco para migracao;
+- roteiro de restore/subida no servidor.
+
+Observacao:
+
+- `composer.json` nao faz parte deste projeto, porque o Power Church roda em `Python/Django`, nao em `PHP/Composer`.
+
 ## Arquivos
 
 - `../Dockerfile`: imagem padrao para servidor/container.
@@ -32,6 +49,17 @@ Este diretorio existe para preparar a futura instalacao em servidores de cliente
 - `env.example`: variaveis de ambiente padrao.
 - `../scripts/verificar_dependencias_servidor.py`: valida se o ambiente esta pronto.
 - `../scripts/verificar_pacote_instalacao.py`: valida se o pacote de instalacao continua completo.
+
+## Entrega Minima Para A Infraestrutura Hospedada
+
+Quando chegarmos ao corte para o servidor, o pacote precisa incluir:
+
+- `Dockerfile`
+- `docker-compose.yml`
+- `env.example`
+- dump do banco alvo
+- instrucao de restauracao do banco
+- instrucao de `docker compose up -d`
 
 ## Execucao Local Parametrizada
 

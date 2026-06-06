@@ -82,6 +82,12 @@ Ao final desta fase, queremos:
 - mapeamento claro do que ainda esta preso ao legado SQLite;
 - plano tecnico objetivo do proximo passo: ou reduzir mais o legado, ou ja ir para staging em nuvem.
 
+Tambem queremos deixar preparados, antes da nuvem:
+
+- `Dockerfile` da aplicacao final;
+- `docker-compose.yml` da aplicacao final;
+- rotina oficial de `dump` do banco a ser restaurado no servidor.
+
 ## 7. Fases De Execucao
 
 ## 7.1 Modo acelerado aprovado

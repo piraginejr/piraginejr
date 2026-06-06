@@ -18,12 +18,14 @@ from power_church_django.services.legacy import (
     family_registry_dashboard,
     get_people_import_lot_detail,
     get_person_detail,
+    legacy_db_path,
     list_secure_people_trash,
     list_people,
     people_import_dashboard,
     search_receipt_people,
     search_people_for_relationship,
 )
+from power_church_django.services.postgres_people_sync import sync_people_snapshots
 from power_church_django.services.legacy_write import (
     LegacyWriteError,
     PERSON_MARITAL_STATUS_OPTIONS,
@@ -194,6 +196,7 @@ def families(request: HttpRequest) -> HttpResponse:
         mode = request.POST.get("mode", "all")
         category = request.POST.get("category", "all")
         household_kind = request.POST.get("household_kind", "all")
+        person_status = request.POST.get("person_status", "all")
         q = request.POST.get("q", "")
         review = request.POST.get("review", "all")
         if request.POST.get("family_profile_action") == "update_household_profile":
@@ -206,6 +209,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     review=review,
                     category=category,
                     household_kind=household_kind,
+                    person_status=person_status,
                 )
                 person_ids_blob = str(request.POST.get("person_ids") or "")
                 target_group = next(
@@ -225,6 +229,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     display_name_override=request.POST.get("display_name_override", ""),
                     actor=_actor_label(request),
                 )
+                _sync_people_mirror_after_write(request, source="household_profile_update")
                 messages.success(request, f"Identidade familiar atualizada para {profile['display_name_effective']}.")
             except (LegacyDatabaseError, LegacyWriteError, ValueError) as exc:
                 messages.error(request, str(exc))
@@ -235,6 +240,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     "mode": mode,
                     "category": category,
                     "household_kind": household_kind,
+                    "person_status": person_status,
                     "q": q,
                     "review": review,
                 }
@@ -258,6 +264,7 @@ def families(request: HttpRequest) -> HttpResponse:
                     changed += suppress_family_group_suggestions(group_ids, actor=_actor_label(request))
                 else:
                     changed += create_family_group_relationships(group_ids, actor=_actor_label(request))
+            _sync_people_mirror_after_write(request, source=f"families_bulk_{action}")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
         else:
@@ -278,6 +285,7 @@ def families(request: HttpRequest) -> HttpResponse:
                 "mode": mode,
                 "category": category,
                 "household_kind": household_kind,
+                "person_status": person_status,
                 "q": q,
                 "review": review,
             }
@@ -292,6 +300,15 @@ def families(request: HttpRequest) -> HttpResponse:
         "review": request.GET.get("review", "all"),
         "category": request.GET.get("category", "all"),
         "household_kind": request.GET.get("household_kind", "all"),
+        "person_status": request.GET.get("person_status", "all"),
+        "person_status_options": [
+            ("all", "Todos"),
+            ("membro_ativo", "Membros ativos"),
+            ("membro_inativo", "Membros inativos"),
+            ("frequentador", "Frequentadores"),
+            ("arquivo_morto", "Arquivo morto"),
+            ("visitante", "Visitantes"),
+        ],
     }
     try:
         context["families"] = family_registry_dashboard(
@@ -302,6 +319,7 @@ def families(request: HttpRequest) -> HttpResponse:
             review=context["review"],
             category=context["category"],
             household_kind=context["household_kind"],
+            person_status=context["person_status"],
         )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
@@ -360,6 +378,7 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 return redirect(f"/people/{person_id}/")
             else:
                 raise LegacyWriteError("Acao de ficha nao reconhecida.")
+            _sync_people_mirror_after_write(request, source=f"person_detail_{action}")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
         else:
@@ -424,6 +443,7 @@ def merge(request: HttpRequest, person_id: int) -> HttpResponse:
                 actor=_actor_label(request),
                 prefer_duplicate_name=str(request.POST.get("prefer_duplicate_name") or "") in {"1", "on", "true", "sim"},
             )
+            _sync_people_mirror_after_write(request, source="merge_people")
             messages.success(
                 request,
                 "Mesclagem concluida com auditoria preservada. "
@@ -497,6 +517,7 @@ def new(request: HttpRequest) -> HttpResponse:
             context["error"] = str(exc)
         else:
             _save_person_photo_if_present(request, person_id, context["form"], photo_payload)
+            _sync_people_mirror_after_write(request, source="create_person")
             messages.success(request, "Ficha criada com trilha de auditoria.")
             return redirect(f"/people/{person_id}/")
     return render(request, "power_church_django/people/form.html", context)
@@ -540,6 +561,7 @@ def edit(request: HttpRequest, person_id: int) -> HttpResponse:
             context["error"] = str(exc)
         else:
             _save_person_photo_if_present(request, person_id, context["form"], photo_payload)
+            _sync_people_mirror_after_write(request, source="update_person")
             messages.success(request, "Ficha atualizada com trilha de auditoria.")
             return redirect(f"/people/{person_id}/")
     return render(request, "power_church_django/people/form.html", context)
@@ -588,6 +610,17 @@ def _actor_label(request: HttpRequest) -> str:
     if request.user.is_authenticated:
         return f"django:{request.user.username}"
     return "django:operador_local"
+
+
+def _sync_people_mirror_after_write(request: HttpRequest, source: str = "") -> None:
+    try:
+        sync_people_snapshots(legacy_db_path(), actor=f"{_actor_label(request)}:{source or 'people_write_sync'}")
+    except Exception as exc:
+        messages.warning(
+            request,
+            "A gravacao principal foi concluida, mas o espelho PostgreSQL do cadastro nao sincronizou automaticamente. "
+            f"Detalhe tecnico: {exc}",
+        )
 
 
 def _local_or_has_permission(request: HttpRequest, codename: str) -> bool:

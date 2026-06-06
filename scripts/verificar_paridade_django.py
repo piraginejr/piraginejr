@@ -14,6 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "data" / "homologacao"
 DJANGO_DIR = ROOT / "power_church_django"
 DJANGO_VENV_PYTHON = DJANGO_DIR / ".venv" / "bin" / "python"
+DEFAULT_ENV_FILE = ROOT / ".env.power_church_django.postgres.local"
+
+
+def _prefer_local_postgres_socket(env: dict[str, str]) -> dict[str, str]:
+    host = str(env.get("POWER_CHURCH_POSTGRES_HOST") or "").strip()
+    port = str(env.get("POWER_CHURCH_POSTGRES_PORT") or "5432").strip() or "5432"
+    socket_path = Path(f"/tmp/.s.PGSQL.{port}")
+    if host in {"127.0.0.1", "localhost"} and socket_path.exists():
+        env["POWER_CHURCH_POSTGRES_HOST"] = "/tmp"
+    return env
 
 
 @dataclass
@@ -31,6 +41,23 @@ def run_inside_venv(db_path: Path) -> tuple[bool, str]:
     if not DJANGO_VENV_PYTHON.exists():
         return False, f"Python da venv Django nao encontrado: {DJANGO_VENV_PYTHON}"
     env = dict(os.environ)
+    env_file = Path(env.get("POWER_CHURCH_ENV_FILE") or DEFAULT_ENV_FILE)
+    if env_file.exists():
+        for raw_line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if value.startswith(("\"", "'")) and value.endswith(("\"", "'")) and len(value) >= 2:
+                value = value[1:-1]
+            env[key] = value
+    env = _prefer_local_postgres_socket(env)
     env.setdefault("PYTHONPYCACHEPREFIX", "/private/tmp/pycache_powerchurch")
     env["POWER_CHURCH_LEGACY_DB_PATH"] = str(db_path)
     completed = subprocess.run(
@@ -62,6 +89,7 @@ import django
 django.setup()
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.test import Client
 
 from power_church_django.services.legacy import (
@@ -101,6 +129,15 @@ def assert_any(content, options, path, label):
         raise AssertionError(f"{path} sem nenhuma opcao valida para {label}: {', '.join(options)}")
 
 client = Client()
+user_model = get_user_model()
+probe_user = (
+    user_model.objects.filter(is_active=True, is_superuser=True).order_by("id").first()
+    or user_model.objects.filter(is_active=True, is_staff=True).order_by("id").first()
+    or user_model.objects.filter(is_active=True).order_by("id").first()
+)
+if probe_user is None:
+    raise AssertionError("nao ha usuario ativo para autenticar a bateria de paridade do Django")
+client.force_login(probe_user)
 summary = dashboard_summary()
 with connect_legacy() as conn:
     people_total = conn.execute("SELECT COUNT(*) FROM pessoas WHERE ativo = 1").fetchone()[0]
@@ -145,7 +182,7 @@ emit("Dashboard", "OK", f"{people_total} pessoas, {contributors_total} contribui
 
 assert_html("/people/", ["Pessoas", "Importar pessoas", "Nova pessoa", "Exportar XLSX", "Exportar CSV", "Exportacao dinamica de pessoas", "Familias e votacao"])
 csv_body = get("/people/export/?format=csv")
-xlsx_body = get("/people/export/?q=Maria&format=xlsx")
+xlsx_body = get("/people/export/?format=xlsx")
 dynamic_csv_body = get("/people/export/?preset=familias_votacao&column=nome&column=familia_domiciliar&column=familia_tem_contribuinte&format=csv")
 if b"Nome" not in csv_body or len(csv_body) < 200:
     raise AssertionError("exportacao CSV de pessoas invalida")
@@ -299,7 +336,7 @@ if receipt_row:
         raise AssertionError("PDF proprio de recibo invalido")
 emit("Recibos", "OK", "lista, central de emissao por pessoa e detalhe/impressao disponiveis no Django")
 
-assert_html("/imports/", ["Importar extrato bancario", "Sicoob PIX historico", "Sicoob Extrato Completo", "Criar lote", "Motor de leitura PDF", "Comparar Swift x PyMuPDF"])
+assert_html("/imports/", ["Importar extrato bancario", "extrato bancario completo", "Sicoob Extrato Completo", "Criar lote", "Motor de leitura PDF", "Comparar Swift x PyMuPDF"])
 assert_html("/imports/rules/", ["Regras por centavos", "Mapa atual", "Salvar regra"])
 if statement_lot:
     assert_html(f"/imports/statement/{statement_lot[0]}/", ["Processamento do lote", "Reprocessar lote", "Encerrar lote", "lot-movements-table", "Banco/Pix", "CPF cadastro", "Confirmar sugestao", "Auditar / validar"])

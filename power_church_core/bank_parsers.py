@@ -868,34 +868,171 @@ def parse_sicoob_receipts_pdf(
     period_start = br_to_iso(period_start_br)
     period_end = br_to_iso(period_end_br)
     main_re = re.compile(r"^(\d{2}/\d{2})\s+(.+?)\s+([\d.]+,\d{2}[CD\*])$")
-    current_account_re = re.compile(
-        r"^(\d{2}/\d{2})\s+(?:(?:Pix|PIX|TED|DOC|Transf\.?)|\d{5,})\s+(.+?)\s+R\s*\$\s*([\d.]+,\d{2}[CD\*])$",
-        flags=re.IGNORECASE,
-    )
+    value_only_re = re.compile(r"^R\s*\$\s*([\d.]+,\d{2}[CD\*])$", flags=re.IGNORECASE)
+    trailing_value_re = re.compile(r"R\s*\$\s*([\d.]+,\d{2}[CD\*])\s*$", flags=re.IGNORECASE)
+    current_account_prefix_re = re.compile(r"^(\d{2}/\d{2})\s+((?:Pix|PIX|TED|DOC|Transf\.?|[\d.]{3,}))\s+(.+)$", flags=re.IGNORECASE)
     excluded = {"SALDO DO DIA", "SALDO ANTERIOR", "SALDO BLOQ.ANTERIOR"}
+    current_account_histories = {
+        "PIX RECEBIDO - OUTRA IF",
+        "CRED.TRANSF.CONTAS INTERCREDIS",
+        "CRÉD.TED-STR",
+        "TRANSF.RECEBIDA - PIX SICOOB",
+        "CRÉDITO RESGATE FUNDOS DE INVESTIMENTO",
+    }
     blocks: list[dict[str, object]] = []
+    pending_value_texts: list[str] = []
     current: dict[str, object] | None = None
+
+    def start_block(page_number: int, date_token: str, history: str, *, value_text: str = "", initial_detail: str = "") -> dict[str, object]:
+        block = {
+            "page_number": page_number,
+            "date_token": normalize_query(date_token),
+            "history": normalize_query(history),
+            "value_text": normalize_query(value_text),
+            "details": [],
+        }
+        if normalize_query(initial_detail):
+            block["details"].append(normalize_query(initial_detail))
+        return block
+
+    def first_unvalued_pix_block(page_blocks: list[dict[str, object]], current_block: dict[str, object] | None) -> dict[str, object] | None:
+        candidates = [*page_blocks]
+        if current_block is not None:
+            candidates.append(current_block)
+        for block in candidates:
+            if (
+                normalize_query(block.get("history")) == "PIX RECEBIDO - OUTRA IF"
+                and not normalize_query(block.get("value_text"))
+            ):
+                return block
+        return None
+
+    current_date_token = ""
+    carry_block: dict[str, object] | None = None
     for page_number, page in enumerate(pages, start=1):
+        page_blocks: list[dict[str, object]] = []
+        page_values: list[str] = []
+        current = carry_block
+        carry_block = None
         for raw_line in page.splitlines():
             line = normalize_query(raw_line)
-            match = current_account_re.match(line) if include_current_account_lines else None
-            if not match:
-                match = main_re.match(line)
-            if match:
-                if current is not None:
-                    blocks.append(current)
-                current = {
-                    "page_number": page_number,
-                    "date_token": normalize_query(match.group(1)),
-                    "history": normalize_query(match.group(2)),
-                    "value_text": normalize_query(match.group(3)),
-                    "details": [],
-                }
+            if not line or line == "Data Documento Histórico Valor":
                 continue
-            if current is not None and line:
+            value_only_match = value_only_re.match(line) if include_current_account_lines else None
+            if value_only_match:
+                page_values.append(normalize_query(value_only_match.group(1)))
+                continue
+            match = None if include_current_account_lines else main_re.match(line)
+            if not include_current_account_lines:
+                if match:
+                    if current is not None:
+                        page_blocks.append(current)
+                    current = start_block(
+                        page_number,
+                        normalize_query(match.group(1)),
+                        normalize_query(match.group(2)),
+                        value_text=normalize_query(match.group(3)),
+                    )
+                    continue
+                if current is not None and line:
+                    current["details"].append(line)
+                continue
+
+            prefix_match = current_account_prefix_re.match(line)
+            if prefix_match:
+                token_matches = list(re.finditer(r"(\d{2}/\d{2})\s+(?:Pix|PIX|TED|DOC|Transf\.?|[\d.]{3,})", line, flags=re.IGNORECASE))
+                current_date_token = normalize_query(prefix_match.group(1))
+                document_token = normalize_query(prefix_match.group(2))
+                tail = normalize_query(line[token_matches[-1].end() :]) if token_matches else normalize_query(prefix_match.group(3))
+                inline_value = ""
+                inline_value_match = trailing_value_re.search(tail)
+                if inline_value_match:
+                    inline_value = normalize_query(inline_value_match.group(1))
+                    tail = normalize_query(tail[: inline_value_match.start()]).strip()
+                if document_token.upper() == "PIX" and not tail and inline_value:
+                    unresolved_block = first_unvalued_pix_block(page_blocks, current)
+                    if unresolved_block is not None:
+                        unresolved_block["value_text"] = inline_value
+                        continue
+                if (
+                    current is not None
+                    and normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF"
+                    and normalize_query(current.get("value_text"))
+                    and not [item for item in current.get("details", []) if normalize_query(item)]
+                    and tail.startswith("Recebimento Pix")
+                ):
+                    current["details"].append(tail)
+                    continue
+                if current is not None and tail and not tail.startswith("Recebimento Pix") and tail not in current_account_histories:
+                    absorbed_tail = normalize_query(tail)
+                    if absorbed_tail in {"DEP.DINHEIRO - INTERCREDIS", "DEP.CHEQUE BLOQ.1D", "LIBER.DEPÓSITO BLOQ", "EST.PIX EMIT.OUT.IF"}:
+                        page_blocks.append(current)
+                        current = start_block(page_number, current_date_token, absorbed_tail)
+                        continue
+                    current["details"].append(tail)
+                    if inline_value:
+                        current["value_text"] = inline_value
+                    continue
+                initial_detail = ""
+                history = tail
+                if tail.startswith("Recebimento Pix"):
+                    history = "PIX RECEBIDO - OUTRA IF"
+                    initial_detail = tail
+                elif not tail and document_token.upper() == "PIX":
+                    history = "PIX RECEBIDO - OUTRA IF"
+                if current is not None:
+                    page_blocks.append(current)
+                current = start_block(
+                    page_number,
+                    current_date_token,
+                    history,
+                    value_text=inline_value,
+                    initial_detail=initial_detail,
+                )
+                continue
+
+            if line in current_account_histories and current_date_token:
+                if (
+                    current is not None
+                    and normalize_query(line) == "PIX RECEBIDO - OUTRA IF"
+                    and normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF"
+                    and normalize_query(current.get("value_text"))
+                    and not [item for item in current.get("details", []) if normalize_query(item)]
+                ):
+                    continue
+                if current is not None:
+                    page_blocks.append(current)
+                current = start_block(page_number, current_date_token, line)
+                continue
+
+            if line.startswith("Recebimento Pix") and current is None and current_date_token:
+                current = start_block(
+                    page_number,
+                    current_date_token,
+                    "PIX RECEBIDO - OUTRA IF",
+                    initial_detail=line,
+                )
+                continue
+
+            if current is not None:
                 current["details"].append(line)
-    if current is not None:
-        blocks.append(current)
+
+        if current is not None:
+            details = [item for item in current.get("details", []) if normalize_query(item)]
+            if normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF" and normalize_query(current.get("value_text")) and not details:
+                carry_block = current
+            else:
+                page_blocks.append(current)
+        blocks.extend(page_blocks)
+        pending_value_texts.extend(page_values)
+
+    if carry_block is not None:
+        blocks.append(carry_block)
+
+    pending_blocks = [block for block in blocks if not normalize_query(block.get("value_text"))]
+    if pending_value_texts and len(pending_value_texts) == len(pending_blocks):
+        for block, value_text in zip(pending_blocks, pending_value_texts):
+            block["value_text"] = normalize_query(value_text)
     entries: list[dict[str, object]] = []
     order = 0
     for block in blocks:
@@ -904,6 +1041,9 @@ def parse_sicoob_receipts_pdf(
             continue
         metadata = sicoob_receiving_kind_metadata(history) or sicoob_receiving_kind_metadata_norm(history)
         if not metadata:
+            continue
+        movement_kind = str(metadata.get("movement_kind") or "")
+        if movement_kind in {"deposito_dinheiro", "deposito_cheque", "liberacao_deposito", "estorno_pix"}:
             continue
         value_text = normalize_query(block["value_text"])
         if value_text.endswith("D"):
@@ -924,7 +1064,7 @@ def parse_sicoob_receipts_pdf(
                 "competencia": competencia,
                 "competencia_ordem": competencia_ordem,
                 "amount": round(amount, 2),
-                "movement_kind": str(metadata.get("movement_kind") or ""),
+                "movement_kind": movement_kind,
                 "receiving_code": str(metadata.get("receiving_code") or ""),
                 "bank_document": identity_document or bank_reference,
                 "document_type": document_type,
@@ -1031,17 +1171,32 @@ def parse_santander_statement_pdf(pdf_path: Path, requested_layout_code: str = "
     current_date_token = ""
     order = 0
     for page_number, page in enumerate(pages, start=1):
-        for raw_line in page.splitlines():
-            line = normalize_query(raw_line)
+        raw_lines = page.splitlines()
+        index = 0
+        while index < len(raw_lines):
+            line = normalize_query(raw_lines[index])
+            next_line = normalize_query(raw_lines[index + 1]) if index + 1 < len(raw_lines) else ""
+            if next_line:
+                combined_line = normalize_query(f"{line} {next_line}")
+                if re.search(r"\bPi\s*x\s+Recebido\b", combined_line, flags=re.IGNORECASE) and not re.search(
+                    r"\bPi\s*x\s+Recebido\b",
+                    line,
+                    flags=re.IGNORECASE,
+                ):
+                    line = combined_line
+                    index += 1
             if not line:
+                index += 1
                 continue
             date_match = re.match(r"^(\d{2}/\d{2}(?:/\d{4})?)\b", line)
             if date_match:
                 current_date_token = normalize_query(date_match.group(1))
             if not re.search(r"\bPi\s*x\s+Recebido\b", line, flags=re.IGNORECASE):
+                index += 1
                 continue
             match = line_re.search(line)
             if not match:
+                index += 1
                 continue
             line_date_token = normalize_query(match.group(1)) or current_date_token
             if not line_date_token:
@@ -1074,6 +1229,7 @@ def parse_santander_statement_pdf(pdf_path: Path, requested_layout_code: str = "
                     "raw_text": line,
                 }
             )
+            index += 1
     if not entries:
         raise ValueError("Nao foi possivel localizar PIX recebidos validos no extrato Santander.")
     return {

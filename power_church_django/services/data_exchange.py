@@ -4,11 +4,14 @@ from datetime import datetime
 from typing import Any
 
 from django.http import HttpResponse
+from django.db.models import Q
+from django.db.utils import OperationalError as DjangoOperationalError, ProgrammingError as DjangoProgrammingError
 from import_export.formats import base_formats
 from tablib import Dataset
 
 from power_church_core.formatting import br_date, br_datetime
 from power_church_core.normalization import format_cpf, moneyless_int, normalize_match_name
+from power_church_django.apps.people.models import PersonAddressSnapshot, PersonSnapshot
 from power_church_django.services.legacy import (
     connect_legacy,
     format_status,
@@ -256,7 +259,205 @@ def _primary_address_line(row: dict[str, Any]) -> str:
     return " | ".join(part for part in parts if part)
 
 
+def _people_export_rows_from_snapshots(q: str = "", status: str = "", city: str = "") -> tuple[list[dict[str, Any]], int]:
+    queryset = PersonSnapshot.objects.filter(is_active=True)
+    if status:
+        queryset = queryset.filter(status=status)
+    if city:
+        normalized_city = normalize_match_name(city)
+        city_ids = list(
+            {
+                row["person_id"]
+                for row in PersonAddressSnapshot.objects.values("person_id", "city")
+                if normalize_match_name(row["city"] or "") == normalized_city
+            }
+        )
+        queryset = queryset.filter(id__in=city_ids)
+    if q:
+        normalized = normalize_match_name(q)
+        digits = "".join(ch for ch in q if ch.isdigit())
+        queryset = queryset.filter(
+            Q(normalized_name__icontains=normalized)
+            | Q(name__icontains=q)
+            | Q(social_name__icontains=q)
+            | Q(internal_code__icontains=q)
+            | Q(cpf__icontains=digits or q)
+            | Q(normalized_email__icontains=q.lower())
+            | Q(primary_email__icontains=q)
+            | Q(primary_phone__icontains=digits or q)
+            | Q(primary_whatsapp__icontains=digits or q)
+        )
+    total = int(queryset.count())
+    people = list(queryset.order_by("normalized_name", "legacy_id"))
+    person_ids = [int(person.id) for person in people]
+
+    address_index: dict[int, dict[str, Any]] = {}
+    for address in PersonAddressSnapshot.objects.filter(person_id__in=person_ids).order_by("person_id", "-is_primary", "legacy_id"):
+        if int(address.person_id) in address_index:
+            continue
+        address_index[int(address.person_id)] = {
+            "endereco_tipo": address.address_type or "",
+            "cep": address.cep or "",
+            "logradouro": address.street or "",
+            "numero": address.number or "",
+            "complemento": address.complement or "",
+            "bairro": address.neighborhood or "",
+            "cidade": address.city or "",
+            "uf": address.state or "",
+        }
+
+    contributor_index: dict[int, dict[str, Any]] = {}
+    contribution_index: dict[int, dict[str, Any]] = {}
+    if person_ids:
+        placeholders = ",".join("?" for _ in person_ids)
+        with connect_legacy() as conn:
+            contributor_rows = conn.execute(
+                f"""
+                SELECT pessoa_id,
+                       COUNT(*) AS quantidade,
+                       GROUP_CONCAT(COALESCE(nome, ''), ' / ') AS nomes
+                  FROM contribuintes
+                 WHERE ativo = 1
+                   AND pessoa_id IN ({placeholders})
+                 GROUP BY pessoa_id
+                """,
+                tuple(person_ids),
+            ).fetchall()
+            contribution_rows = conn.execute(
+                f"""
+                SELECT c1.pessoa_id,
+                       COUNT(*) AS quantidade,
+                       COALESCE(SUM(c1.valor), 0) AS total_valor,
+                       MIN(COALESCE(c1.data_recebimento, '')) AS primeira_data,
+                       MAX(COALESCE(c1.data_recebimento, '')) AS ultima_data,
+                       (
+                           SELECT COALESCE(c2.competencia, '')
+                             FROM contribuicoes c2
+                            WHERE c2.ativo = 1
+                              AND c2.pessoa_id = c1.pessoa_id
+                            ORDER BY COALESCE(c2.competencia_ordem, 0) DESC,
+                                     COALESCE(c2.data_recebimento, '') DESC,
+                                     c2.id DESC
+                            LIMIT 1
+                       ) AS ultima_competencia
+                  FROM contribuicoes c1
+                 WHERE c1.ativo = 1
+                   AND c1.pessoa_id IN ({placeholders})
+                 GROUP BY c1.pessoa_id
+                """,
+                tuple(person_ids),
+            ).fetchall()
+        contributor_index = {
+            moneyless_int(row["pessoa_id"]): {
+                "count": moneyless_int(row["quantidade"]),
+                "names": row["nomes"] or "",
+            }
+            for row in contributor_rows
+        }
+        contribution_index = {
+            moneyless_int(row["pessoa_id"]): {
+                "count": moneyless_int(row["quantidade"]),
+                "total": round(float(row["total_valor"] or 0), 2),
+                "first_date": row["primeira_data"] or "",
+                "last_date": row["ultima_data"] or "",
+                "last_competencia": row["ultima_competencia"] or "",
+            }
+            for row in contribution_rows
+        }
+
+    family_index: dict[int, dict[str, Any]] = {}
+    all_nuclei = organized_family_nuclei(q="", cep="", review="all", person_status="all")["items"]
+    for nucleus in all_nuclei:
+        family_payload = {
+            "tem_familia_domiciliar": "Sim",
+            "familia_domiciliar": nucleus.get("label") or "",
+            "familia_sobrenome": nucleus.get("surname_label") or "",
+            "familia_qtd_membros": moneyless_int(nucleus.get("member_count")),
+            "familia_membros": nucleus.get("member_names") or "",
+            "familia_alinhamento": nucleus.get("alignment_badge") or "",
+            "familia_precisa_auditoria": _bool_text(bool(nucleus.get("needs_review"))),
+            "familia_tem_contribuinte": _bool_text(bool(nucleus.get("has_financial_member"))),
+            "familia_resumo_financeiro": nucleus.get("financial_summary", {}).get("note") or "",
+        }
+        for person in nucleus.get("people") or []:
+            family_index[moneyless_int(person.get("id"))] = family_payload
+
+    export_rows: list[dict[str, Any]] = []
+    for person in people:
+        person_id = int(person.id)
+        address = address_index.get(person_id, {})
+        contributor = contributor_index.get(person.legacy_id, {})
+        contribution = contribution_index.get(person.legacy_id, {})
+        family = family_index.get(
+            person.legacy_id,
+            {
+                "tem_familia_domiciliar": "Nao",
+                "familia_domiciliar": "",
+                "familia_sobrenome": "",
+                "familia_qtd_membros": 0,
+                "familia_membros": "",
+                "familia_alinhamento": "",
+                "familia_precisa_auditoria": "Nao",
+                "familia_tem_contribuinte": "Nao",
+                "familia_resumo_financeiro": "",
+            },
+        )
+        export_rows.append(
+            {
+                "id": moneyless_int(person.legacy_id),
+                "codigo": person.internal_code or "",
+                "nome": person.name or "",
+                "nome_social": person.social_name or "",
+                "cpf": format_cpf(person.cpf),
+                "rg": person.rg or "",
+                "data_nascimento": br_date(person.birth_date_raw or person.birth_date),
+                "sexo": person.sex or "",
+                "estado_civil": person.marital_status or "",
+                "status": format_status(person.status),
+                "sigla": status_sigla(person.status, True),
+                "ativo": _bool_text(bool(person.is_active)),
+                "email": person.primary_email or "",
+                "telefone": person.primary_phone or "",
+                "whatsapp": person.primary_whatsapp or "",
+                "endereco_tipo": address.get("endereco_tipo", ""),
+                "endereco_completo": _primary_address_line(address),
+                "cep": address.get("cep", ""),
+                "logradouro": address.get("logradouro", ""),
+                "numero": address.get("numero", ""),
+                "complemento": address.get("complemento", ""),
+                "bairro": address.get("bairro", ""),
+                "cidade": address.get("cidade", ""),
+                "uf": address.get("uf", ""),
+                "tem_familia_domiciliar": family["tem_familia_domiciliar"],
+                "familia_domiciliar": family["familia_domiciliar"],
+                "familia_sobrenome": family["familia_sobrenome"],
+                "familia_qtd_membros": family["familia_qtd_membros"],
+                "familia_membros": family["familia_membros"],
+                "familia_alinhamento": family["familia_alinhamento"],
+                "familia_precisa_auditoria": family["familia_precisa_auditoria"],
+                "familia_tem_contribuinte": family["familia_tem_contribuinte"],
+                "familia_resumo_financeiro": family["familia_resumo_financeiro"],
+                "contribuintes_vinculados": moneyless_int(contributor.get("count")),
+                "nomes_contribuintes_vinculados": contributor.get("names", ""),
+                "contribuicoes_qtd": moneyless_int(contribution.get("count")),
+                "contribuicoes_total": contribution.get("total", 0.0),
+                "primeira_contribuicao_data": br_date(contribution.get("first_date")),
+                "ultima_contribuicao_data": br_date(contribution.get("last_date")),
+                "ultima_competencia": contribution.get("last_competencia", ""),
+                "import_lote_id": moneyless_int(person.import_lot_id),
+                "criado_em": br_datetime(person.created_at_legacy),
+                "atualizado_em": br_datetime(person.updated_at_legacy),
+                "observacoes": person.notes or "",
+            }
+        )
+    return export_rows, total
+
+
 def _people_export_rows(q: str = "", status: str = "", city: str = "") -> tuple[list[dict[str, Any]], int]:
+    try:
+        return _people_export_rows_from_snapshots(q=q, status=status, city=city)
+    except (DjangoOperationalError, DjangoProgrammingError, PersonSnapshot.DoesNotExist, RuntimeError, ValueError):
+        pass
     where, params = _people_filters(q=q, status=status, city=city)
     with connect_legacy() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM pessoas p WHERE {where}", tuple(params)).fetchone()[0] or 0)

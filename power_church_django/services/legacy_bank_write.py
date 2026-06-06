@@ -39,6 +39,13 @@ PDF_PROVIDER_MODES = [
     },
 ]
 
+STATEMENT_LOT_CLOSE_NOTE = (
+    "Lote encerrado. O que restou sem pessoa vinculada foi preservado para associacao futura na central de contribuintes."
+)
+STATEMENT_MOVEMENT_CLOSE_NOTE = (
+    "Lote encerrado pelo operador. O credito foi preservado no contribuinte auxiliar e segue para associacao futura na central de contribuintes."
+)
+
 
 def _normalize_pdf_provider_mode(value: object) -> str:
     mode = normalize_query(value).lower() or "swift_pdfkit"
@@ -282,6 +289,121 @@ def _provider_note(provider: str, mode: str, comparison_note: str = "") -> str:
     return " ".join(lines)
 
 
+def _statement_receipt_eligible_contribution_ids(
+    db: PowerChurchDB,
+    *,
+    lot_id: int = 0,
+    contribution_ids: list[int] | None = None,
+) -> list[int]:
+    clauses = [
+        "m.ativo = 1",
+        "c.ativo = 1",
+        "COALESCE(c.status_operacional, '') = 'regular'",
+        "c.pessoa_id IS NOT NULL",
+    ]
+    params: list[object] = []
+    if int(lot_id or 0):
+        clauses.append("m.lote_id = ?")
+        params.append(int(lot_id))
+    clean_ids = [int(value or 0) for value in (contribution_ids or []) if int(value or 0)]
+    if clean_ids:
+        clauses.append(f"c.id IN ({','.join('?' for _ in clean_ids)})")
+        params.extend(clean_ids)
+    rows = db.conn.execute(
+        f"""
+        SELECT DISTINCT c.id
+          FROM extrato_movimentos m
+          JOIN contribuicoes c ON c.id = m.imported_contribution_id
+         WHERE {' AND '.join(clauses)}
+         ORDER BY c.id
+        """,
+        tuple(params),
+    ).fetchall()
+    return [int(row["id"] or 0) for row in rows if int(row["id"] or 0)]
+
+
+def _auto_issue_statement_receipts(
+    contribution_ids: list[int],
+    *,
+    actor: str = "",
+    send_now: bool = True,
+) -> dict[str, object]:
+    clean_ids = [int(value or 0) for value in contribution_ids if int(value or 0)]
+    if not clean_ids:
+        return {
+            "eligible_contributions": 0,
+            "receipts_created": 0,
+            "sent": 0,
+            "queued": 0,
+            "failed": 0,
+            "without_email": 0,
+            "receipt_ids": [],
+            "dispatch_ids": [],
+        }
+    try:
+        from power_church_django.services.legacy import get_receipt_detail
+        from power_church_django.apps.contributions.models import ReceiptDispatch
+        from power_church_django.services.receipt_delivery import issue_event_receipts_and_optionally_send
+
+        result = issue_event_receipts_and_optionally_send(
+            contribution_ids=clean_ids,
+            email_overrides=None,
+            subject="",
+            body="",
+            actor=actor,
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            auto_created=True,
+            send_now=bool(send_now),
+        )
+        dispatch_by_receipt: dict[int, list[object]] = {}
+        for dispatch in result.get("dispatches", []):
+            dispatch_by_receipt.setdefault(int(dispatch.legacy_receipt_id or 0), []).append(dispatch)
+        sent = 0
+        queued = 0
+        failed = 0
+        without_email = 0
+        for receipt_id in [int(value or 0) for value in result.get("receipt_ids", []) if int(value or 0)]:
+            dispatches = dispatch_by_receipt.get(receipt_id, [])
+            if not dispatches:
+                without_email += 1
+                continue
+            statuses = {str(getattr(dispatch, "status", "") or "") for dispatch in dispatches}
+            if ReceiptDispatch.Status.SENT in statuses:
+                sent += 1
+            elif ReceiptDispatch.Status.PENDING in statuses:
+                queued += 1
+            elif ReceiptDispatch.Status.FAILED in statuses:
+                failed += 1
+            else:
+                detail = get_receipt_detail(receipt_id)
+                if (detail.get("person") or {}).get("email") or (detail.get("receipt") or {}).get("person_email"):
+                    failed += 1
+                else:
+                    without_email += 1
+        return {
+            "eligible_contributions": len(clean_ids),
+            "receipts_created": len([int(value or 0) for value in result.get("receipt_ids", []) if int(value or 0)]),
+            "sent": sent,
+            "queued": queued,
+            "failed": failed,
+            "without_email": without_email,
+            "receipt_ids": [int(value or 0) for value in result.get("receipt_ids", []) if int(value or 0)],
+            "dispatch_ids": [int(getattr(dispatch, "pk", 0) or 0) for dispatch in result.get("dispatches", []) if int(getattr(dispatch, "pk", 0) or 0)],
+        }
+    except Exception as exc:
+        return {
+            "eligible_contributions": len(clean_ids),
+            "receipts_created": 0,
+            "sent": 0,
+            "queued": 0,
+            "failed": 0,
+            "without_email": 0,
+            "receipt_ids": [],
+            "dispatch_ids": [],
+            "error": str(exc),
+        }
+
+
 def create_statement_lot_from_upload(
     filename: str,
     payload: bytes,
@@ -361,17 +483,36 @@ def _form_lists(data: Any) -> dict[str, list[str]]:
     return normalized
 
 
-def update_bank_movement_from_form(kind: str, movement_id: int, form: Any) -> int:
+def update_bank_movement_from_form(kind: str, movement_id: int, form: Any, actor: str = "") -> int:
     db = PowerChurchDB(legacy_db_path())
     try:
         payload = _form_lists(form)
+        before_eligible_ids: list[int] = []
+        if kind == "statement":
+            before_row = db.conn.execute(
+                "SELECT imported_contribution_id FROM extrato_movimentos WHERE id = ? LIMIT 1",
+                (movement_id,),
+            ).fetchone()
+            if before_row is not None:
+                before_eligible_ids = _statement_receipt_eligible_contribution_ids(
+                    db,
+                    contribution_ids=[int(before_row["imported_contribution_id"] or 0)],
+                )
         if kind == "pix":
             return db.update_pix_movement_from_form(movement_id, payload)
-        return db.update_statement_movement_from_form(movement_id, payload)
+        contribution_id = db.update_statement_movement_from_form(movement_id, payload)
+        after_eligible_ids = _statement_receipt_eligible_contribution_ids(
+            db,
+            contribution_ids=[int(contribution_id or 0)],
+        )
+        new_eligible_ids = [item for item in after_eligible_ids if item not in before_eligible_ids]
     except Exception as exc:
         raise LegacyBankWriteError(str(exc)) from exc
     finally:
         db.close()
+    if kind == "statement" and new_eligible_ids:
+        _auto_issue_statement_receipts(new_eligible_ids, actor=actor, send_now=False)
+    return int(contribution_id or 0)
 
 
 def reprocess_bank_lot(kind: str, lot_id: int) -> int:
@@ -396,12 +537,135 @@ def import_ready_pix_lot(lot_id: int) -> int:
         db.close()
 
 
-def close_bank_lot(kind: str, lot_id: int) -> dict[str, int]:
+def close_bank_lot(kind: str, lot_id: int, actor: str = "") -> dict[str, int]:
     db = PowerChurchDB(legacy_db_path())
     try:
+        auto_receipt_candidates: list[int] = []
+        statement_was_closed = False
         if kind == "pix":
             return db.close_pix_lot(lot_id)
-        return db.close_statement_lot(lot_id)
+        lot_row = db.conn.execute(
+            "SELECT status FROM extrato_lotes WHERE id = ? LIMIT 1",
+            (lot_id,),
+        ).fetchone()
+        statement_was_closed = normalize_query(lot_row["status"] if lot_row else "") == "encerrado"
+        result = db.close_statement_lot(lot_id)
+        if not statement_was_closed:
+            auto_receipt_candidates = _statement_receipt_eligible_contribution_ids(db, lot_id=lot_id)
+    except Exception as exc:
+        raise LegacyBankWriteError(str(exc)) from exc
+    finally:
+        db.close()
+    if kind == "statement" and auto_receipt_candidates:
+        receipt_result = _auto_issue_statement_receipts(auto_receipt_candidates, actor=actor, send_now=False)
+        result = {
+            **result,
+            "auto_receipt_candidates": int(receipt_result.get("eligible_contributions", 0) or 0),
+            "auto_receipt_created": int(receipt_result.get("receipts_created", 0) or 0),
+            "auto_receipt_sent": int(receipt_result.get("sent", 0) or 0),
+            "auto_receipt_queued": int(receipt_result.get("queued", 0) or 0),
+            "auto_receipt_failed": int(receipt_result.get("failed", 0) or 0),
+            "auto_receipt_without_email": int(receipt_result.get("without_email", 0) or 0),
+            "auto_receipt_receipt_ids": list(receipt_result.get("receipt_ids", []) or []),
+            "auto_receipt_dispatch_ids": list(receipt_result.get("dispatch_ids", []) or []),
+        }
+        if receipt_result.get("error"):
+            result["auto_receipt_error"] = str(receipt_result["error"])
+    return result
+
+
+def prepare_statement_lot_for_audit(lot_id: int, actor: str = "") -> dict[str, int]:
+    db = PowerChurchDB(legacy_db_path())
+    try:
+        imported_now = int(db.ensure_statement_financial_entries(lot_id) or 0)
+        auto_receipt_candidates = _statement_receipt_eligible_contribution_ids(db, lot_id=lot_id)
+        lot_row = db.conn.execute(
+            "SELECT status FROM extrato_lotes WHERE id = ? LIMIT 1",
+            (lot_id,),
+        ).fetchone()
+        db.refresh_statement_lot_status(lot_id)
+        result: dict[str, int | str | list[int]] = {
+            "importados": imported_now,
+            "movidos_contribuintes": 0,
+            "status_antes": str(lot_row["status"] or "") if lot_row else "",
+        }
+    except Exception as exc:
+        raise LegacyBankWriteError(str(exc)) from exc
+    finally:
+        db.close()
+    if auto_receipt_candidates:
+        receipt_result = _auto_issue_statement_receipts(auto_receipt_candidates, actor=actor, send_now=False)
+        result = {
+            **result,
+            "auto_receipt_candidates": int(receipt_result.get("eligible_contributions", 0) or 0),
+            "auto_receipt_created": int(receipt_result.get("receipts_created", 0) or 0),
+            "auto_receipt_sent": int(receipt_result.get("sent", 0) or 0),
+            "auto_receipt_queued": int(receipt_result.get("queued", 0) or 0),
+            "auto_receipt_failed": int(receipt_result.get("failed", 0) or 0),
+            "auto_receipt_without_email": int(receipt_result.get("without_email", 0) or 0),
+            "auto_receipt_receipt_ids": list(receipt_result.get("receipt_ids", []) or []),
+            "auto_receipt_dispatch_ids": list(receipt_result.get("dispatch_ids", []) or []),
+        }
+        if receipt_result.get("error"):
+            result["auto_receipt_error"] = str(receipt_result["error"])
+    else:
+        result = {
+            **result,
+            "auto_receipt_candidates": 0,
+            "auto_receipt_created": 0,
+            "auto_receipt_sent": 0,
+            "auto_receipt_queued": 0,
+            "auto_receipt_failed": 0,
+            "auto_receipt_without_email": 0,
+            "auto_receipt_receipt_ids": [],
+            "auto_receipt_dispatch_ids": [],
+        }
+    return result  # type: ignore[return-value]
+
+
+def reopen_statement_lot_for_audit(lot_id: int) -> dict[str, int | str]:
+    db = PowerChurchDB(legacy_db_path())
+    try:
+        lot = db.get_statement_lot(lot_id)
+        if lot is None:
+            raise ValueError("Lote de extrato nao encontrado.")
+        db.conn.execute(
+            """
+            UPDATE extrato_lotes
+            SET status = 'auditando',
+                observacoes = TRIM(REPLACE(COALESCE(observacoes, ''), ?, '')),
+                atualizado_em = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (STATEMENT_LOT_CLOSE_NOTE, lot_id),
+        )
+        db.conn.execute(
+            """
+            UPDATE extrato_movimentos
+            SET review_notes = TRIM(REPLACE(COALESCE(review_notes, ''), ?, '')),
+                atualizado_em = CURRENT_TIMESTAMP
+            WHERE lote_id = ?
+              AND ativo = 1
+              AND review_status IN ('revisar_pessoa', 'revisar_destinacao')
+            """,
+            (STATEMENT_MOVEMENT_CLOSE_NOTE, lot_id),
+        )
+        status = db.refresh_statement_lot_status(lot_id)
+        db.conn.commit()
+        return {
+            "lot_id": int(lot_id),
+            "status": status,
+            "movement_reviews": int(
+                db.scalar(
+                    """
+                    SELECT COUNT(*)
+                    FROM extrato_movimentos
+                    WHERE lote_id = ? AND ativo = 1 AND review_status IN ('revisar_pessoa', 'revisar_destinacao')
+                    """,
+                    (lot_id,),
+                )
+            ),
+        }
     except Exception as exc:
         raise LegacyBankWriteError(str(exc)) from exc
     finally:

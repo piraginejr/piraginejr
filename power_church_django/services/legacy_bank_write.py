@@ -341,9 +341,11 @@ def _auto_issue_statement_receipts(
             "dispatch_ids": [],
         }
     try:
-        from power_church_django.services.legacy import get_receipt_detail
         from power_church_django.apps.contributions.models import ReceiptDispatch
-        from power_church_django.services.receipt_delivery import issue_event_receipts_and_optionally_send
+        from power_church_django.services.receipt_delivery import (
+            get_receipt_detail_cached,
+            issue_event_receipts_and_optionally_send,
+        )
 
         result = issue_event_receipts_and_optionally_send(
             contribution_ids=clean_ids,
@@ -375,7 +377,7 @@ def _auto_issue_statement_receipts(
             elif ReceiptDispatch.Status.FAILED in statuses:
                 failed += 1
             else:
-                detail = get_receipt_detail(receipt_id)
+                detail = get_receipt_detail_cached(receipt_id)
                 if (detail.get("person") or {}).get("email") or (detail.get("receipt") or {}).get("person_email"):
                     failed += 1
                 else:

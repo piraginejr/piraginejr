@@ -32,6 +32,23 @@ Observacao:
 
 - `composer.json` nao faz parte deste projeto, porque o Power Church roda em `Python/Django`, nao em `PHP/Composer`.
 
+## Estado Atual Da Migracao
+
+A migracao funcional local para `Django + PostgreSQL` foi fechada antes da hospedagem.
+
+Evidencias principais:
+
+- [FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
+- [verificar_fase4_postgres_20260606_121107.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/verificar_fase4_postgres_20260606_121107.md)
+
+Com isso, este pacote passa a cuidar principalmente de:
+
+- containerizacao;
+- volumes;
+- variaveis de ambiente;
+- dump e restore;
+- subida da aplicacao hospedada.
+
 ## Arquivos
 
 - `../Dockerfile`: imagem padrao para servidor/container.

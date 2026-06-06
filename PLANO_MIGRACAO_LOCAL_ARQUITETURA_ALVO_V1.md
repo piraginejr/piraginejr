@@ -88,6 +88,11 @@ Tambem queremos deixar preparados, antes da nuvem:
 - `docker-compose.yml` da aplicacao final;
 - rotina oficial de `dump` do banco a ser restaurado no servidor.
 
+Estado atual:
+
+- a migracao local para `Django + PostgreSQL` ja pode ser tratada como concluida no escopo funcional definido;
+- a proxima frente do projeto passa a ser `preparacao da hospedagem containerizada`, e nao mais `migracao de banco`.
+
 ## 7. Fases De Execucao
 
 ## 7.1 Modo acelerado aprovado
@@ -206,6 +211,16 @@ Subfrentes:
 Critério de saida:
 
 - sistema funcional em operacao local hibrida, com arquitetura compreendida.
+
+Status de fechamento:
+
+- a camada de migracao para `PostgreSQL` foi considerada fechada tecnicamente com base em:
+  - [FECHAMENTO_ETAPA3_FINANCEIRO_RECIBOS_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA3_FINANCEIRO_RECIBOS_V1.md)
+  - [FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
+
+Observacao operacional:
+
+- para o contexto atual da pasta em `iCloud`, o verificador principal de conclusao passa a ser [verificar_fase4_postgres.py](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/verificar_fase4_postgres.py), e nao mais o `manage.py check`.
 
 ### Fase 5: Padronizacao de volumes e arquivos
 

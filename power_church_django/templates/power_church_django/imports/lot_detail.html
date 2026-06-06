@@ -25,26 +25,37 @@
       <div class="section-head">
         <div>
           <h2>Processamento do lote</h2>
-          <p>Estas ações usam a mesma regra homologada do sistema anterior: reprocessar preserva decisões manuais, sincronizar importa o que ja esta pronto e encerrar move o restante para a central de contribuintes.</p>
+          <p>Estas ações seguem a regra homologada do sistema anterior: preparar para auditoria lança o financeiro, gera recibos apenas do que ficou pronto e mantém o lote em parcial; encerrar fica reservado para o operador, depois da auditoria humana.</p>
         </div>
       </div>
       <div class="actions">
         <form method="post">
           {% csrf_token %}
+          <input type="hidden" name="backend" value="{{ backend }}">
           <input type="hidden" name="status" value="{{ status }}">
           <button type="submit" name="action" value="reprocess">Reprocessar lote</button>
         </form>
+        {% if detail.kind == "statement" %}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="backend" value="{{ backend }}">
+            <input type="hidden" name="status" value="{{ status }}">
+            <button type="submit" name="action" value="prepare">Preparar para auditoria</button>
+          </form>
+        {% endif %}
         {% if detail.kind == "pix" %}
           <form method="post">
             {% csrf_token %}
+            <input type="hidden" name="backend" value="{{ backend }}">
             <input type="hidden" name="status" value="{{ status }}">
             <button type="submit" name="action" value="import_ready">Sincronizar financeiro</button>
           </form>
         {% endif %}
         <form method="post">
           {% csrf_token %}
+          <input type="hidden" name="backend" value="{{ backend }}">
           <input type="hidden" name="status" value="{{ status }}">
-          <button class="button secondary" type="submit" name="action" value="close">Encerrar lote</button>
+          <button class="button secondary" type="submit" name="action" value="close">Encerrar lote manualmente</button>
         </form>
         <a class="button" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/?status=pendencias">Auditar pendencias</a>
         <a class="button secondary" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/?status=revisar_destinacao">Destinacoes especiais</a>
@@ -128,6 +139,7 @@
                   {% if item.candidate_person_id and item.review_status != "revisar_destinacao" %}
                     <form method="post">
                       {% csrf_token %}
+                      <input type="hidden" name="backend" value="{{ backend }}">
                       <input type="hidden" name="status" value="{{ status }}">
                       <input type="hidden" name="movement_id" value="{{ item.id }}">
                       <input type="hidden" name="resolved_person_id" value="{{ item.candidate_person_id }}">

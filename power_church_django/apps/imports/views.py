@@ -13,6 +13,7 @@ from power_church_django.services.legacy_bank_write import (
     create_pix_lot_from_upload,
     create_statement_lot_from_upload,
     import_ready_pix_lot,
+    prepare_statement_lot_for_audit,
     reprocess_bank_lot,
     save_cent_rule_from_form,
     update_bank_movement_from_form,
@@ -21,16 +22,26 @@ from power_church_django.services.legacy import (
     LegacyDatabaseError,
     cent_rules_data,
     dashboard_summary,
-    get_bank_movement_detail,
-    get_import_lot_detail,
     list_import_lots,
 )
 from .services import (
+    close_statement_lot_postgres_native,
+    create_statement_lot_postgres_native,
     get_statement_movement_detail_from_snapshot,
     get_statement_lot_detail_from_snapshot,
     overlay_statement_lot_snapshots,
+    prepare_statement_lot_postgres_native,
+    reprocess_statement_lot_postgres_native,
     sync_statement_lot_snapshot_from_legacy,
+    update_statement_movement_postgres_native,
 )
+
+
+def _actor(request: HttpRequest) -> str:
+    user = getattr(request, "user", None)
+    if getattr(user, "is_authenticated", False):
+        return str(user.username)
+    return "django"
 
 
 @login_required
@@ -45,12 +56,14 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
 def index(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
+        actor = _actor(request)
         upload = request.FILES.get("extrato_pdf")
         if upload is None:
             messages.error(request, "Selecione um PDF bancario antes de importar.")
             return redirect("/imports/")
         payload = b"".join(upload.chunks())
         import_kind = str(request.POST.get("import_kind") or "statement").strip()
+        storage_backend = str(request.POST.get("storage_backend") or "legacy").strip().lower()
         pdf_provider_mode = str(request.POST.get("pdf_provider_mode") or "compare_pymupdf").strip()
         provider_label = next(
             (
@@ -68,15 +81,41 @@ def index(request: HttpRequest) -> HttpResponse:
             return redirect("/imports/")
         try:
             layout_code = str(request.POST.get("layout_code") or "SICOOB_CONTA_CORRENTE").strip().upper()
+            if storage_backend == "postgres_native":
+                native_lot = create_statement_lot_postgres_native(
+                    filename=upload.name,
+                    payload=payload,
+                    layout_code=layout_code,
+                    pdf_provider="pymupdf" if pdf_provider_mode in {"compare_pymupdf", "pymupdf"} else "swift_pdfkit",
+                    comparison_ok=pdf_provider_mode != "compare_pymupdf",
+                    comparison_note=(
+                        "Lote nativo de validacao criado pelo Django."
+                        if pdf_provider_mode != "compare_pymupdf"
+                        else "Lote nativo de validacao criado no Postgres com foco em portabilidade."
+                    ),
+                )
+                messages.success(
+                    request,
+                    f"Lote nativo de validacao #{native_lot.id} criado diretamente no Postgres com "
+                    f"{int(native_lot.movement_count or 0)} movimento(s).",
+                )
+                return redirect(f"/imports/statement/{int(native_lot.id)}/?backend=postgres_nativo")
             lot_id = create_statement_lot_from_upload(
                 upload.name,
                 payload,
                 layout_code=layout_code,
                 pdf_provider_mode=pdf_provider_mode,
             )
+            preparation = prepare_statement_lot_for_audit(lot_id, actor=actor)
             sync_statement_lot_snapshot_from_legacy(lot_id)
             layout_label = STATEMENT_LAYOUT_LABELS.get(layout_code, layout_code)
-            messages.success(request, f"Lote de extrato #{lot_id} ({layout_label}) criado com sucesso no Django. Motor PDF: {provider_label}.")
+            messages.success(
+                request,
+                f"Lote de extrato #{lot_id} ({layout_label}) criado e preparado para auditoria no Django. "
+                f"Financeiro sincronizado: {int(preparation.get('importados', 0) or 0)} movimento(s). "
+                f"Recibos automáticos enfileirados: {int(preparation.get('auto_receipt_queued', 0) or 0)}. "
+                f"Motor PDF: {provider_label}.",
+            )
             return redirect(f"/imports/statement/{lot_id}/?status=pendencias")
         except LegacyBankWriteError as exc:
             messages.error(request, str(exc))
@@ -118,25 +157,73 @@ def cent_rules(request: HttpRequest) -> HttpResponse:
 
 def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
     kind = "pix" if kind == "pix" else "statement"
+    backend = str(request.POST.get("backend") or request.GET.get("backend") or "").strip()
+    if kind == "pix":
+        messages.error(
+            request,
+            "Nesta versao, o caminho oficial e o extrato bancario completo. O modulo PIX isolado ficou fora da operacao.",
+        )
+        return redirect("/imports/")
     if request.method == "POST":
+        actor = _actor(request)
         action = str(request.POST.get("action") or "").strip()
         status = str(request.POST.get("status") or request.GET.get("status") or "").strip()
         target = f"/imports/{kind}/{lot_id}/"
+        if backend == "postgres_nativo":
+            target = f"{target}?backend=postgres_nativo"
         if status:
-            target = f"{target}?status={status}"
+            separator = "&" if "?" in target else "?"
+            target = f"{target}{separator}status={status}"
         try:
             if action == "reprocess":
-                updated = reprocess_bank_lot(kind, lot_id)
-                if kind == "statement":
+                if kind == "statement" and backend == "postgres_nativo":
+                    updated = reprocess_statement_lot_postgres_native(lot_id)
+                    preparation = prepare_statement_lot_postgres_native(lot_id, actor=actor)
+                    messages.success(
+                        request,
+                        f"Lote nativo reprocessado. {updated} movimento(s) foram recalculados e "
+                        f"{int(preparation.get('reviewed', 0) or 0)} item(ns) ficaram prontos para auditoria no Postgres.",
+                    )
+                else:
+                    updated = reprocess_bank_lot(kind, lot_id)
+                    if kind == "statement":
+                        preparation = prepare_statement_lot_for_audit(lot_id, actor=actor)
+                        sync_statement_lot_snapshot_from_legacy(lot_id)
+                        messages.success(
+                            request,
+                            f"Lote reprocessado. {updated} movimento(s) foram revistos, "
+                            f"{int(preparation.get('importados', 0) or 0)} movimento(s) ficaram sincronizados no financeiro "
+                            f"e {int(preparation.get('auto_receipt_queued', 0) or 0)} recibo(s) automático(s) ficaram na fila.",
+                        )
+                    else:
+                        messages.success(request, f"Lote reprocessado. {updated} movimento(s) foram revistos e o financeiro foi sincronizado.")
+            elif action == "prepare" and kind == "statement":
+                if backend == "postgres_nativo":
+                    result = prepare_statement_lot_postgres_native(lot_id, actor=actor)
+                    messages.success(
+                        request,
+                        f"Lote nativo preparado para auditoria. {int(result.get('reviewed', 0) or 0)} movimento(s) "
+                        f"foram classificados no Postgres, sem depender do legado.",
+                    )
+                else:
+                    result = prepare_statement_lot_for_audit(lot_id, actor=actor)
                     sync_statement_lot_snapshot_from_legacy(lot_id)
-                messages.success(request, f"Lote reprocessado. {updated} movimento(s) foram revistos e o financeiro foi sincronizado.")
+                    messages.success(
+                        request,
+                        f"Lote preparado para auditoria. {int(result.get('importados', 0) or 0)} movimento(s) no financeiro, "
+                        f"{int(result.get('auto_receipt_created', 0) or 0)} recibo(s) criado(s) e "
+                        f"{int(result.get('auto_receipt_queued', 0) or 0)} envio(s) deixado(s) na fila.",
+                    )
             elif action == "approve_movement":
                 movement_id = int(request.POST.get("movement_id") or 0)
                 if not movement_id:
                     raise LegacyBankWriteError("Movimento nao informado para confirmacao.")
-                imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
-                if kind == "statement":
-                    sync_statement_lot_snapshot_from_legacy(lot_id)
+                if kind == "statement" and backend == "postgres_nativo":
+                    imported_contribution_id = update_statement_movement_postgres_native(movement_id, request.POST, actor=actor)
+                else:
+                    imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
+                    if kind == "statement":
+                        sync_statement_lot_snapshot_from_legacy(lot_id)
                 if imported_contribution_id:
                     messages.success(request, f"Movimento #{movement_id} confirmado no lote e sincronizado com a contribuicao #{imported_contribution_id}.")
                 else:
@@ -145,16 +232,20 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
                 imported = import_ready_pix_lot(lot_id)
                 messages.success(request, f"Financeiro do lote PIX sincronizado. {imported} movimento(s) receberam lancamento.")
             elif action == "close":
-                result = close_bank_lot(kind, lot_id)
-                if kind == "statement":
-                    sync_statement_lot_snapshot_from_legacy(lot_id)
+                if kind == "statement" and backend == "postgres_nativo":
+                    result = close_statement_lot_postgres_native(lot_id, actor=actor)
+                else:
+                    result = close_bank_lot(kind, lot_id, actor=actor)
+                    if kind == "statement":
+                        sync_statement_lot_snapshot_from_legacy(lot_id)
                 messages.success(
                     request,
-                    f"Lote encerrado. {result.get('importados', 0)} movimento(s) sincronizados e {result.get('movidos_contribuintes', 0)} pendencia(s) preservadas na central de contribuintes.",
+                    f"Lote encerrado manualmente pelo operador. {result.get('importados', 0)} movimento(s) sincronizados e "
+                    f"{result.get('movidos_contribuintes', 0)} pendencia(s) preservadas na central de contribuintes.",
                 )
             else:
                 messages.error(request, "Acao de lote nao reconhecida.")
-        except LegacyBankWriteError as exc:
+        except (LegacyBankWriteError, ValueError) as exc:
             messages.error(request, str(exc))
         return redirect(target)
 
@@ -162,16 +253,10 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
         "title": "Detalhe do lote",
         "kind": kind,
         "status": request.GET.get("status", ""),
+        "backend": backend,
     }
     try:
-        if kind == "statement":
-            context["detail"] = get_statement_lot_detail_from_snapshot(lot_id=lot_id, status=context["status"]) or get_import_lot_detail(
-                kind=kind,
-                lot_id=lot_id,
-                status=context["status"],
-            )
-        else:
-            context["detail"] = get_import_lot_detail(kind=kind, lot_id=lot_id, status=context["status"])
+        context["detail"] = get_statement_lot_detail_from_snapshot(lot_id=lot_id, status=context["status"], backend=backend)
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/imports/lot_detail.html", context)
@@ -179,6 +264,13 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
 
 def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpResponse:
     kind = "pix" if kind == "pix" else "statement"
+    backend = str(request.POST.get("backend") or request.GET.get("backend") or "").strip()
+    if kind == "pix":
+        messages.error(
+            request,
+            "Nesta versao, o caminho oficial e o extrato bancario completo. O modulo PIX isolado ficou fora da operacao.",
+        )
+        return redirect("/imports/")
     if request.method == "POST":
         return_to = str(request.POST.get("return_to") or f"/imports/{kind}/").strip()
         if not return_to.startswith("/imports/"):
@@ -186,9 +278,12 @@ def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpRe
         action = str(request.POST.get("action") or "approve").strip()
         lot_id = int(request.POST.get("lot_id") or 0)
         try:
-            imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
-            if kind == "statement" and lot_id:
-                sync_statement_lot_snapshot_from_legacy(lot_id)
+            if kind == "statement" and backend == "postgres_nativo":
+                imported_contribution_id = update_statement_movement_postgres_native(movement_id, request.POST, actor=_actor(request))
+            else:
+                imported_contribution_id = update_bank_movement_from_form(kind, movement_id, request.POST)
+                if kind == "statement" and lot_id:
+                    sync_statement_lot_snapshot_from_legacy(lot_id)
             if action == "same_owner":
                 messages.success(request, "Movimento classificado como mesma titularidade / origem interna.")
             elif action == "ignore":
@@ -198,9 +293,12 @@ def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpRe
             else:
                 messages.success(request, "Movimento confirmado com sucesso.")
             return redirect(return_to)
-        except LegacyBankWriteError as exc:
+        except (LegacyBankWriteError, ValueError) as exc:
             messages.error(request, str(exc))
-            return redirect(f"/imports/{kind}/movement/{movement_id}/")
+            target = f"/imports/{kind}/movement/{movement_id}/"
+            if backend == "postgres_nativo":
+                target = f"{target}?backend=postgres_nativo"
+            return redirect(target)
 
     default_return_to = f"/imports/{kind}/"
     return_to = str(request.GET.get("return_to") or "").strip()
@@ -211,20 +309,14 @@ def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpRe
         "kind": kind,
         "lookup": request.GET.get("lookup", ""),
         "return_to": return_to,
+        "backend": backend,
     }
     try:
-        if kind == "statement":
-            context["detail"] = get_statement_movement_detail_from_snapshot(movement_id=movement_id, lookup=context["lookup"]) or get_bank_movement_detail(
-                kind=kind,
-                movement_id=movement_id,
-                lookup=context["lookup"],
-            )
-        else:
-            context["detail"] = get_bank_movement_detail(
-                kind=kind,
-                movement_id=movement_id,
-                lookup=context["lookup"],
-            )
+        context["detail"] = get_statement_movement_detail_from_snapshot(
+            movement_id=movement_id,
+            lookup=context["lookup"],
+            backend=backend,
+        )
         if context["detail"] and context["return_to"] == default_return_to:
             context["return_to"] = context["detail"]["lot_url"]
     except LegacyDatabaseError as exc:

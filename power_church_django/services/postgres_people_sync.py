@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 
 from power_church_core.normalization import normalize_match_name, normalize_query
+from power_church_django.apps.contributions.models import ContributionTypeSnapshot
 from power_church_django.apps.people.models import (
     HouseholdProfile,
     PersonAddressSnapshot,
@@ -381,6 +382,57 @@ def sync_people_snapshots(legacy_db_path: Path, actor: str = "django:etapa2_sync
         table_name="people_personsnapshot",
         source="stage2_people_sync",
         summary="Espelho cadastral sincronizado do legado SQLite para o Postgres.",
+        after=stats,
+    )
+    return stats
+
+
+def sync_contribution_type_snapshots(
+    legacy_db_path: Path,
+    actor: str = "django:catalog_sync",
+) -> dict[str, Any]:
+    with _connect_legacy(legacy_db_path) as conn:
+        type_rows = conn.execute(
+            """
+            SELECT id, organizacao_id, codigo, nome, ativo
+              FROM tipos_contribuicao
+             ORDER BY organizacao_id, nome COLLATE NOCASE, id
+            """
+        ).fetchall()
+
+    with transaction.atomic():
+        ContributionTypeSnapshot.objects.all().delete()
+        ContributionTypeSnapshot.objects.bulk_create(
+            [
+                ContributionTypeSnapshot(
+                    legacy_id=int(row["id"] or 0),
+                    organization_id=int(row["organizacao_id"] or 0),
+                    code=normalize_query(row["codigo"]),
+                    name=normalize_query(row["nome"]),
+                    is_active=bool(int(row["ativo"] or 0)),
+                )
+                for row in type_rows
+            ],
+            batch_size=500,
+        )
+
+    legacy_total = len(type_rows)
+    postgres_total = ContributionTypeSnapshot.objects.count()
+    legacy_active = sum(1 for row in type_rows if bool(int(row["ativo"] or 0)))
+    postgres_active = ContributionTypeSnapshot.objects.filter(is_active=True).count()
+    stats = {
+        "legacy_contribution_types_total": legacy_total,
+        "postgres_contribution_types_total": postgres_total,
+        "legacy_contribution_types_active": legacy_active,
+        "postgres_contribution_types_active": postgres_active,
+        "counts_match": legacy_total == postgres_total and legacy_active == postgres_active,
+    }
+    record_django_audit_event(
+        actor=actor,
+        action="sincronizar_espelho_tipos_contribuicao_postgres",
+        table_name="contributions_contributiontypesnapshot",
+        source="stage4_catalog_sync",
+        summary="Espelho de tipos de contribuicao sincronizado do legado SQLite para o Postgres.",
         after=stats,
     )
     return stats

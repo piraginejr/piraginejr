@@ -18,7 +18,18 @@ Estado observado no codigo:
 Conclusao pratica:
 
 - o projeto ja tem um bom ponto de partida para `staging` em nuvem;
-- para `producao multiusuario real`, o principal cuidado nao e o Django em si, e sim a dependencia funcional do banco legado SQLite.
+- a migracao funcional para `PostgreSQL` ja foi fechada localmente;
+- a proxima frente passa a ser `empacotamento e hospedagem`, nao mais migracao de banco;
+- para `producao multiusuario real`, o principal cuidado agora deixa de ser o banco legado e passa a ser:
+  - containerizacao,
+  - volumes persistentes,
+  - dump/restore,
+  - seguranca operacional.
+
+Evidencia de fechamento local da migracao:
+
+- [FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
+- [verificar_fase4_postgres_20260606_121107.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/verificar_fase4_postgres_20260606_121107.md)
 
 ## 2.1 Demandas Ja Recebidas Do Gestor Do Servidor
 

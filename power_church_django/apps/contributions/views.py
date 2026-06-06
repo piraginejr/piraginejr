@@ -40,7 +40,6 @@ from power_church_django.services.legacy import (
     get_next_pending_envelope_id,
     get_contribution_detail,
     get_contributor_detail,
-    get_receipt_detail,
     list_envelopes,
     list_contributions,
     list_contributors,
@@ -60,11 +59,13 @@ from power_church_django.services.pdf_reports import person_statement_pdf, perso
 from power_church_django.services.receipt_delivery import (
     email_runtime_snapshot,
     enrich_receipt_form,
+    get_receipt_detail_cached,
     refresh_receipt_dispatch_destination,
     queue_receipt_dispatches,
     receipt_dispatch_history,
     send_receipt_dispatch,
     issue_and_optionally_send_receipts,
+    sync_receipt_snapshots,
     update_receipt_email_template,
 )
 from power_church_django.services.mail_dispatch import MailAttachment, send_email_message
@@ -245,7 +246,7 @@ def _receipt_return_query(payload: object, fallback_selected_person_id: int = 0)
 def _generated_receipt_cards(receipt_ids: list[int]) -> list[dict[str, object]]:
     cards: list[dict[str, object]] = []
     for receipt_id in receipt_ids:
-        detail = get_receipt_detail(int(receipt_id or 0))
+        detail = get_receipt_detail_cached(int(receipt_id or 0))
         if not detail:
             continue
         receipt = detail.get("receipt") or {}
@@ -720,21 +721,14 @@ def envelope_image(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if not detail or not detail.get("has_image"):
         raise Http404("Imagem nao encontrada.")
     root = Path(envelope_upload_root()).resolve()
-    # A leitura do caminho real fica no banco legado; validamos que ele continua dentro da pasta de envelopes.
-    from power_church_django.services.legacy import connect_legacy
-
-    with connect_legacy() as conn:
-        row = conn.execute("SELECT caminho_imagem, imagem_content_type FROM envelopes WHERE id = ? AND ativo = 1", (envelope_id,)).fetchone()
-    if row is None:
-        raise Http404("Imagem nao encontrada.")
-    path = Path(str(row["caminho_imagem"] or "")).resolve()
+    path = Path(str(detail.get("image_path") or "")).resolve()
     try:
         path.relative_to(root)
     except ValueError as exc:
         raise Http404("Imagem fora da pasta de envelopes.") from exc
     if not path.exists():
         raise Http404("Arquivo do envelope nao encontrado.")
-    content_type = str(row["imagem_content_type"] or "") or None
+    content_type = str(detail.get("image_content_type") or "") or None
     return FileResponse(path.open("rb"), content_type=content_type)
 
 
@@ -1089,6 +1083,10 @@ def receipt_new(request: HttpRequest) -> HttpResponse:
         person_id = request.POST.get("pessoa_id", "")
         try:
             receipt_id = create_receipt(request.POST, actor=_actor(request), replace_existing=True)
+            sync_receipt_snapshots(
+                receipt_ids=[int(receipt_id or 0)],
+                person_ids=[int(person_id or 0)] if int(person_id or 0) else None,
+            )
             messages.success(request, f"Recibo #{receipt_id} gerado com auditoria.")
             return redirect(f"/receipts/{receipt_id}/")
         except LegacyWriteError as exc:
@@ -1111,7 +1109,7 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
         try:
             fields = _receipt_message_fields(request.POST)
             _maybe_save_receipt_template(request.POST, actor=_actor(request))
-            person_id = int((get_receipt_detail(receipt_id) or {}).get("receipt", {}).get("person_id") or 0)
+            person_id = int((get_receipt_detail_cached(receipt_id) or {}).get("receipt", {}).get("person_id") or 0)
             email_updated = _maybe_update_person_email_for_manual_receipt(
                 person_id=person_id,
                 fields=fields,
@@ -1133,7 +1131,7 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
         return redirect(f"/receipts/{receipt_id}/")
     context = {"title": "Recibo"}
     try:
-        context["detail"] = get_receipt_detail(receipt_id)
+        context["detail"] = get_receipt_detail_cached(receipt_id)
         if context["detail"]:
             person_id = int((context["detail"].get("receipt") or {}).get("person_id") or 0)
             context["dispatch_history"] = [
@@ -1155,7 +1153,7 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
 
 
 def receipt_pdf_view(request: HttpRequest, receipt_id: int) -> HttpResponse:
-    detail = get_receipt_detail(receipt_id)
+    detail = get_receipt_detail_cached(receipt_id)
     if detail is None:
         raise Http404("Recibo nao encontrado.")
     payload = receipt_pdf(detail)

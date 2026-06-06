@@ -4051,6 +4051,8 @@ def get_envelope_detail(envelope_id: int) -> dict[str, Any] | None:
         "imagem_hash": row["imagem_hash"] or "",
         "caminho_pasta": row["caminho_pasta"] or "",
         "has_image": bool(row["caminho_imagem"]),
+        "image_path": str(row["caminho_imagem"] or ""),
+        "image_content_type": str(row["imagem_content_type"] or ""),
         "image_url": f"/contributions/envelopes/{moneyless_int(row['id'])}/image/" if row["caminho_imagem"] else "",
         "is_image": is_image,
         "items": items,

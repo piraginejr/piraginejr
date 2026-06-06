@@ -83,7 +83,7 @@ STAGES: dict[str, dict[str, object]] = {
         "title": "Etapa 4 - Importacoes bancarias, conciliacoes e prontidao para nuvem",
         "roteiro": ROOT / "data" / "homologacao" / "ROTEIRO_OPERADOR_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md",
         "steps": (
-            ("manage.py check", lambda db: [str(DJANGO_VENV_PYTHON), str(MANAGE_PY), "check"]),
+            ("Verificador de termino da Fase 4", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_fase4_postgres.py"), "--db", str(db), "--report"]),
             ("Dados operacionais", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_dados_operacionais.py"), "--db", str(db), "--report"]),
             ("Prontidao da transicao", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_prontidao_transicao.py"), "--db", str(db), "--report"]),
             ("Paridade Django", lambda db: [sys.executable, str(ROOT / "scripts" / "verificar_paridade_django.py"), "--db", str(db), "--report"]),

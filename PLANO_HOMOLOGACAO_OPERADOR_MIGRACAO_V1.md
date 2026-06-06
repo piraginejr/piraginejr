@@ -106,6 +106,7 @@ Observacao operacional:
 ### Etapa 4
 
 - roteiro: [ROTEIRO_OPERADOR_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/ROTEIRO_OPERADOR_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
+- fechamento tecnico: [FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
 - foco:
   - importacoes
   - lotes de extrato
@@ -148,11 +149,12 @@ Observacao operacional:
 
 ### Etapa 4 - Importacoes e conciliacoes
 
-- `manage.py check`
+- `scripts/verificar_fase4_postgres.py`
 - `scripts/verificar_dados_operacionais.py`
 - `scripts/verificar_prontidao_transicao.py`
 - `scripts/verificar_paridade_django.py`
 - `scripts/verificar_funcionalidade_total.py`
+- fechamento tecnico: [FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_ETAPA4_IMPORTACOES_CONCILIACOES_V1.md)
 
 ## 6. Cenarios Criticos Que Nao Podem Ser Pulados
 
@@ -187,4 +189,4 @@ Ao final da Etapa 4, o projeto deve ter:
 - relatorios tecnicos por etapa;
 - roteiros do operador preenchiveis e reutilizaveis;
 - homologacao curta, objetiva e auditavel;
-- base local pronta para a preparacao da VM na nuvem.
+- base local pronta para a preparacao da hospedagem containerizada na nuvem.

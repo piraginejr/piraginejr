@@ -5,15 +5,18 @@ from typing import Any
 
 from django.http import HttpResponse
 from django.db.models import Q
-from django.db.utils import OperationalError as DjangoOperationalError, ProgrammingError as DjangoProgrammingError
 from import_export.formats import base_formats
 from tablib import Dataset
 
 from power_church_core.formatting import br_date, br_datetime
 from power_church_core.normalization import format_cpf, moneyless_int, normalize_match_name
-from power_church_django.apps.people.models import PersonAddressSnapshot, PersonSnapshot
+from power_church_django.apps.people.models import (
+    PersonAddressSnapshot,
+    PersonContributionSnapshot,
+    PersonContributorSnapshot,
+    PersonSnapshot,
+)
 from power_church_django.services.legacy import (
-    connect_legacy,
     format_status,
     organized_family_nuclei,
     status_sigla,
@@ -309,60 +312,58 @@ def _people_export_rows_from_snapshots(q: str = "", status: str = "", city: str 
     contributor_index: dict[int, dict[str, Any]] = {}
     contribution_index: dict[int, dict[str, Any]] = {}
     if person_ids:
-        placeholders = ",".join("?" for _ in person_ids)
-        with connect_legacy() as conn:
-            contributor_rows = conn.execute(
-                f"""
-                SELECT pessoa_id,
-                       COUNT(*) AS quantidade,
-                       GROUP_CONCAT(COALESCE(nome, ''), ' / ') AS nomes
-                  FROM contribuintes
-                 WHERE ativo = 1
-                   AND pessoa_id IN ({placeholders})
-                 GROUP BY pessoa_id
-                """,
-                tuple(person_ids),
-            ).fetchall()
-            contribution_rows = conn.execute(
-                f"""
-                SELECT c1.pessoa_id,
-                       COUNT(*) AS quantidade,
-                       COALESCE(SUM(c1.valor), 0) AS total_valor,
-                       MIN(COALESCE(c1.data_recebimento, '')) AS primeira_data,
-                       MAX(COALESCE(c1.data_recebimento, '')) AS ultima_data,
-                       (
-                           SELECT COALESCE(c2.competencia, '')
-                             FROM contribuicoes c2
-                            WHERE c2.ativo = 1
-                              AND c2.pessoa_id = c1.pessoa_id
-                            ORDER BY COALESCE(c2.competencia_ordem, 0) DESC,
-                                     COALESCE(c2.data_recebimento, '') DESC,
-                                     c2.id DESC
-                            LIMIT 1
-                       ) AS ultima_competencia
-                  FROM contribuicoes c1
-                 WHERE c1.ativo = 1
-                   AND c1.pessoa_id IN ({placeholders})
-                 GROUP BY c1.pessoa_id
-                """,
-                tuple(person_ids),
-            ).fetchall()
+        contributor_groups: dict[int, list[str]] = {}
+        for contributor in (
+            PersonContributorSnapshot.objects.filter(person_id__in=person_ids, is_active=True)
+            .only("person_id", "name")
+            .order_by("person_id", "name", "legacy_id")
+        ):
+            contributor_groups.setdefault(int(contributor.person_id), []).append(contributor.name or "")
         contributor_index = {
-            moneyless_int(row["pessoa_id"]): {
-                "count": moneyless_int(row["quantidade"]),
-                "names": row["nomes"] or "",
+            person_id: {
+                "count": len(names),
+                "names": " / ".join(name for name in names if name),
             }
-            for row in contributor_rows
+            for person_id, names in contributor_groups.items()
         }
+        contributions_by_person: dict[int, dict[str, Any]] = {}
+        for contribution in (
+            PersonContributionSnapshot.objects.filter(person_id__in=person_ids, is_active=True)
+            .only("person_id", "amount", "received_at_raw", "competence", "competence_order", "legacy_id")
+            .order_by("person_id", "-competence_order", "-received_at", "-legacy_id")
+        ):
+            person_id = int(contribution.person_id)
+            item = contributions_by_person.setdefault(
+                person_id,
+                {
+                    "count": 0,
+                    "total": 0.0,
+                    "first_date": "",
+                    "last_date": "",
+                    "last_competencia": "",
+                    "_best_order": -1,
+                },
+            )
+            item["count"] += 1
+            item["total"] += round(float(contribution.amount or 0), 2)
+            received_at_raw = str(contribution.received_at_raw or "")
+            if received_at_raw and (not item["first_date"] or received_at_raw < item["first_date"]):
+                item["first_date"] = received_at_raw
+            if received_at_raw and (not item["last_date"] or received_at_raw > item["last_date"]):
+                item["last_date"] = received_at_raw
+            competence_order = int(contribution.competence_order or 0)
+            if competence_order > int(item["_best_order"]):
+                item["_best_order"] = competence_order
+                item["last_competencia"] = contribution.competence or ""
         contribution_index = {
-            moneyless_int(row["pessoa_id"]): {
-                "count": moneyless_int(row["quantidade"]),
-                "total": round(float(row["total_valor"] or 0), 2),
-                "first_date": row["primeira_data"] or "",
-                "last_date": row["ultima_data"] or "",
-                "last_competencia": row["ultima_competencia"] or "",
+            person_id: {
+                "count": int(item["count"] or 0),
+                "total": round(float(item["total"] or 0), 2),
+                "first_date": item["first_date"] or "",
+                "last_date": item["last_date"] or "",
+                "last_competencia": item["last_competencia"] or "",
             }
-            for row in contribution_rows
+            for person_id, item in contributions_by_person.items()
         }
 
     family_index: dict[int, dict[str, Any]] = {}
@@ -454,169 +455,7 @@ def _people_export_rows_from_snapshots(q: str = "", status: str = "", city: str 
 
 
 def _people_export_rows(q: str = "", status: str = "", city: str = "") -> tuple[list[dict[str, Any]], int]:
-    try:
-        return _people_export_rows_from_snapshots(q=q, status=status, city=city)
-    except (DjangoOperationalError, DjangoProgrammingError, PersonSnapshot.DoesNotExist, RuntimeError, ValueError):
-        pass
-    where, params = _people_filters(q=q, status=status, city=city)
-    with connect_legacy() as conn:
-        total = int(conn.execute(f"SELECT COUNT(*) FROM pessoas p WHERE {where}", tuple(params)).fetchone()[0] or 0)
-        rows = conn.execute(
-            f"""
-            SELECT p.id, p.codigo_interno, p.nome, p.nome_social, p.cpf, p.rg,
-                   p.data_nascimento, p.sexo, p.estado_civil, p.email_principal,
-                   p.telefone_principal, p.whatsapp_principal, p.status,
-                   p.observacoes, p.import_lote_id, p.ativo, p.criado_em, p.atualizado_em,
-                   e.tipo AS endereco_tipo, e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-              FROM pessoas p
-              LEFT JOIN pessoa_enderecos e
-                ON e.id = (
-                    SELECT pe.id
-                      FROM pessoa_enderecos pe
-                     WHERE pe.pessoa_id = p.id
-                     ORDER BY COALESCE(pe.principal, 0) DESC, pe.id ASC
-                     LIMIT 1
-                )
-             WHERE {where}
-             ORDER BY p.nome COLLATE NOCASE ASC, p.id ASC
-            """,
-            tuple(params),
-        ).fetchall()
-        contributor_rows = conn.execute(
-            """
-            SELECT pessoa_id,
-                   COUNT(*) AS quantidade,
-                   GROUP_CONCAT(COALESCE(nome, ''), ' / ') AS nomes
-              FROM contribuintes
-             WHERE ativo = 1
-               AND pessoa_id IS NOT NULL
-             GROUP BY pessoa_id
-            """
-        ).fetchall()
-        contribution_rows = conn.execute(
-            """
-            SELECT c1.pessoa_id,
-                   COUNT(*) AS quantidade,
-                   COALESCE(SUM(c1.valor), 0) AS total_valor,
-                   MIN(COALESCE(c1.data_recebimento, '')) AS primeira_data,
-                   MAX(COALESCE(c1.data_recebimento, '')) AS ultima_data,
-                   (
-                       SELECT COALESCE(c2.competencia, '')
-                         FROM contribuicoes c2
-                        WHERE c2.ativo = 1
-                          AND c2.pessoa_id = c1.pessoa_id
-                        ORDER BY COALESCE(c2.competencia_ordem, 0) DESC,
-                                 COALESCE(c2.data_recebimento, '') DESC,
-                                 c2.id DESC
-                        LIMIT 1
-                   ) AS ultima_competencia
-              FROM contribuicoes c1
-             WHERE c1.ativo = 1
-               AND c1.pessoa_id IS NOT NULL
-             GROUP BY c1.pessoa_id
-            """
-        ).fetchall()
-    contributor_index = {
-        moneyless_int(row["pessoa_id"]): {
-            "count": moneyless_int(row["quantidade"]),
-            "names": row["nomes"] or "",
-        }
-        for row in contributor_rows
-    }
-    contribution_index = {
-        moneyless_int(row["pessoa_id"]): {
-            "count": moneyless_int(row["quantidade"]),
-            "total": round(float(row["total_valor"] or 0), 2),
-            "first_date": row["primeira_data"] or "",
-            "last_date": row["ultima_data"] or "",
-            "last_competencia": row["ultima_competencia"] or "",
-        }
-        for row in contribution_rows
-    }
-    family_index: dict[int, dict[str, Any]] = {}
-    all_nuclei = organized_family_nuclei(q="", cep="", review="all")["items"]
-    for nucleus in all_nuclei:
-        family_payload = {
-            "tem_familia_domiciliar": "Sim",
-            "familia_domiciliar": nucleus.get("label") or "",
-            "familia_sobrenome": nucleus.get("surname_label") or "",
-            "familia_qtd_membros": moneyless_int(nucleus.get("member_count")),
-            "familia_membros": nucleus.get("member_names") or "",
-            "familia_alinhamento": nucleus.get("alignment_badge") or "",
-            "familia_precisa_auditoria": _bool_text(bool(nucleus.get("needs_review"))),
-            "familia_tem_contribuinte": _bool_text(bool(nucleus.get("has_financial_member"))),
-            "familia_resumo_financeiro": nucleus.get("financial_summary", {}).get("note") or "",
-        }
-        for person in nucleus.get("people") or []:
-            family_index[moneyless_int(person.get("id"))] = family_payload
-    export_rows: list[dict[str, Any]] = []
-    for row in rows:
-        person_id = moneyless_int(row["id"])
-        contributor = contributor_index.get(person_id, {})
-        contribution = contribution_index.get(person_id, {})
-        family = family_index.get(
-            person_id,
-            {
-                "tem_familia_domiciliar": "Nao",
-                "familia_domiciliar": "",
-                "familia_sobrenome": "",
-                "familia_qtd_membros": 0,
-                "familia_membros": "",
-                "familia_alinhamento": "",
-                "familia_precisa_auditoria": "Nao",
-                "familia_tem_contribuinte": "Nao",
-                "familia_resumo_financeiro": "",
-            },
-        )
-        export_rows.append(
-            {
-                "id": person_id,
-                "codigo": row["codigo_interno"] or "",
-                "nome": row["nome"] or "",
-                "nome_social": row["nome_social"] or "",
-                "cpf": format_cpf(row["cpf"]),
-                "rg": row["rg"] or "",
-                "data_nascimento": br_date(row["data_nascimento"]),
-                "sexo": row["sexo"] or "",
-                "estado_civil": row["estado_civil"] or "",
-                "status": format_status(row["status"]),
-                "sigla": status_sigla(row["status"], True),
-                "ativo": _bool_text(bool(row["ativo"])),
-                "email": row["email_principal"] or "",
-                "telefone": row["telefone_principal"] or "",
-                "whatsapp": row["whatsapp_principal"] or "",
-                "endereco_tipo": row["endereco_tipo"] or "",
-                "endereco_completo": _primary_address_line(dict(row)),
-                "cep": row["cep"] or "",
-                "logradouro": row["logradouro"] or "",
-                "numero": row["numero"] or "",
-                "complemento": row["complemento"] or "",
-                "bairro": row["bairro"] or "",
-                "cidade": row["cidade"] or "",
-                "uf": row["uf"] or "",
-                "tem_familia_domiciliar": family["tem_familia_domiciliar"],
-                "familia_domiciliar": family["familia_domiciliar"],
-                "familia_sobrenome": family["familia_sobrenome"],
-                "familia_qtd_membros": family["familia_qtd_membros"],
-                "familia_membros": family["familia_membros"],
-                "familia_alinhamento": family["familia_alinhamento"],
-                "familia_precisa_auditoria": family["familia_precisa_auditoria"],
-                "familia_tem_contribuinte": family["familia_tem_contribuinte"],
-                "familia_resumo_financeiro": family["familia_resumo_financeiro"],
-                "contribuintes_vinculados": moneyless_int(contributor.get("count")),
-                "nomes_contribuintes_vinculados": contributor.get("names", ""),
-                "contribuicoes_qtd": moneyless_int(contribution.get("count")),
-                "contribuicoes_total": contribution.get("total", 0.0),
-                "primeira_contribuicao_data": br_date(contribution.get("first_date")),
-                "ultima_contribuicao_data": br_date(contribution.get("last_date")),
-                "ultima_competencia": contribution.get("last_competencia", ""),
-                "import_lote_id": moneyless_int(row["import_lote_id"]),
-                "criado_em": br_datetime(row["criado_em"]),
-                "atualizado_em": br_datetime(row["atualizado_em"]),
-                "observacoes": row["observacoes"] or "",
-            }
-        )
-    return export_rows, total
+    return _people_export_rows_from_snapshots(q=q, status=status, city=city)
 
 
 def people_export_dataset(

@@ -35,6 +35,13 @@
         </select>
       </label>
       <label>
+        Destino do lote
+        <select name="storage_backend">
+          <option value="legacy" selected>Operacional atual (legado validado)</option>
+          <option value="postgres_native">Postgres nativo de validacao</option>
+        </select>
+      </label>
+      <label>
         PDF
         <input type="file" name="extrato_pdf" accept="application/pdf">
       </label>
@@ -61,11 +68,11 @@
           <tbody>
             {% for lot in lots.items %}
               <tr>
-                <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/"><strong>#{{ lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
+                <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/{% if lot.snapshot_backend == 'postgres_nativo' %}?backend=postgres_nativo{% endif %}"><strong>#{{ lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
                 <td>
                   <span class="badge">{{ lot.tipo }}</span>
                   {% if lot.snapshot_backend %}
-                    <span class="badge ok">Snapshot Postgres</span>
+                    <span class="badge ok">{% if lot.snapshot_backend == 'postgres_nativo' %}Postgres nativo{% else %}Snapshot Postgres{% endif %}</span>
                   {% endif %}
                   <div><strong>{{ lot.banco }}</strong></div>
                   <div class="muted small">{{ lot.layout }}</div>
@@ -85,7 +92,7 @@
                     <span class="badge {% if lot.status == 'encerrado' or lot.status == 'concluido' %}ok{% elif lot.status == 'parcial' %}warn{% endif %}">Status do lote: {{ lot.status|default:"sem status"|capfirst }}</span>
                   </div>
                 </td>
-                <td class="no-print"><a class="button secondary compact-button" href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/">Abrir lote</a></td>
+                <td class="no-print"><a class="button secondary compact-button" href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/{% if lot.snapshot_backend == 'postgres_nativo' %}?backend=postgres_nativo{% endif %}">Abrir lote</a></td>
               </tr>
             {% empty %}
               <tr><td colspan="6">Nenhum lote encontrado.</td></tr>

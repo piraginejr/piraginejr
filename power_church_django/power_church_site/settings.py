@@ -46,7 +46,6 @@ ALLOWED_HOSTS = [
 
 INSTALLED_APPS = [
     "auditlog",
-    "anymail",
     "crispy_forms",
     "crispy_bootstrap5",
     "django_filters",

@@ -11,7 +11,13 @@ from django.utils import timezone
 
 from power_church_core.formatting import br_date
 from power_church_core.normalization import normalize_query
-from power_church_django.apps.contributions.models import ReceiptDispatch, ReceiptEmailTemplate
+from power_church_django.apps.contributions.models import (
+    ReceiptDispatch,
+    ReceiptEmailTemplate,
+    ReceiptItemSnapshot,
+    ReceiptSnapshot,
+)
+from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.legacy import connect_legacy, format_cpf, format_status, get_receipt_detail, status_sigla
 from power_church_django.services.legacy_write import (
@@ -71,6 +77,181 @@ def _parse_iso_date(value: object) -> date | None:
         return datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def _money(value: object) -> str:
+    return f"R$ {float(value or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def sync_receipt_snapshots(
+    *,
+    receipt_ids: list[int] | None = None,
+    person_ids: list[int] | None = None,
+) -> list[ReceiptSnapshot]:
+    clean_receipt_ids = [int(value or 0) for value in (receipt_ids or []) if int(value or 0)]
+    clean_person_ids = [int(value or 0) for value in (person_ids or []) if int(value or 0)]
+    if not clean_receipt_ids and not clean_person_ids:
+        return []
+    receipt_clauses: list[str] = []
+    params: list[object] = []
+    if clean_receipt_ids:
+        receipt_clauses.append(f"r.id IN ({','.join('?' for _ in clean_receipt_ids)})")
+        params.extend(clean_receipt_ids)
+    if clean_person_ids:
+        receipt_clauses.append(f"r.pessoa_id IN ({','.join('?' for _ in clean_person_ids)})")
+        params.extend(clean_person_ids)
+    where_sql = " OR ".join(receipt_clauses) or "1=0"
+    with connect_legacy() as conn:
+        receipt_rows = conn.execute(
+            f"""
+            SELECT r.*, o.nome AS organizacao_nome, o.nome_fantasia AS organizacao_fantasia,
+                   p.nome AS pessoa_nome, p.codigo_interno, p.cpf, p.email_principal, p.telefone_principal
+              FROM recibos r
+              JOIN pessoas p ON p.id = r.pessoa_id
+              JOIN organizacoes o ON o.id = r.organizacao_id
+             WHERE {where_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+        if not receipt_rows:
+            return []
+        target_receipt_ids = [int(row["id"] or 0) for row in receipt_rows if int(row["id"] or 0)]
+        item_rows = conn.execute(
+            f"""
+            SELECT ri.id, ri.recibo_id, ri.contribuicao_id, ri.valor,
+                   co.contribuinte_id, co.data_recebimento, co.competencia, co.observacoes,
+                   t.nome AS tipo_nome, f.nome AS forma_nome
+              FROM recibo_itens ri
+              JOIN contribuicoes co ON co.id = ri.contribuicao_id
+              JOIN tipos_contribuicao t ON t.id = co.tipo_contribuicao_id
+              LEFT JOIN formas_recebimento f ON f.id = co.forma_recebimento_id
+             WHERE ri.recibo_id IN ({','.join('?' for _ in target_receipt_ids)})
+             ORDER BY ri.recibo_id, co.data_recebimento, co.id
+            """,
+            tuple(target_receipt_ids),
+        ).fetchall()
+    snapshots_by_legacy_id = {
+        int(item.legacy_id): item
+        for item in ReceiptSnapshot.objects.filter(legacy_id__in=target_receipt_ids)
+    }
+    created_or_updated: list[ReceiptSnapshot] = []
+    for row in receipt_rows:
+        legacy_id = int(row["id"] or 0)
+        snapshot = snapshots_by_legacy_id.get(legacy_id)
+        defaults = {
+            "organization_id": int(row["organizacao_id"] or 0),
+            "person_legacy_id": int(row["pessoa_id"] or 0),
+            "receipt_number": row["numero"] or "",
+            "status": row["status"] or "",
+            "organization_name": row["organizacao_fantasia"] or row["organizacao_nome"] or "",
+            "person_name": row["pessoa_nome"] or "",
+            "person_code": row["codigo_interno"] or "",
+            "person_cpf": format_cpf(row["cpf"]),
+            "person_email": preferred_delivery_email(row["email_principal"], row["pessoa_nome"]),
+            "person_phone": row["telefone_principal"] or "",
+            "emission_date": _parse_iso_date(row["data_emissao"]),
+            "emission_date_raw": row["data_emissao"] or "",
+            "period_start": _parse_iso_date(row["periodo_inicio"]),
+            "period_start_raw": row["periodo_inicio"] or "",
+            "period_end": _parse_iso_date(row["periodo_fim"]),
+            "period_end_raw": row["periodo_fim"] or "",
+            "total_value": round(float(row["valor_total"] or 0), 2),
+            "notes": row["observacoes"] or "",
+            "is_cancelled": str(row["status"] or "") == "cancelado" or bool(row["cancelado_em"]),
+        }
+        if snapshot is None:
+            snapshot = ReceiptSnapshot.objects.create(legacy_id=legacy_id, **defaults)
+        else:
+            changed = False
+            for key, value in defaults.items():
+                if getattr(snapshot, key) != value:
+                    setattr(snapshot, key, value)
+                    changed = True
+            if changed:
+                snapshot.save()
+        created_or_updated.append(snapshot)
+    snapshot_by_legacy_id = {int(item.legacy_id): item for item in created_or_updated}
+    ReceiptItemSnapshot.objects.filter(receipt__legacy_id__in=target_receipt_ids).delete()
+    ReceiptItemSnapshot.objects.bulk_create(
+        [
+            ReceiptItemSnapshot(
+                legacy_id=int(row["id"] or 0),
+                receipt=snapshot_by_legacy_id[int(row["recibo_id"] or 0)],
+                contribution_legacy_id=int(row["contribuicao_id"] or 0),
+                contributor_legacy_id=int(row["contribuinte_id"] or 0) or None,
+                received_at=_parse_iso_date(row["data_recebimento"]),
+                received_at_raw=row["data_recebimento"] or "",
+                competence=row["competencia"] or "",
+                contribution_type_name=row["tipo_nome"] or "",
+                receipt_method_name=row["forma_nome"] or "",
+                notes=row["observacoes"] or "",
+                amount=round(float(row["valor"] or 0), 2),
+            )
+            for row in item_rows
+            if int(row["recibo_id"] or 0) in snapshot_by_legacy_id
+        ]
+    )
+    return list(
+        ReceiptSnapshot.objects.filter(legacy_id__in=target_receipt_ids).order_by("-emission_date", "-legacy_id")
+    )
+
+
+def get_receipt_detail_snapshot(receipt_id: int) -> dict[str, Any] | None:
+    snapshot = (
+        ReceiptSnapshot.objects.filter(legacy_id=int(receipt_id or 0))
+        .prefetch_related("items")
+        .first()
+    )
+    if snapshot is None:
+        return None
+    return {
+        "receipt": {
+            "id": int(snapshot.legacy_id or 0),
+            "numero": snapshot.receipt_number or "",
+            "status": snapshot.status or "",
+            "organization_id": int(snapshot.organization_id or 0),
+            "organizacao": snapshot.organization_name or "",
+            "person_id": int(snapshot.person_legacy_id or 0),
+            "person_name": snapshot.person_name or "",
+            "person_code": snapshot.person_code or "",
+            "person_cpf": snapshot.person_cpf or "",
+            "person_email": snapshot.person_email or "",
+            "person_phone": snapshot.person_phone or "",
+            "data": br_date(snapshot.emission_date_raw or (snapshot.emission_date.isoformat() if snapshot.emission_date else "")),
+            "data_raw": snapshot.emission_date_raw or "",
+            "periodo_inicio": br_date(snapshot.period_start_raw or (snapshot.period_start.isoformat() if snapshot.period_start else "")),
+            "periodo_inicio_raw": snapshot.period_start_raw or "",
+            "periodo_fim": br_date(snapshot.period_end_raw or (snapshot.period_end.isoformat() if snapshot.period_end else "")),
+            "periodo_fim_raw": snapshot.period_end_raw or "",
+            "valor_fmt": _money(snapshot.total_value),
+            "valor_total": round(float(snapshot.total_value or 0), 2),
+            "observacoes": snapshot.notes or "",
+        },
+        "person": {
+            "id": int(snapshot.person_legacy_id or 0),
+            "nome": snapshot.person_name or "",
+            "codigo": snapshot.person_code or "",
+            "cpf": snapshot.person_cpf or "",
+            "email": snapshot.person_email or "",
+            "telefone": snapshot.person_phone or "",
+        },
+        "items": [
+            {
+                "contribution_id": int(item.contribution_legacy_id or 0),
+                "data": br_date(item.received_at_raw or (item.received_at.isoformat() if item.received_at else "")),
+                "competencia": item.competence or "",
+                "tipo": item.contribution_type_name or "",
+                "forma": item.receipt_method_name or "",
+                "observacoes": item.notes or "",
+                "valor_fmt": _money(item.amount),
+            }
+            for item in snapshot.items.all().order_by("received_at", "legacy_id")
+        ],
+    }
+
+
+def get_receipt_detail_cached(receipt_id: int) -> dict[str, Any] | None:
+    return get_receipt_detail_snapshot(receipt_id) or get_receipt_detail(receipt_id)
 
 
 def get_or_create_receipt_email_template() -> ReceiptEmailTemplate:
@@ -168,57 +349,65 @@ def receipt_period_options(person_id: int) -> list[dict[str, Any]]:
     person_id = int(person_id or 0)
     if not person_id:
         return []
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            """
-            SELECT COALESCE(c.competencia, '') AS competencia,
-                   MIN(c.data_recebimento) AS periodo_inicio,
-                   MAX(c.data_recebimento) AS periodo_fim,
-                   COUNT(*) AS quantidade,
-                   COALESCE(SUM(c.valor), 0) AS total,
-                   MAX(COALESCE(c.competencia_ordem, 0)) AS competencia_ordem
-              FROM contribuicoes c
-             WHERE c.ativo = 1
-               AND c.pessoa_id = ?
-             GROUP BY COALESCE(c.competencia, '')
-             ORDER BY competencia_ordem DESC, competencia DESC
-            """,
-            (person_id,),
-        ).fetchall()
-        receipt_rows = conn.execute(
-            """
-            SELECT c.competencia, r.id, r.numero, r.data_emissao, r.valor_total
-              FROM recibos r
-              JOIN recibo_itens ri ON ri.recibo_id = r.id
-              JOIN contribuicoes c ON c.id = ri.contribuicao_id
-             WHERE r.pessoa_id = ?
-               AND r.status <> 'cancelado'
-               AND r.cancelado_em IS NULL
-               AND c.ativo = 1
-             ORDER BY r.id DESC
-            """,
-            (person_id,),
-        ).fetchall()
+    contributions = list(
+        PersonContributionSnapshot.objects.filter(person__legacy_id=person_id, is_active=True).order_by(
+            "-competence_order", "-received_at", "-legacy_id"
+        )
+    )
+    if not contributions:
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in contributions:
+        key = item.competence or ""
+        bucket = grouped.setdefault(
+            key,
+            {
+                "competencia": item.competence or "Sem competencia",
+                "competencia_key": key,
+                "periodo_inicio_raw": item.received_at_raw or "",
+                "periodo_fim_raw": item.received_at_raw or "",
+                "quantidade": 0,
+                "total": 0.0,
+                "competencia_ordem": int(item.competence_order or 0),
+            },
+        )
+        bucket["quantidade"] += 1
+        bucket["total"] = round(float(bucket["total"]) + float(item.amount or 0), 2)
+        if item.received_at_raw and (not bucket["periodo_inicio_raw"] or item.received_at_raw < bucket["periodo_inicio_raw"]):
+            bucket["periodo_inicio_raw"] = item.received_at_raw
+        if item.received_at_raw and (not bucket["periodo_fim_raw"] or item.received_at_raw > bucket["periodo_fim_raw"]):
+            bucket["periodo_fim_raw"] = item.received_at_raw
     receipt_by_competence: dict[str, dict[str, Any]] = {}
-    for row in receipt_rows:
-        competence = str(row["competencia"] or "")
-        if competence not in receipt_by_competence:
-            receipt_by_competence[competence] = {
-                "id": int(row["id"] or 0),
-                "numero": row["numero"] or "",
-                "data": br_date(row["data_emissao"]),
-                "valor_fmt": f"R$ {float(row['valor_total'] or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            }
+    receipt_items = (
+        ReceiptItemSnapshot.objects.select_related("receipt")
+        .filter(receipt__person_legacy_id=person_id, receipt__is_cancelled=False)
+        .order_by("-receipt__emission_date", "-receipt__legacy_id", "legacy_id")
+    )
+    for item in receipt_items:
+        competence = item.competence or ""
+        if competence in receipt_by_competence:
+            continue
+        receipt_by_competence[competence] = {
+            "id": int(item.receipt.legacy_id or 0),
+            "numero": item.receipt.receipt_number or "",
+            "data": br_date(item.receipt.emission_date_raw or (item.receipt.emission_date.isoformat() if item.receipt.emission_date else "")),
+            "valor_fmt": _money(item.receipt.total_value),
+        }
+    rows = sorted(
+        grouped.values(),
+        key=lambda item: (int(item["competencia_ordem"]), str(item["competencia_key"] or "")),
+        reverse=True,
+    )
     return [
         {
-            "competencia": row["competencia"] or "Sem competencia",
-            "competencia_key": row["competencia"] or "",
-            "periodo_inicio": br_date(row["periodo_inicio"]),
-            "periodo_fim": br_date(row["periodo_fim"]),
-            "quantidade": int(row["quantidade"] or 0),
-            "total": round(float(row["total"] or 0), 2),
-            "total_fmt": f"R$ {float(row['total'] or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            "active_receipt": receipt_by_competence.get(str(row["competencia"] or "")),
+            "competencia": row["competencia"],
+            "competencia_key": row["competencia_key"],
+            "periodo_inicio": br_date(row["periodo_inicio_raw"]),
+            "periodo_fim": br_date(row["periodo_fim_raw"]),
+            "quantidade": int(row["quantidade"]),
+            "total": round(float(row["total"]), 2),
+            "total_fmt": _money(row["total"]),
+            "active_receipt": receipt_by_competence.get(str(row["competencia_key"] or "")),
         }
         for row in rows
     ]
@@ -246,27 +435,18 @@ def receipt_person_snapshot(person_id: int) -> dict[str, Any] | None:
     person_id = int(person_id or 0)
     if not person_id:
         return None
-    with connect_legacy() as conn:
-        row = conn.execute(
-            """
-            SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
-              FROM pessoas
-             WHERE id = ? AND ativo = 1
-             LIMIT 1
-            """,
-            (person_id,),
-        ).fetchone()
-    if row is None:
+    snapshot = PersonSnapshot.objects.filter(legacy_id=person_id, is_active=True).first()
+    if snapshot is None:
         return None
     return {
-        "id": int(row["id"] or 0),
-        "nome": row["nome"] or "",
-        "codigo": row["codigo_interno"] or "",
-        "cpf": format_cpf(row["cpf"]),
-        "status": format_status(row["status"]),
-        "sigla": status_sigla(row["status"], True),
-        "email": preferred_delivery_email(row["email_principal"], row["nome"]),
-        "telefone": row["telefone_principal"] or "",
+        "id": int(snapshot.legacy_id or 0),
+        "nome": snapshot.name or "",
+        "codigo": snapshot.internal_code or "",
+        "cpf": format_cpf(snapshot.cpf),
+        "status": format_status(snapshot.status),
+        "sigla": status_sigla(snapshot.status, True),
+        "email": preferred_delivery_email(snapshot.primary_email, snapshot.name),
+        "telefone": snapshot.primary_phone or "",
     }
 
 
@@ -332,7 +512,7 @@ def queue_receipt_dispatches(
 ) -> list[ReceiptDispatch]:
     dispatches: list[ReceiptDispatch] = []
     for receipt_id in [int(value or 0) for value in receipt_ids if int(value or 0)]:
-        detail = get_receipt_detail(receipt_id)
+        detail = get_receipt_detail_cached(receipt_id)
         if not detail:
             continue
         rendered = _dispatch_defaults(detail, email_to=email_to, subject=subject, body=body)
@@ -392,76 +572,40 @@ def _campaign_full_receipt_sets(
     cutoff_date: str = "",
 ) -> tuple[dict[int, dict[str, Any]], dict[int, list[dict[str, Any]]], dict[int, list[dict[str, Any]]]]:
     cutoff = normalize_query(cutoff_date)
-    contribution_clause = ""
-    contribution_params: list[Any] = []
-    receipt_clause = ""
-    receipt_params: list[Any] = []
+    contribution_qs = PersonContributionSnapshot.objects.filter(
+        person__is_active=True,
+        is_active=True,
+    ).exclude(person__primary_email="")
     if cutoff:
-        contribution_clause = " AND c.data_recebimento <= ?"
-        contribution_params.append(cutoff)
-        receipt_clause = " AND c.data_recebimento <= ?"
-        receipt_params.append(cutoff)
-    with connect_legacy() as conn:
-        contribution_rows = conn.execute(
-            f"""
-            SELECT p.id AS person_id,
-                   p.nome,
-                   p.email_principal,
-                   c.id AS contribution_id,
-                   c.valor,
-                   c.data_recebimento
-              FROM pessoas p
-              JOIN contribuicoes c ON c.pessoa_id = p.id
-             WHERE p.ativo = 1
-               AND c.ativo = 1
-               AND COALESCE(p.email_principal, '') <> ''
-               {contribution_clause}
-             ORDER BY p.nome, c.data_recebimento, c.id
-            """,
-            tuple(contribution_params),
-        ).fetchall()
-        receipt_rows = conn.execute(
-            f"""
-            SELECT r.id AS receipt_id,
-                   r.pessoa_id AS person_id,
-                   r.numero,
-                   r.data_emissao,
-                   ri.contribuicao_id
-              FROM recibos r
-              JOIN recibo_itens ri ON ri.recibo_id = r.id
-              JOIN contribuicoes c ON c.id = ri.contribuicao_id
-             WHERE r.status <> 'cancelado'
-               AND r.cancelado_em IS NULL
-               {receipt_clause}
-             ORDER BY r.pessoa_id, r.id, ri.id
-            """,
-            tuple(receipt_params),
-        ).fetchall()
+        contribution_qs = contribution_qs.filter(received_at_raw__lte=cutoff)
+    receipt_item_qs = ReceiptItemSnapshot.objects.select_related("receipt").filter(receipt__is_cancelled=False)
+    if cutoff:
+        receipt_item_qs = receipt_item_qs.filter(received_at_raw__lte=cutoff)
     people: dict[int, dict[str, Any]] = {}
     receipt_sets: dict[int, list[dict[str, Any]]] = {}
     contributions_by_person: dict[int, list[dict[str, Any]]] = {}
-    for row in contribution_rows:
-        person_id = int(row["person_id"] or 0)
+    for row in contribution_qs.order_by("person__name", "received_at", "legacy_id"):
+        person_id = int(row.person.legacy_id or 0)
         if not person_id:
             continue
         contributions_by_person.setdefault(person_id, []).append(
             {
-                "id": int(row["contribution_id"] or 0),
-                "value": round(float(row["valor"] or 0), 2),
-                "date": row["data_recebimento"] or "",
+                "id": int(row.legacy_id or 0),
+                "value": round(float(row.amount or 0), 2),
+                "date": row.received_at_raw or "",
             }
         )
         people.setdefault(
             person_id,
             {
                 "person_id": person_id,
-                "person_name": row["nome"] or "",
-                "email": preferred_delivery_email(row["email_principal"], row["nome"]),
+                "person_name": row.person.name or "",
+                "email": preferred_delivery_email(row.person.primary_email, row.person.name),
             },
         )
-    for row in receipt_rows:
-        person_id = int(row["person_id"] or 0)
-        receipt_id = int(row["receipt_id"] or 0)
+    for row in receipt_item_qs.order_by("receipt__person_legacy_id", "receipt__legacy_id", "legacy_id"):
+        person_id = int(row.receipt.person_legacy_id or 0)
+        receipt_id = int(row.receipt.legacy_id or 0)
         if not person_id or not receipt_id:
             continue
         bucket = receipt_sets.setdefault(person_id, [])
@@ -469,12 +613,12 @@ def _campaign_full_receipt_sets(
         if current is None:
             current = {
                 "receipt_id": receipt_id,
-                "receipt_number": row["numero"] or "",
-                "emission_date": row["data_emissao"] or "",
+                "receipt_number": row.receipt.receipt_number or "",
+                "emission_date": row.receipt.emission_date_raw or "",
                 "contribution_ids": [],
             }
             bucket.append(current)
-        current["contribution_ids"].append(int(row["contribuicao_id"] or 0))
+        current["contribution_ids"].append(int(row.contribution_legacy_id or 0))
     return people, contributions_by_person, receipt_sets
 
 
@@ -711,7 +855,7 @@ def _raw_date(value: object) -> str:
 
 def refresh_receipt_dispatch_destination(dispatch: ReceiptDispatch | int, *, actor: str = "") -> ReceiptDispatch:
     item = dispatch if isinstance(dispatch, ReceiptDispatch) else ReceiptDispatch.objects.get(pk=int(dispatch))
-    detail = get_receipt_detail(int(item.legacy_receipt_id or 0))
+    detail = get_receipt_detail_cached(int(item.legacy_receipt_id or 0))
     if not detail:
         return item
     refreshed_email = (
@@ -747,7 +891,7 @@ def refresh_receipt_dispatch_destination(dispatch: ReceiptDispatch | int, *, act
 def send_receipt_dispatch(dispatch: ReceiptDispatch | int, *, actor: str = "") -> ReceiptDispatch:
     item = dispatch if isinstance(dispatch, ReceiptDispatch) else ReceiptDispatch.objects.get(pk=int(dispatch))
     item = refresh_receipt_dispatch_destination(item, actor=actor)
-    detail = get_receipt_detail(int(item.legacy_receipt_id or 0))
+    detail = get_receipt_detail_cached(int(item.legacy_receipt_id or 0))
     if not detail:
         item.status = ReceiptDispatch.Status.FAILED
         item.last_error = "Recibo legado nao encontrado para envio."
@@ -936,6 +1080,8 @@ def issue_and_optionally_send_receipts(
         actor=actor,
         replace_existing=True,
     )
+    if receipt_ids:
+        sync_receipt_snapshots(receipt_ids=receipt_ids, person_ids=[int(person_id or 0)])
     dispatches: list[ReceiptDispatch] = []
     if normalize_query(email_to):
         dispatches = queue_receipt_dispatches(
@@ -969,10 +1115,15 @@ def issue_event_receipts_and_optionally_send(
         actor=actor,
         replace_existing=True,
     )
+    if receipt_ids:
+        synced = sync_receipt_snapshots(receipt_ids=receipt_ids)
+        synced_person_ids = [int(item.person_legacy_id or 0) for item in synced if int(item.person_legacy_id or 0)]
+        if synced_person_ids:
+            sync_receipt_snapshots(person_ids=synced_person_ids)
     dispatches: list[ReceiptDispatch] = []
     if receipt_ids:
         for receipt_id in receipt_ids:
-            detail = get_receipt_detail(receipt_id)
+            detail = get_receipt_detail_cached(receipt_id)
             if not detail:
                 continue
             person_id = int((detail.get("receipt") or {}).get("person_id") or 0)
@@ -1014,40 +1165,32 @@ def schedule_automatic_receipts_for_events(
     clean_ids = [int(value or 0) for value in contribution_ids if int(value or 0)]
     if not clean_ids:
         return outcomes
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT c.id, c.pessoa_id, p.nome, p.email_principal, c.data_recebimento, COALESCE(c.competencia, '') AS competencia
-              FROM contribuicoes c
-              JOIN pessoas p ON p.id = c.pessoa_id
-             WHERE c.ativo = 1
-               AND c.id IN ({','.join('?' for _ in clean_ids)})
-               AND c.pessoa_id IS NOT NULL
-             ORDER BY p.nome, c.data_recebimento, c.id
-            """,
-            tuple(clean_ids),
-        ).fetchall()
+    rows = list(
+        PersonContributionSnapshot.objects.select_related("person")
+        .filter(legacy_id__in=clean_ids, is_active=True, person__isnull=False)
+        .order_by("person__name", "received_at", "legacy_id")
+    )
     email_overrides: dict[int, str] = {}
     by_person: dict[int, dict[str, Any]] = {}
     for row in rows:
-        person_id = int(row["pessoa_id"] or 0)
+        person_id = int(row.person.legacy_id or 0)
         if not person_id:
             continue
-        email_overrides[person_id] = preferred_delivery_email(row["email_principal"], row["nome"])
+        email_overrides[person_id] = preferred_delivery_email(row.person.primary_email, row.person.name)
         payload = by_person.setdefault(
             person_id,
             {
                 "person_id": person_id,
-                "person_name": row["nome"] or "",
-                "email": preferred_delivery_email(row["email_principal"], row["nome"]),
+                "person_name": row.person.name or "",
+                "email": preferred_delivery_email(row.person.primary_email, row.person.name),
                 "contribution_ids": [],
                 "dates": [],
                 "competences": [],
             },
         )
-        payload["contribution_ids"].append(int(row["id"] or 0))
-        payload["dates"].append(row["data_recebimento"] or "")
-        payload["competences"].append(normalize_query(row["competencia"]))
+        payload["contribution_ids"].append(int(row.legacy_id or 0))
+        payload["dates"].append(row.received_at_raw or "")
+        payload["competences"].append(normalize_query(row.competence))
     if not by_person:
         return outcomes
     for payload in by_person.values():
@@ -1076,7 +1219,7 @@ def schedule_automatic_receipts_for_events(
         )
         dispatch_by_receipt = {int(item.legacy_receipt_id or 0): int(item.pk or 0) for item in result["dispatches"]}
         for receipt_id in result["receipt_ids"]:
-            detail = get_receipt_detail(receipt_id)
+            detail = get_receipt_detail_cached(receipt_id)
             receipt = detail.get("receipt") if detail else {}
             outcomes.append(
                 {
@@ -1126,34 +1269,28 @@ def mark_receipt_dispatches_cancelled(receipt_ids: list[int], *, actor: str = ""
 def backfill_receipt_dispatches(*, actor: str = "") -> dict[str, int]:
     scanned = 0
     created = 0
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            """
-            SELECT c.id, c.pessoa_id, c.data_recebimento, COALESCE(p.email_principal, '') AS email_principal
-              FROM contribuicoes c
-              JOIN pessoas p ON p.id = c.pessoa_id
-             WHERE c.ativo = 1
-               AND p.ativo = 1
-               AND COALESCE(p.email_principal, '') <> ''
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM recibo_itens ri
-                      JOIN recibos r ON r.id = ri.recibo_id
-                     WHERE ri.contribuicao_id = c.id
-                       AND r.status <> 'cancelado'
-                       AND r.cancelado_em IS NULL
-               )
-             ORDER BY c.pessoa_id, c.data_recebimento, c.id
-            """
-        ).fetchall()
+    covered_contribution_ids = set(
+        int(value or 0)
+        for value in ReceiptItemSnapshot.objects.filter(receipt__is_cancelled=False).values_list("contribution_legacy_id", flat=True)
+        if int(value or 0)
+    )
+    rows = list(
+        PersonContributionSnapshot.objects.filter(
+            is_active=True,
+            person__is_active=True,
+        )
+        .exclude(person__primary_email="")
+        .exclude(legacy_id__in=covered_contribution_ids)
+        .order_by("person__legacy_id", "received_at_raw", "legacy_id")
+    )
     grouped: dict[tuple[int, str], list[int]] = {}
     for row in rows:
         scanned += 1
-        person_id = int(row["pessoa_id"] or 0)
-        receipt_date = normalize_query(row["data_recebimento"])
+        person_id = int(row.person.legacy_id or 0)
+        receipt_date = normalize_query(row.received_at_raw)
         if not person_id or not receipt_date:
             continue
-        grouped.setdefault((person_id, receipt_date), []).append(int(row["id"] or 0))
+        grouped.setdefault((person_id, receipt_date), []).append(int(row.legacy_id or 0))
     for (person_id, receipt_date), contribution_ids in grouped.items():
         existing_items = ReceiptDispatch.objects.filter(
             legacy_person_id=person_id,

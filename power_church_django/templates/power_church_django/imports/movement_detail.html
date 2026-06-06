@@ -66,6 +66,7 @@
 
       <form method="post">
         {% csrf_token %}
+        <input type="hidden" name="backend" value="{{ backend }}">
         <input type="hidden" name="movement_id" value="{{ detail.movement.id }}">
         <input type="hidden" name="lot_id" value="{{ detail.movement.lote_id }}">
         <input type="hidden" name="return_to" value="{{ return_to|default:detail.lot_url }}">

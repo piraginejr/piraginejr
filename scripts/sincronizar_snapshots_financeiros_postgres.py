@@ -6,6 +6,7 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
+from itertools import islice
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +81,33 @@ def _find_target_lots(db_path: Path) -> list[tuple[int, str, str]]:
         conn.close()
 
 
+def _find_target_receipts(db_path: Path) -> tuple[list[int], list[int]]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        receipt_rows = conn.execute(
+            """
+            SELECT id, pessoa_id
+              FROM recibos
+             ORDER BY id ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    receipt_ids = [int(row["id"] or 0) for row in receipt_rows if int(row["id"] or 0)]
+    person_ids = sorted({int(row["pessoa_id"] or 0) for row in receipt_rows if int(row["pessoa_id"] or 0)})
+    return receipt_ids, person_ids
+
+
+def _chunked(values: list[int], size: int = 200):
+    iterator = iter(values)
+    while True:
+        chunk = list(islice(iterator, size))
+        if not chunk:
+            break
+        yield chunk
+
+
 def _write_report(db_path: Path, synced: list[tuple[int, str, str]]) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     target = REPORT_DIR / f"snapshots_financeiros_postgres_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -124,6 +152,8 @@ def main() -> int:
     django.setup()
 
     from power_church_django.apps.imports.services import sync_statement_lot_snapshot_from_legacy
+    from power_church_django.services.postgres_people_sync import sync_contribution_type_snapshots
+    from power_church_django.services.receipt_delivery import sync_receipt_snapshots
 
     target_lots = _find_target_lots(db_path)
     if not target_lots:
@@ -131,10 +161,24 @@ def main() -> int:
         return 1
 
     synced: list[tuple[int, str, str]] = []
+    type_stats = sync_contribution_type_snapshots(db_path)
+    print(
+        "contribution_type_snapshot_sync=OK: "
+        f"tipos={type_stats['postgres_contribution_types_total']} "
+        f"ativos={type_stats['postgres_contribution_types_active']}"
+    )
     for lot_id, bank_name, file_name in target_lots:
         sync_statement_lot_snapshot_from_legacy(lot_id)
         synced.append((lot_id, bank_name, file_name))
         print(f"snapshot_sync=OK: lote={lot_id} banco={bank_name} arquivo={file_name}")
+
+    receipt_ids, person_ids = _find_target_receipts(db_path)
+    synced_receipts = 0
+    for chunk in _chunked(receipt_ids, size=150):
+        synced_receipts += len(sync_receipt_snapshots(receipt_ids=chunk))
+    for chunk in _chunked(person_ids, size=150):
+        sync_receipt_snapshots(person_ids=chunk)
+    print(f"receipt_snapshot_sync=OK: recibos={len(receipt_ids)} pessoas={len(person_ids)} sincronizados={synced_receipts}")
 
     if args.report:
         report = _write_report(db_path, synced)

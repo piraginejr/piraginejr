@@ -78,3 +78,86 @@ class ReceiptDispatch(models.Model):
     def __str__(self) -> str:
         label = self.legacy_receipt_number or self.period_label or f"pessoa #{self.legacy_person_id}"
         return f"{label} -> {self.email_to or self.person_email or 'sem e-mail'}"
+
+
+class ReceiptSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada", db_index=True)
+    receipt_number = models.CharField("numero", max_length=80, blank=True)
+    status = models.CharField("status", max_length=40, blank=True, db_index=True)
+    organization_name = models.CharField("organizacao", max_length=240, blank=True)
+    person_name = models.CharField("nome da pessoa", max_length=240, blank=True)
+    person_code = models.CharField("codigo da pessoa", max_length=80, blank=True)
+    person_cpf = models.CharField("cpf", max_length=32, blank=True)
+    person_email = models.CharField("e-mail", max_length=254, blank=True, db_index=True)
+    person_phone = models.CharField("telefone", max_length=64, blank=True)
+    emission_date = models.DateField("data de emissao", null=True, blank=True, db_index=True)
+    emission_date_raw = models.CharField("data de emissao bruta", max_length=32, blank=True)
+    period_start = models.DateField("inicio do periodo", null=True, blank=True)
+    period_start_raw = models.CharField("inicio do periodo bruto", max_length=32, blank=True)
+    period_end = models.DateField("fim do periodo", null=True, blank=True)
+    period_end_raw = models.CharField("fim do periodo bruto", max_length=32, blank=True)
+    total_value = models.DecimalField("valor total", max_digits=14, decimal_places=2, default=0)
+    notes = models.TextField("observacoes", blank=True)
+    is_cancelled = models.BooleanField("cancelado", default=False, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de recibo"
+        verbose_name_plural = "espelhos de recibos"
+        ordering = ["-emission_date", "-legacy_id"]
+        indexes = [
+            models.Index(fields=["person_legacy_id", "status", "emission_date"]),
+            models.Index(fields=["person_legacy_id", "is_cancelled"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.receipt_number or f"recibo #{self.legacy_id}"
+
+
+class ReceiptItemSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    receipt = models.ForeignKey(ReceiptSnapshot, on_delete=models.CASCADE, related_name="items")
+    contribution_legacy_id = models.IntegerField("contribuicao legada", db_index=True)
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    received_at = models.DateField("data recebimento", null=True, blank=True, db_index=True)
+    received_at_raw = models.CharField("data recebimento bruta", max_length=32, blank=True)
+    competence = models.CharField("competencia", max_length=32, blank=True, db_index=True)
+    contribution_type_name = models.CharField("tipo", max_length=160, blank=True)
+    receipt_method_name = models.CharField("forma", max_length=160, blank=True)
+    notes = models.TextField("observacoes", blank=True)
+    amount = models.DecimalField("valor", max_digits=14, decimal_places=2, default=0)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de item de recibo"
+        verbose_name_plural = "espelhos de itens de recibo"
+        ordering = ["receipt_id", "received_at", "legacy_id"]
+        indexes = [
+            models.Index(fields=["receipt", "competence", "received_at"]),
+            models.Index(fields=["contribution_legacy_id"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.receipt_id}:{self.contribution_legacy_id}"
+
+
+class ContributionTypeSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    code = models.CharField("codigo", max_length=80, blank=True, db_index=True)
+    name = models.CharField("nome", max_length=160)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "espelho de tipo de contribuicao"
+        verbose_name_plural = "espelhos de tipos de contribuicao"
+        ordering = ["organization_id", "name", "legacy_id"]
+        indexes = [
+            models.Index(fields=["organization_id", "is_active", "name"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name

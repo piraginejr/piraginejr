@@ -6,7 +6,13 @@
       <div>
         <p class="badge">{{ detail.kind_label }} · {{ detail.lot.banco }}</p>
         {% if detail.snapshot_backend %}
-          <p class="muted small">Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.</p>
+          <p class="muted small">
+            {% if detail.snapshot_backend == "postgres_nativo" %}
+              Leitura e operacao atuais: lote nativo do Postgres.
+            {% else %}
+              Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.
+            {% endif %}
+          </p>
         {% endif %}
         <h1>Lote #{{ detail.lot.id }}</h1>
         <p>{{ detail.lot.nome_arquivo }} · {{ detail.lot.periodo }}</p>
@@ -28,6 +34,9 @@
           <p>Estas ações seguem a regra homologada do sistema anterior: preparar para auditoria lança o financeiro, gera recibos apenas do que ficou pronto e mantém o lote em parcial; encerrar fica reservado para o operador, depois da auditoria humana.</p>
         </div>
       </div>
+      {% if detail.snapshot_backend != "postgres_nativo" %}
+        <p class="muted small">Este lote ficou somente para consulta historica. Novas auditorias e reprocessamentos acontecem apenas nos lotes nativos do Postgres.</p>
+      {% else %}
       <div class="actions">
         <form method="post">
           {% csrf_token %}
@@ -61,6 +70,7 @@
         <a class="button secondary" href="/imports/{{ detail.kind }}/{{ detail.lot.id }}/?status=revisar_destinacao">Destinacoes especiais</a>
         <a class="button secondary" href="/imports/rules/">Editar regras de centavos</a>
       </div>
+      {% endif %}
     </section>
 
     <section class="panel">
@@ -136,7 +146,7 @@
                 <td>{{ item.tipo_sugerido }}<div class="muted small">centavos {{ item.codigo_centavos|default:"-" }}</div></td>
                 <td class="num">{{ item.valor_fmt }}</td>
                 <td class="no-print lot-audit-actions">
-                  {% if item.candidate_person_id and item.review_status != "revisar_destinacao" %}
+                  {% if detail.snapshot_backend == "postgres_nativo" and item.candidate_person_id and item.review_status != "revisar_destinacao" %}
                     <form method="post">
                       {% csrf_token %}
                       <input type="hidden" name="backend" value="{{ backend }}">
@@ -150,7 +160,7 @@
                       <button class="button compact-button" type="submit" name="action" value="approve_movement">Confirmar sugestao</button>
                     </form>
                   {% endif %}
-                  <a class="button secondary compact-button" href="{{ item.detail_url }}">Auditar / validar</a>
+                  <a class="button secondary compact-button" href="{{ item.detail_url }}">{% if detail.snapshot_backend == "postgres_nativo" %}Auditar / validar{% else %}Abrir consulta{% endif %}</a>
                 </td>
               </tr>
             {% empty %}

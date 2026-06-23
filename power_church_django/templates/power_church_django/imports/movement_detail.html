@@ -6,7 +6,13 @@
       <div>
         <p class="badge">{{ detail.kind_label }} · movimento #{{ detail.movement.id }}</p>
         {% if detail.snapshot_backend %}
-          <p class="muted small">Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.</p>
+          <p class="muted small">
+            {% if detail.snapshot_backend == "postgres_nativo" %}
+              Leitura e operacao atuais: movimento do lote nativo no Postgres.
+            {% else %}
+              Leitura atual: snapshot Postgres sincronizado a partir do lote operacional.
+            {% endif %}
+          </p>
         {% endif %}
         <h1>{{ detail.movement.nome_origem }}</h1>
         <p>{{ detail.movement.banco }} · lote #{{ detail.movement.lote_id }} · {{ detail.movement.nome_arquivo }}</p>
@@ -53,7 +59,9 @@
           <p>Confirme a pessoa, mantenha como contribuinte sem vinculo, ajuste a destinacao ou marque o movimento como ignorado operacional. A decisao usa o mesmo motor financeiro ja validado nos lotes anteriores.</p>
         </div>
       </div>
-
+      {% if detail.snapshot_backend != "postgres_nativo" %}
+        <p class="muted small">Este movimento ficou somente para consulta historica. A auditoria operacional segue apenas nos lotes nativos do Postgres.</p>
+      {% else %}
       <form class="toolbar" method="get">
         <input type="hidden" name="return_to" value="{{ return_to|default:detail.lot_url }}">
         <label class="wide">
@@ -141,6 +149,7 @@
           <button class="button secondary" type="submit" name="action" value="ignore">Ignorar movimento</button>
         </div>
       </form>
+      {% endif %}
     </section>
 
     <section class="panel">

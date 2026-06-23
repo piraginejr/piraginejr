@@ -5,12 +5,15 @@ from urllib.parse import urlencode
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
 
-from power_church_django.services.legacy import LegacyDatabaseError, contribution_destination_report, contribution_report
 from power_church_django.services.pdf_reports import (
     contribution_destination_pdf,
     contribution_destination_pdf_filename,
     contribution_period_pdf,
     contribution_period_pdf_filename,
+)
+from power_church_django.services.reports_native import (
+    contribution_destination_report_postgres,
+    contribution_report_postgres,
 )
 
 
@@ -29,20 +32,17 @@ def index(request: HttpRequest) -> HttpResponse:
         "date_end": context["date_end"],
     }
     context["report_query_string"] = urlencode({key: value for key, value in params.items() if value})
-    try:
-        context["report"] = contribution_report(
-            competencia=context["competencia"],
-            q=context["q"],
-            date_start=context["date_start"],
-            date_end=context["date_end"],
-        )
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["report"] = contribution_report_postgres(
+        competencia=context["competencia"],
+        q=context["q"],
+        date_start=context["date_start"],
+        date_end=context["date_end"],
+    )
     return render(request, "power_church_django/reports/index.html", context)
 
 
 def contribution_period_pdf_view(request: HttpRequest) -> HttpResponse:
-    report = contribution_report(
+    report = contribution_report_postgres(
         competencia=request.GET.get("competencia", ""),
         q=request.GET.get("q", ""),
         date_start=request.GET.get("date_start", ""),
@@ -73,21 +73,18 @@ def destinations(request: HttpRequest) -> HttpResponse:
         "destination": context["destination"],
     }
     context["report_query_string"] = urlencode({key: value for key, value in params.items() if value})
-    try:
-        context["report"] = contribution_destination_report(
-            competencia=context["competencia"],
-            q=context["q"],
-            date_start=context["date_start"],
-            date_end=context["date_end"],
-            destination=context["destination"],
-        )
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["report"] = contribution_destination_report_postgres(
+        competencia=context["competencia"],
+        q=context["q"],
+        date_start=context["date_start"],
+        date_end=context["date_end"],
+        destination=context["destination"],
+    )
     return render(request, "power_church_django/reports/destinations.html", context)
 
 
 def contribution_destinations_pdf_view(request: HttpRequest) -> HttpResponse:
-    report = contribution_destination_report(
+    report = contribution_destination_report_postgres(
         competencia=request.GET.get("competencia", ""),
         q=request.GET.get("q", ""),
         date_start=request.GET.get("date_start", ""),

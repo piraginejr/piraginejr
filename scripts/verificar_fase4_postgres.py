@@ -272,6 +272,9 @@ def _append_postgres_checks(checks: list[Check], env_file: Path, lot_ids_by_file
                 "contributions_contributiontypesnapshot",
                 "people_personsnapshot",
                 "people_personcontributionsnapshot",
+                "people_nativepeopleimportlot",
+                "people_nativepeopleimportpending",
+                "people_nativepeopleimportline",
                 "contributions_receiptsnapshot",
                 "contributions_receiptitemsnapshot",
                 "contributions_receiptdispatch",
@@ -337,6 +340,24 @@ def _append_postgres_checks(checks: list[Check], env_file: Path, lot_ids_by_file
                         "Fila de recibos coberta por snapshot",
                         "FALHA",
                         "nao verificado porque contributions_receiptsnapshot ainda nao existe",
+                    )
+                )
+            if {
+                "people_nativepeopleimportlot",
+                "people_nativepeopleimportpending",
+                "people_nativepeopleimportline",
+            }.issubset(existing):
+                cur.execute("SELECT COUNT(*) FROM people_nativepeopleimportlot")
+                people_import_lots = int(cur.fetchone()[0] or 0)
+                cur.execute("SELECT COUNT(*) FROM people_nativepeopleimportpending")
+                people_import_pendings = int(cur.fetchone()[0] or 0)
+                cur.execute("SELECT COUNT(*) FROM people_nativepeopleimportline")
+                people_import_lines = int(cur.fetchone()[0] or 0)
+                checks.append(
+                    Check(
+                        "Importacao de pessoas espelhada no Postgres",
+                        "OK" if people_import_lots > 0 else "FALHA",
+                        f"lotes={people_import_lots} pendencias={people_import_pendings} linhas={people_import_lines}",
                     )
                 )
             if "contributions_contributiontypesnapshot" in existing:

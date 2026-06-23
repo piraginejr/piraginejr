@@ -282,7 +282,7 @@ def list_system_email_events(
 def resend_system_email_event(*, kind: str, row_id: int, actor: str = "") -> dict[str, Any]:
     from power_church_core.normalization import normalize_query
     from power_church_django.apps.contributions.models import ReceiptDispatch
-    from power_church_django.services.legacy import person_statement_data
+    from power_church_django.services.contributions_native import person_statement_data_postgres
     from power_church_django.services.mail_dispatch import MailAttachment, send_email_message
     from power_church_django.services.pdf_reports import person_statement_pdf, person_statement_pdf_filename
     from power_church_django.services.receipt_delivery import send_receipt_dispatch
@@ -315,7 +315,7 @@ def resend_system_email_event(*, kind: str, row_id: int, actor: str = "") -> dic
         raise LookupError("Extrato sem pessoa associada para reenvio.")
     query_payload = parse_qs(str(payload.get("query") or ""), keep_blank_values=True)
     type_ids = [int(value) for value in query_payload.get("tipo_id", []) if str(value).isdigit()]
-    statement = person_statement_data(
+    statement = person_statement_data_postgres(
         person_id,
         year=str((query_payload.get("year") or [""])[0] or ""),
         competencia=str((query_payload.get("competencia") or [""])[0] or ""),

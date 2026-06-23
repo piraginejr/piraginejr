@@ -94,3 +94,30 @@ class StatementImportPilotMovement(models.Model):
 
     def __str__(self) -> str:
         return f"{self.lot_id}:{self.order_in_lot} {self.amount}"
+
+
+class CentRuleSnapshot(models.Model):
+    legacy_id = models.IntegerField("id publico", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    cent_code = models.CharField("codigo de centavos", max_length=2, db_index=True)
+    destination_name = models.CharField("nome da destinacao", max_length=160)
+    contribution_type_legacy_id = models.IntegerField("tipo legado", null=True, blank=True, db_index=True)
+    contribution_type_name = models.CharField("tipo", max_length=160, blank=True)
+    campaign_legacy_id = models.IntegerField("campanha legada", null=True, blank=True, db_index=True)
+    campaign_name = models.CharField("campanha", max_length=160, blank=True)
+    account_code = models.CharField("codigo da conta", max_length=64, blank=True)
+    account_name = models.CharField("nome da conta", max_length=160, blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "regra nativa de centavos"
+        verbose_name_plural = "regras nativas de centavos"
+        ordering = ["cent_code", "legacy_id"]
+        indexes = [
+            models.Index(fields=["organization_id", "cent_code", "is_active"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.cent_code} · {self.destination_name}"

@@ -10,62 +10,64 @@ from urllib.parse import urlencode
 
 from power_church_django.apps.contributions.models import ReceiptDispatch
 from power_church_core.normalization import normalize_query
+from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
-from power_church_django.services.legacy_write import (
-    LegacyWriteError,
-    apply_envelope_profile_update,
-    backfill_envelope_profile_updates,
-    create_contribution,
-    create_envelope_contribution_batch,
-    create_envelope_image_lot,
-    create_manual_contribution_batch,
-    create_frequentador_from_contributor,
-    create_receipt,
-    envelope_upload_root,
-    ignore_envelope_profile_update,
-    ignore_pending_envelope,
-    launch_pending_envelope,
-    link_contributor_to_person_by_id,
-    split_contribution,
-    update_person_email_from_manual_delivery,
-    update_contribution,
-    update_launched_envelope,
+from power_church_django.services.contributions_native import (
+    combine_contribution_dashboards,
+    create_contribution_postgres,
+    create_manual_contribution_batch_postgres,
+    get_contribution_detail_postgres,
+    list_contributions_postgres,
+    manual_contribution_context_postgres,
+    new_contribution_context_postgres,
+    person_statement_data_postgres,
+    split_contribution_context_postgres,
+    split_contribution_postgres,
+    update_contribution_postgres,
 )
-from power_church_django.services.legacy import (
-    LegacyDatabaseError,
-    envelope_contribution_context,
-    envelope_lot_form_context,
-    get_envelope_detail,
-    get_envelope_lot_detail,
-    get_next_pending_envelope_id,
-    get_contribution_detail,
-    get_contributor_detail,
-    list_envelopes,
-    list_contributions,
-    list_contributors,
-    list_receipts,
-    launched_envelope_edit_context,
-    manual_contribution_context,
-    new_contribution_context,
-    pending_envelope_contribution_context,
-    person_statement_data,
-    lookup_envelope_people,
-    receipt_new_context,
-    search_receipt_people,
-    split_contribution_context,
+from power_church_django.services.envelopes_native import (
+    apply_envelope_profile_update_postgres,
+    backfill_envelope_profile_updates_postgres,
+    combine_envelope_dashboards,
+    create_envelope_contribution_batch_postgres,
+    create_envelope_image_lot_postgres,
+    envelope_contribution_context_postgres,
+    envelope_lot_form_context_postgres,
+    get_envelope_detail_postgres,
+    get_envelope_lot_detail_postgres,
+    get_next_pending_envelope_id_postgres,
+    ignore_envelope_profile_update_postgres,
+    ignore_pending_envelope_postgres,
+    launched_envelope_edit_context_postgres,
+    launch_pending_envelope_postgres,
+    list_envelopes_postgres,
+    pending_envelope_contribution_context_postgres,
+    update_launched_envelope_postgres,
 )
+from power_church_django.services.contributors_native import (
+    create_frequentador_from_contributor_postgres,
+    get_contributor_detail_postgres,
+    link_contributor_to_person_by_id_postgres,
+    list_contributors_postgres,
+    lookup_envelope_people_postgres,
+    update_person_email_from_manual_delivery_postgres,
+)
+from power_church_django.services.runtime_support import envelope_upload_root
+from power_church_django.services.runtime_errors import LegacyDatabaseError, LegacyWriteError
 from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_filename
 from power_church_django.services.pdf_reports import person_statement_pdf, person_statement_pdf_filename
 from power_church_django.services.receipt_delivery import (
     email_runtime_snapshot,
     enrich_receipt_form,
+    create_receipt,
     get_receipt_detail_cached,
+    list_receipts_postgres,
     refresh_receipt_dispatch_destination,
+    receipt_new_context_postgres,
     queue_receipt_dispatches,
     receipt_dispatch_history,
     send_receipt_dispatch,
     issue_and_optionally_send_receipts,
-    sync_receipt_snapshots,
     update_receipt_email_template,
 )
 from power_church_django.services.mail_dispatch import MailAttachment, send_email_message
@@ -78,8 +80,37 @@ def _actor(request: HttpRequest) -> str:
     return "django"
 
 
+def _resolve_runtime_envelope_path(raw_path: object) -> Path:
+    path_text = str(raw_path or "").strip()
+    if not path_text:
+        raise Http404("Imagem nao encontrada.")
+    configured_root = Path(envelope_upload_root()).resolve()
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        try:
+            candidate.relative_to(configured_root)
+            return candidate
+        except ValueError:
+            pass
+    parts = candidate.parts
+    if "envelope_uploads" in parts:
+        suffix_parts = parts[parts.index("envelope_uploads") + 1 :]
+        remapped = configured_root.joinpath(*suffix_parts).resolve()
+        try:
+            remapped.relative_to(configured_root)
+        except ValueError as exc:
+            raise Http404("Imagem fora da pasta de envelopes.") from exc
+        return remapped
+    remapped = (configured_root / candidate.name).resolve()
+    try:
+        remapped.relative_to(configured_root)
+    except ValueError as exc:
+        raise Http404("Imagem fora da pasta de envelopes.") from exc
+    return remapped
+
+
 def _envelope_hub() -> dict[str, object]:
-    envelopes = list_envelopes(limit=None)
+    envelopes = list_envelopes_postgres()
     lots = list(envelopes.get("lots") or [])
     items = list(envelopes.get("items") or [])
     next_pending_lot = next((lot for lot in lots if lot.get("next_pending_url")), None)
@@ -202,7 +233,7 @@ def _receipt_message_fields(payload: object) -> dict[str, str]:
 def _maybe_update_person_email_for_manual_receipt(*, person_id: int, fields: dict[str, str], actor: str) -> bool:
     if str(fields.get("update_person_email") or "") not in {"1", "on", "true", "sim"}:
         return False
-    return update_person_email_from_manual_delivery(
+    return update_person_email_from_manual_delivery_postgres(
         person_id,
         email_value=fields.get("email_to", ""),
         reason=fields.get("email_update_reason", ""),
@@ -439,15 +470,12 @@ def index(request: HttpRequest) -> HttpResponse:
         "competencia": request.GET.get("competencia", ""),
         "status": request.GET.get("status", ""),
     }
-    try:
-        context["contributions"] = list_contributions(
-            q=context["q"],
-            competencia=context["competencia"],
-            status=context["status"],
-        )
-        context["envelope_hub"] = _envelope_hub()
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["contributions"] = list_contributions_postgres(
+        q=context["q"],
+        competencia=context["competencia"],
+        status=context["status"],
+    )
+    context["envelope_hub"] = _envelope_hub()
     return render(request, "power_church_django/contributions/list.html", context)
 
 
@@ -455,7 +483,7 @@ def new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         person_id = request.POST.get("pessoa_id", "")
         try:
-            contribution_id = create_contribution(request.POST, actor=_actor(request))
+            contribution_id = create_contribution_postgres(request.POST, actor=_actor(request))
             messages.success(request, f"Contribuicao #{contribution_id} registrada com auditoria.")
             return redirect(f"/contributions/{contribution_id}/")
         except LegacyWriteError as exc:
@@ -463,29 +491,21 @@ def new(request: HttpRequest) -> HttpResponse:
             return redirect(f"/contributions/new/?person_id={person_id}")
 
     person_id = int(request.GET.get("person_id") or 0)
-    context = {"title": "Nova contribuicao", "person_id": person_id}
-    try:
-        context["form_data"] = new_contribution_context(person_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context = {"title": "Nova contribuicao", "person_id": person_id, "form_data": new_contribution_context_postgres(person_id)}
     return render(request, "power_church_django/contributions/form.html", context)
 
 
 def manual_batch(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
-            contribution_ids = create_manual_contribution_batch(request.POST, actor=_actor(request))
+            contribution_ids = create_manual_contribution_batch_postgres(request.POST, actor=_actor(request))
             messages.success(request, f"{len(contribution_ids)} contribuicao(oes) registrada(s) com auditoria.")
             return redirect("/contributions/")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
             return redirect("/contributions/manual/")
 
-    context = {"title": "Lancamento manual assistido"}
-    try:
-        context["form_data"] = manual_contribution_context()
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context = {"title": "Lancamento manual assistido", "form_data": manual_contribution_context_postgres()}
     return render(request, "power_church_django/contributions/manual_batch.html", context)
 
 
@@ -495,21 +515,18 @@ def envelopes(request: HttpRequest) -> HttpResponse:
         "q": request.GET.get("q", ""),
         "competencia": request.GET.get("competencia", ""),
     }
-    try:
-        context["envelopes"] = list_envelopes(
-            q=context["q"],
-            competencia=context["competencia"],
-        )
-        context["envelope_hub"] = _envelope_hub()
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["envelopes"] = list_envelopes_postgres(
+        q=context["q"],
+        competencia=context["competencia"],
+    )
+    context["envelope_hub"] = _envelope_hub()
     return render(request, "power_church_django/contributions/envelopes.html", context)
 
 
 def envelope_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
-            result = create_envelope_contribution_batch(
+            result = create_envelope_contribution_batch_postgres(
                 request.POST,
                 request.FILES.get("imagem_envelope"),
                 actor=_actor(request),
@@ -526,8 +543,7 @@ def envelope_new(request: HttpRequest) -> HttpResponse:
 
     context = {"title": "Novo envelope"}
     try:
-        person_id = int(request.GET.get("person_id") or 0)
-        context["form_data"] = envelope_contribution_context(person_id=person_id)
+        context["form_data"] = envelope_contribution_context_postgres()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/contributions/envelope_form.html", context)
@@ -536,7 +552,7 @@ def envelope_new(request: HttpRequest) -> HttpResponse:
 def envelope_lot_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
-            result = create_envelope_image_lot(
+            result = create_envelope_image_lot_postgres(
                 request.POST,
                 request.FILES.getlist("imagens_envelope"),
                 actor=_actor(request),
@@ -554,7 +570,7 @@ def envelope_lot_new(request: HttpRequest) -> HttpResponse:
 
     context = {"title": "Criar lote de envelopes"}
     try:
-        context["form_data"] = envelope_lot_form_context()
+        context["form_data"] = envelope_lot_form_context_postgres()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/contributions/envelope_lot_form.html", context)
@@ -562,21 +578,14 @@ def envelope_lot_new(request: HttpRequest) -> HttpResponse:
 
 def envelope_lot_detail(request: HttpRequest, lot_id: int) -> HttpResponse:
     context = {"title": "Lote de envelopes"}
-    try:
-        context["lot"] = get_envelope_lot_detail(lot_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["lot"] = get_envelope_lot_detail_postgres(lot_id)
     if not context.get("lot") and not context.get("error"):
         raise Http404("Lote de envelopes nao encontrado.")
     return render(request, "power_church_django/contributions/envelope_lot_detail.html", context)
 
 
 def envelope_lot_next(request: HttpRequest, lot_id: int) -> HttpResponse:
-    try:
-        envelope_id = get_next_pending_envelope_id(lot_id)
-    except LegacyDatabaseError as exc:
-        messages.error(request, str(exc))
-        return redirect(f"/contributions/envelopes/lots/{lot_id}/")
+    envelope_id = get_next_pending_envelope_id_postgres(lot_id)
     if not envelope_id:
         messages.info(request, "Nao ha envelopes pendentes neste lote.")
         return redirect(f"/contributions/envelopes/lots/{lot_id}/")
@@ -587,9 +596,9 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if request.method == "POST":
         lot_id = int(request.POST.get("lote_id") or 0)
         try:
-            result = launch_pending_envelope(envelope_id, request.POST, actor=_actor(request))
+            result = launch_pending_envelope_postgres(envelope_id, request.POST, actor=_actor(request))
+            next_id = get_next_pending_envelope_id_postgres(int(result["lot_id"]))
             lot_id = int(result["lot_id"])
-            next_id = get_next_pending_envelope_id(lot_id)
             messages.success(
                 request,
                 f"Envelope #{envelope_id} lancado com {len(result['contribution_ids'])} contribuicao(oes).",
@@ -603,10 +612,7 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
             return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
 
     context = {"title": "Digitar envelope"}
-    try:
-        context["form_data"] = pending_envelope_contribution_context(envelope_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["form_data"] = pending_envelope_contribution_context_postgres(envelope_id)
     if not context.get("form_data") and not context.get("error"):
         raise Http404("Envelope pendente nao encontrado.")
     return render(request, "power_church_django/contributions/envelope_form.html", context)
@@ -615,7 +621,7 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
 def envelope_edit(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
-            result = update_launched_envelope(envelope_id, request.POST, actor=_actor(request))
+            result = update_launched_envelope_postgres(envelope_id, request.POST, actor=_actor(request))
             messages.success(
                 request,
                 f"Envelope #{envelope_id} corrigido com {len(result['contribution_ids'])} linha(s) ativa(s); versao anterior preservada na auditoria.",
@@ -627,10 +633,7 @@ def envelope_edit(request: HttpRequest, envelope_id: int) -> HttpResponse:
             return redirect(f"/contributions/envelopes/{envelope_id}/edit/")
 
     context = {"title": "Editar envelope"}
-    try:
-        context["form_data"] = launched_envelope_edit_context(envelope_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["form_data"] = launched_envelope_edit_context_postgres(envelope_id)
     if not context.get("form_data") and not context.get("error"):
         raise Http404("Envelope lancado nao encontrado.")
     return render(request, "power_church_django/contributions/envelope_form.html", context)
@@ -641,7 +644,7 @@ def envelope_ignore(request: HttpRequest, envelope_id: int) -> HttpResponse:
         return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
     lot_id = int(request.POST.get("lote_id") or 0)
     try:
-        ignore_pending_envelope(envelope_id, request.POST.get("justificativa_ignorar", ""), actor=_actor(request))
+        ignore_pending_envelope_postgres(envelope_id, request.POST.get("justificativa_ignorar", ""), actor=_actor(request))
         messages.success(request, f"Envelope #{envelope_id} ignorado com justificativa.")
     except LegacyWriteError as exc:
         messages.error(request, str(exc))
@@ -655,7 +658,7 @@ def envelope_lookup(request: HttpRequest) -> JsonResponse:
     phone = request.GET.get("phone", "")
     address = request.GET.get("address", "")
     try:
-        payload = lookup_envelope_people(phone=phone, address=address)
+        payload = lookup_envelope_people_postgres(phone=phone, address=address)
     except LegacyDatabaseError as exc:
         return JsonResponse({"ok": False, "error": str(exc), "phone_matches": [], "address_matches": []}, status=500)
     return JsonResponse({"ok": True, **payload})
@@ -666,7 +669,7 @@ def envelope_profile_update_apply(request: HttpRequest, update_id: int) -> HttpR
         return redirect("/contributions/envelopes/")
     envelope_id = int(request.POST.get("envelope_id") or 0)
     try:
-        result = apply_envelope_profile_update(update_id, actor=_actor(request))
+        result = apply_envelope_profile_update_postgres(update_id, actor=_actor(request))
         envelope_id = int(result["envelope_id"])
         messages.success(request, f"Telefone aplicado na ficha da pessoa vinculada ao envelope #{envelope_id}.")
     except LegacyWriteError as exc:
@@ -681,7 +684,7 @@ def envelope_profile_update_ignore(request: HttpRequest, update_id: int) -> Http
         return redirect("/contributions/envelopes/")
     envelope_id = int(request.POST.get("envelope_id") or 0)
     try:
-        result = ignore_envelope_profile_update(update_id, actor=_actor(request))
+        result = ignore_envelope_profile_update_postgres(update_id, actor=_actor(request))
         envelope_id = int(result["envelope_id"])
         messages.success(request, f"Pendencia cadastral do envelope #{envelope_id} marcada como revisada.")
     except LegacyWriteError as exc:
@@ -695,7 +698,7 @@ def envelope_profile_update_backfill(request: HttpRequest) -> HttpResponse:
     if request.method != "POST":
         return redirect("/contributions/envelopes/")
     try:
-        result = backfill_envelope_profile_updates(actor=_actor(request))
+        result = backfill_envelope_profile_updates_postgres(actor=_actor(request))
         messages.success(
             request,
             f"Reprocessamento concluido: {result['scanned']} envelope(s) verificado(s) e {result['created']} pendencia(s) criada(s).",
@@ -707,21 +710,18 @@ def envelope_profile_update_backfill(request: HttpRequest) -> HttpResponse:
 
 def envelope_detail(request: HttpRequest, envelope_id: int) -> HttpResponse:
     context = {"title": "Envelope"}
-    try:
-        context["detail"] = get_envelope_detail(envelope_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["detail"] = get_envelope_detail_postgres(envelope_id)
     if not context.get("detail") and not context.get("error"):
         raise Http404("Envelope nao encontrado.")
     return render(request, "power_church_django/contributions/envelope_detail.html", context)
 
 
 def envelope_image(request: HttpRequest, envelope_id: int) -> HttpResponse:
-    detail = get_envelope_detail(envelope_id)
+    detail = get_envelope_detail_postgres(envelope_id)
     if not detail or not detail.get("has_image"):
         raise Http404("Imagem nao encontrada.")
     root = Path(envelope_upload_root()).resolve()
-    path = Path(str(detail.get("image_path") or "")).resolve()
+    path = _resolve_runtime_envelope_path(detail.get("image_path"))
     try:
         path.relative_to(root)
     except ValueError as exc:
@@ -735,24 +735,20 @@ def envelope_image(request: HttpRequest, envelope_id: int) -> HttpResponse:
 def detail(request: HttpRequest, contribution_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
-            update_contribution(contribution_id, request.POST, actor=_actor(request))
+            update_contribution_postgres(contribution_id, request.POST, actor=_actor(request))
             messages.success(request, f"Contribuicao #{contribution_id} ajustada com auditoria.")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
         return redirect(f"/contributions/{contribution_id}/")
 
-    context = {"title": "Contribuicao"}
-    try:
-        context["detail"] = get_contribution_detail(contribution_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context = {"title": "Contribuicao", "detail": get_contribution_detail_postgres(contribution_id)}
     return render(request, "power_church_django/contributions/detail.html", context)
 
 
 def split(request: HttpRequest, contribution_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
-            contribution_ids = split_contribution(contribution_id, request.POST, actor=_actor(request))
+            contribution_ids = split_contribution_postgres(contribution_id, request.POST, actor=_actor(request))
             messages.success(request, f"Rateio salvo com {len(contribution_ids)} linha(s) e soma conferida.")
             return redirect(f"/contributions/{contribution_id}/")
         except LegacyWriteError as exc:
@@ -760,10 +756,7 @@ def split(request: HttpRequest, contribution_id: int) -> HttpResponse:
             return redirect(f"/contributions/{contribution_id}/split/")
 
     context = {"title": "Ratear contribuicao"}
-    try:
-        context["form_data"] = split_contribution_context(contribution_id)
-    except LegacyDatabaseError as exc:
-        context["error"] = str(exc)
+    context["form_data"] = split_contribution_context_postgres(contribution_id)
     return render(request, "power_church_django/contributions/split.html", context)
 
 
@@ -777,7 +770,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
         "type_ids": [int(value) for value in request.GET.getlist("tipo_id") if str(value).isdigit()],
     }
     try:
-        statement = person_statement_data(
+        statement = person_statement_data_postgres(
             person_id,
             year=context["year"],
             competencia=context["competencia"],
@@ -793,7 +786,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
                 raise LegacyWriteError("Extrato nao encontrado para envio.")
             fields = _statement_message_fields(request.POST)
             if str(fields.get("update_person_email") or "") in {"1", "on", "true", "sim"}:
-                updated = update_person_email_from_manual_delivery(
+                updated = update_person_email_from_manual_delivery_postgres(
                     person_id,
                     email_value=fields.get("email_to", ""),
                     reason=fields.get("email_update_reason", ""),
@@ -802,7 +795,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
                 )
                 if updated:
                     messages.info(request, "E-mail da ficha atualizado durante o envio manual do extrato.")
-                    statement = person_statement_data(
+                    statement = person_statement_data_postgres(
                         person_id,
                         year=context["year"],
                         competencia=context["competencia"],
@@ -864,7 +857,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
 
 
 def person_statement_pdf_view(request: HttpRequest, person_id: int) -> HttpResponse:
-    statement = person_statement_data(
+    statement = person_statement_data_postgres(
         person_id,
         year=request.GET.get("year", ""),
         competencia=request.GET.get("competencia", ""),
@@ -973,16 +966,16 @@ def receipts(request: HttpRequest) -> HttpResponse:
         "generated_receipt_ids": [int(value) for value in request.GET.getlist("generated_receipt_id") if str(value).isdigit()],
     }
     try:
-        context["receipts"] = list_receipts(
+        context["receipts"] = list_receipts_postgres(
             q=context["q"],
             person_id=context["person_id"],
             date_start=context["date_start"],
             date_end=context["date_end"],
         )
-        context["receipt_people"] = search_receipt_people(context["person_lookup"]) if context["person_lookup"] else []
+        context["receipt_people"] = search_receipt_people_postgres(context["person_lookup"]) if context["person_lookup"] else []
         if context["selected_person_id"]:
             context["receipt_form"] = enrich_receipt_form(
-                receipt_new_context(
+                receipt_new_context_postgres(
                     context["selected_person_id"],
                     date_start=context["form_date_start"],
                     date_end=context["form_date_end"],
@@ -1083,10 +1076,6 @@ def receipt_new(request: HttpRequest) -> HttpResponse:
         person_id = request.POST.get("pessoa_id", "")
         try:
             receipt_id = create_receipt(request.POST, actor=_actor(request), replace_existing=True)
-            sync_receipt_snapshots(
-                receipt_ids=[int(receipt_id or 0)],
-                person_ids=[int(person_id or 0)] if int(person_id or 0) else None,
-            )
             messages.success(request, f"Recibo #{receipt_id} gerado com auditoria.")
             return redirect(f"/receipts/{receipt_id}/")
         except LegacyWriteError as exc:
@@ -1174,7 +1163,7 @@ def contributors(request: HttpRequest) -> HttpResponse:
         "selected_tags": selected_tags,
     }
     try:
-        context["contributors"] = list_contributors(
+        context["contributors"] = list_contributors_postgres(
             q=context["q"],
             status=context["status"],
             tipo=context["tipo"],
@@ -1193,11 +1182,11 @@ def contributor_detail(request: HttpRequest, contributor_id: int) -> HttpRespons
         try:
             if action == "link_person":
                 person_id = int(request.POST.get("person_id") or 0)
-                link_contributor_to_person_by_id(contributor_id, person_id, actor=_actor(request))
+                link_contributor_to_person_by_id_postgres(contributor_id, person_id, actor=_actor(request))
                 messages.success(request, "Contribuinte vinculado a pessoa com auditoria.")
             elif action == "create_frequentador":
                 family_person_id = int(request.POST.get("family_person_id") or 0)
-                person_id = create_frequentador_from_contributor(contributor_id, family_person_id=family_person_id, actor=_actor(request))
+                person_id = create_frequentador_from_contributor_postgres(contributor_id, family_person_id=family_person_id, actor=_actor(request))
                 messages.success(request, f"Frequentador #{person_id} criado e vinculado com auditoria.")
                 return redirect(f"/people/{person_id}/")
             else:
@@ -1208,7 +1197,7 @@ def contributor_detail(request: HttpRequest, contributor_id: int) -> HttpRespons
 
     context = {"title": "Ficha do contribuinte auxiliar"}
     try:
-        context["detail"] = get_contributor_detail(contributor_id)
+        context["detail"] = get_contributor_detail_postgres(contributor_id)
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/contributors/detail.html", context)

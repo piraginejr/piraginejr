@@ -1177,12 +1177,13 @@ def parse_santander_statement_pdf(pdf_path: Path, requested_layout_code: str = "
             line = normalize_query(raw_lines[index])
             next_line = normalize_query(raw_lines[index + 1]) if index + 1 < len(raw_lines) else ""
             if next_line:
+                line_has_pix = bool(re.search(r"\bPi\s*x\s+Recebido\b", line, flags=re.IGNORECASE))
+                next_has_pix = bool(re.search(r"\bPi\s*x\s+Recebido\b", next_line, flags=re.IGNORECASE))
+                split_pix_prefix = bool(re.search(r"\bPi\s*$", line, flags=re.IGNORECASE)) and bool(
+                    re.search(r"^x\s+Recebido\b", next_line, flags=re.IGNORECASE)
+                )
                 combined_line = normalize_query(f"{line} {next_line}")
-                if re.search(r"\bPi\s*x\s+Recebido\b", combined_line, flags=re.IGNORECASE) and not re.search(
-                    r"\bPi\s*x\s+Recebido\b",
-                    line,
-                    flags=re.IGNORECASE,
-                ):
+                if (split_pix_prefix or line_has_pix) and not line_re.search(line) and line_re.search(combined_line):
                     line = combined_line
                     index += 1
             if not line:

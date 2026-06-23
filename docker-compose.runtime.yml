@@ -1,0 +1,40 @@
+services:
+  power-church-django-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.django
+    container_name: power-church-django-runtime
+    env_file:
+      - ${POWER_CHURCH_RUNTIME_DIR}/env/runtime.env
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres-runtime:
+        condition: service_healthy
+    volumes:
+      - ${POWER_CHURCH_RUNTIME_DIR}/data:/app/data
+      - ${POWER_CHURCH_RUNTIME_DIR}/reports:/app/reports
+      - ${POWER_CHURCH_RUNTIME_DIR}/logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/accounts/login/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    command: ["/app/deploy/docker-entrypoint-django-runtime.sh"]
+
+  postgres-runtime:
+    image: postgres:16
+    container_name: power-church-postgres-runtime
+    env_file:
+      - ${POWER_CHURCH_RUNTIME_DIR}/env/runtime.env
+    volumes:
+      - ${POWER_CHURCH_RUNTIME_DIR}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped

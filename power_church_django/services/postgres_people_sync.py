@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +15,9 @@ from power_church_core.normalization import normalize_match_name, normalize_quer
 from power_church_django.apps.contributions.models import ContributionTypeSnapshot
 from power_church_django.apps.people.models import (
     HouseholdProfile,
+    NativePeopleImportLine,
+    NativePeopleImportLot,
+    NativePeopleImportPending,
     PersonAddressSnapshot,
     PersonContactSnapshot,
     PersonContributionSnapshot,
@@ -22,9 +26,12 @@ from power_church_django.apps.people.models import (
     PersonIdentifierSnapshot,
     PersonProfileSnapshot,
     PersonRelationshipSnapshot,
+    PersonSecurePurgeSnapshot,
+    PersonSecureTrashSnapshot,
     PersonSnapshot,
 )
 from power_church_django.services.django_audit import record_django_audit_event
+from power_church_django.services.people_import_backfill import backfill_people_import_lots_postgres
 
 
 @dataclass
@@ -473,6 +480,18 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
             ).fetchone()[0]
             or 0
         )
+        legacy_contributions_total_with_identity = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                  FROM contribuicoes co
+                  LEFT JOIN contribuintes c ON c.id = co.contribuinte_id
+                 WHERE co.ativo = 1
+                   AND (co.pessoa_id IS NOT NULL OR c.pessoa_id IS NOT NULL)
+                """
+            ).fetchone()[0]
+            or 0
+        )
 
     postgres_people_total = PersonSnapshot.objects.count()
     postgres_people_active = PersonSnapshot.objects.filter(is_active=True).count()
@@ -485,6 +504,7 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
     postgres_contributors_total = PersonContributorSnapshot.objects.filter(is_active=True).count()
     postgres_identifiers_total = PersonIdentifierSnapshot.objects.filter(is_active=True).count()
     postgres_contributions_total = PersonContributionSnapshot.objects.filter(is_active=True).count()
+    postgres_contributions_total_with_identity = postgres_contributions_total
     household_profiles_total = HouseholdProfile.objects.count()
 
     return {
@@ -509,7 +529,9 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
         "legacy_identifiers_total": legacy_identifiers_total,
         "postgres_identifiers_total": postgres_identifiers_total,
         "legacy_contributions_total": legacy_contributions_total,
+        "legacy_contributions_total_with_identity": legacy_contributions_total_with_identity,
         "postgres_contributions_total": postgres_contributions_total,
+        "postgres_contributions_total_with_identity": postgres_contributions_total_with_identity,
         "household_profiles_total": household_profiles_total,
         "counts_match": all(
             [
@@ -523,7 +545,104 @@ def compare_people_snapshots(legacy_db_path: Path) -> dict[str, Any]:
                 legacy_history_total == postgres_history_total,
                 legacy_contributors_total == postgres_contributors_total,
                 legacy_identifiers_total == postgres_identifiers_total,
-                legacy_contributions_total == postgres_contributions_total,
+                legacy_contributions_total_with_identity == postgres_contributions_total_with_identity,
             ]
         ),
+    }
+
+
+def sync_people_runtime_auxiliary_loads(legacy_db_path: Path) -> dict[str, int]:
+    trash_total = 0
+    purge_total = 0
+
+    with _connect_legacy(legacy_db_path) as conn:
+        tables = {
+            str(row["name"] or "")
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        trash_rows = []
+        purge_rows = []
+        if "pessoas_lixeira_segura" in tables:
+            trash_rows = conn.execute(
+                """
+                SELECT id, organizacao_id, pessoa_id, nome, cpf, motivo, operador, snapshot_json,
+                       restaurado, restaurado_em, criado_em
+                  FROM pessoas_lixeira_segura
+                 ORDER BY id
+                """
+            ).fetchall()
+        if "pessoas_purga_segura" in tables:
+            purge_rows = conn.execute(
+                """
+                SELECT id, organizacao_id, pessoa_id_original, lixeira_id, nome_hash, cpf_hash,
+                       motivo, operador, tombstone_json, criado_em
+                  FROM pessoas_purga_segura
+                 ORDER BY id
+                """
+            ).fetchall()
+
+    for row in trash_rows:
+        snapshot_data: dict[str, Any] = {}
+        person_snapshot: dict[str, Any] = {}
+        try:
+            parsed = json.loads(row["snapshot_json"] or "{}")
+            if isinstance(parsed, dict):
+                snapshot_data = parsed
+        except json.JSONDecodeError:
+            snapshot_data = {}
+        maybe_person = snapshot_data.get("pessoa") if isinstance(snapshot_data, dict) else {}
+        if isinstance(maybe_person, dict):
+            person_snapshot = maybe_person
+        PersonSecureTrashSnapshot.objects.update_or_create(
+            legacy_id=int(row["id"] or 0),
+            defaults={
+                "organization_id": int(row["organizacao_id"] or 0),
+                "person_legacy_id": int(row["pessoa_id"] or 0),
+                "person_name": normalize_query(row["nome"]) or normalize_query(person_snapshot.get("nome")),
+                "person_cpf": normalize_query(row["cpf"]) or normalize_query(person_snapshot.get("cpf")),
+                "original_status": normalize_query(person_snapshot.get("status")),
+                "original_code": normalize_query(person_snapshot.get("codigo_interno")),
+                "reason": normalize_query(row["motivo"]),
+                "operator": normalize_query(row["operador"]),
+                "snapshot_data": snapshot_data,
+                "restored": bool(int(row["restaurado"] or 0)),
+                "restored_at": _parse_datetime(row["restaurado_em"]),
+                "created_at": _parse_datetime(row["criado_em"]),
+            },
+        )
+        trash_total += 1
+
+    for row in purge_rows:
+        tombstone_data: dict[str, Any] = {}
+        try:
+            parsed = json.loads(row["tombstone_json"] or "{}")
+            if isinstance(parsed, dict):
+                tombstone_data = parsed
+        except json.JSONDecodeError:
+            tombstone_data = {}
+        PersonSecurePurgeSnapshot.objects.update_or_create(
+            legacy_id=int(row["id"] or 0),
+            defaults={
+                "organization_id": int(row["organizacao_id"] or 0),
+                "person_legacy_id": int(row["pessoa_id_original"] or 0),
+                "trash_legacy_id": int(row["lixeira_id"] or 0),
+                "name_hash": normalize_query(row["nome_hash"]),
+                "cpf_hash": normalize_query(row["cpf_hash"]),
+                "reason": normalize_query(row["motivo"]),
+                "operator": normalize_query(row["operador"]),
+                "tombstone_data": tombstone_data,
+                "created_at": _parse_datetime(row["criado_em"]),
+            },
+        )
+        purge_total += 1
+
+    synced_lots = backfill_people_import_lots_postgres(limit=50, line_limit=5000)
+
+    return {
+        "secure_trash_total": trash_total,
+        "secure_purge_total": purge_total,
+        "people_import_lots_total": int(synced_lots or 0),
+        "people_import_native_lots_total": NativePeopleImportLot.objects.count(),
+        "people_import_lines_total": NativePeopleImportLine.objects.count(),
+        "people_import_pendings_total": NativePeopleImportPending.objects.count(),
     }

@@ -14,9 +14,9 @@
       <a class="button secondary" href="/people/families/">Familias domiciliares</a>
       <a class="button secondary" href="/people/imports/">Importar pessoas</a>
       {% if can_delete_people %}<a class="button secondary" href="/people/trash/">Lixeira segura</a>{% endif %}
-      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=xlsx">Exportar XLSX</a>
-      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=csv">Exportar CSV</a>
-      <a class="button secondary" href="#exportacao-dinamica">Exportacao dinamica</a>
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=xlsx">Exportar basico XLSX</a>
+      <a class="button secondary" href="/people/export/?q={{ q|urlencode }}&status={{ status|urlencode }}&city={{ city|urlencode }}&preset=cadastro_basico&format=csv">Exportar basico CSV</a>
+      <a class="button secondary" href="#exportacao-dinamica">Ir para exportacao dinamica</a>
       <button type="button" onclick="window.print()">Imprimir esta lista</button>
     </div>
   </section>
@@ -46,17 +46,18 @@
   </section>
 
   <section id="exportacao-dinamica" class="panel no-print">
-    <div class="section-head">
-      <div>
-        <h2>Exportacao dinamica de pessoas</h2>
-        <p class="muted">Escolha o preset, marque os campos desejados e baixe em XLSX ou CSV. A exportacao respeita exatamente os filtros atuais da lista.</p>
-      </div>
+      <div class="section-head">
+        <div>
+          <h2>Exportacao dinamica de pessoas</h2>
+          <p class="muted">Escolha o preset, marque os campos desejados e baixe em XLSX ou CSV. A exportacao dinamica respeita exatamente os filtros atuais da lista e nao usa o preset basico do topo.</p>
+        </div>
       <span class="badge">{{ people.total|default:0 }} registro(s)</span>
     </div>
     <form method="get" action="/people/export/" data-export-builder>
       <input type="hidden" name="q" value="{{ q }}">
       <input type="hidden" name="status" value="{{ status }}">
       <input type="hidden" name="city" value="{{ city }}">
+      <input type="hidden" name="source" value="dynamic">
       <div class="form-grid">
         <label>
           Preset
@@ -78,7 +79,7 @@
             <button type="button" class="button secondary" data-export-apply-preset>Aplicar preset</button>
             <button type="button" class="button secondary" data-export-select-all>Selecionar tudo</button>
             <button type="button" class="button secondary" data-export-clear-all>Limpar selecao</button>
-            <button type="submit">Exportar selecao</button>
+            <button type="submit">Exportar selecao dinamica</button>
           </div>
         </div>
       </div>
@@ -87,6 +88,7 @@
           <p class="muted small" data-export-preset-note>{{ preset.description }}</p>
         {% endif %}
       {% endfor %}
+      <p class="muted small" data-export-selection-note></p>
       {% for group in export_options.groups %}
         <section class="panel" style="margin-top:16px; margin-bottom:0; padding:18px;">
           <div class="section-head">
@@ -162,12 +164,35 @@
         return presets[presetSelect.value] || {columns: [], description: ""};
       }
 
+      function selectedLabels() {
+        return fieldInputs
+          .filter((input) => input.checked)
+          .map((input) => {
+            const label = input.closest("label");
+            return label ? label.textContent.trim().replace(/\s+/g, " ") : input.value;
+          });
+      }
+
+      function updateSelectionNote() {
+        const selectionNote = builder.querySelector("[data-export-selection-note]");
+        if (!selectionNote) return;
+        const labels = selectedLabels();
+        if (!labels.length) {
+          selectionNote.textContent = "Nenhuma coluna selecionada. A exportacao dinamica exige pelo menos um campo marcado.";
+          return;
+        }
+        const preview = labels.slice(0, 6).join(", ");
+        const extra = labels.length > 6 ? ` e mais ${labels.length - 6}` : "";
+        selectionNote.textContent = `${labels.length} coluna(s) selecionada(s): ${preview}${extra}.`;
+      }
+
       function applyPreset() {
         const active = new Set(selectedPreset().columns);
         fieldInputs.forEach((input) => {
           input.checked = active.has(input.value);
         });
         if (presetNote) presetNote.textContent = selectedPreset().description;
+        updateSelectionNote();
       }
 
       const selectAllButton = builder.querySelector("[data-export-select-all]");
@@ -182,6 +207,7 @@
           fieldInputs.forEach((input) => {
             input.checked = true;
           });
+          updateSelectionNote();
         });
       }
       if (clearAllButton) {
@@ -189,11 +215,16 @@
           fieldInputs.forEach((input) => {
             input.checked = false;
           });
+          updateSelectionNote();
         });
       }
       if (presetSelect) {
         presetSelect.addEventListener("change", applyPreset);
       }
+      fieldInputs.forEach((input) => {
+        input.addEventListener("change", updateSelectionNote);
+      });
+      updateSelectionNote();
     }());
   </script>
 {% endblock %}

@@ -40,6 +40,13 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return env
 
 
+def _merge_env_defaults(values: dict[str, str]) -> None:
+    for key, value in values.items():
+        current = os.environ.get(key)
+        if current is None or not str(current).strip():
+            os.environ[key] = value
+
+
 def _prefer_local_postgres_socket(env: dict[str, str]) -> dict[str, str]:
     host = str(env.get("POWER_CHURCH_POSTGRES_HOST") or "").strip()
     port = str(env.get("POWER_CHURCH_POSTGRES_PORT") or "5432").strip() or "5432"
@@ -140,7 +147,7 @@ def main() -> int:
     db_path = Path(args.db).expanduser().resolve()
     env_file = Path(args.env_file).expanduser().resolve()
     if env_file.exists():
-        os.environ.update(_prefer_local_postgres_socket(_load_env_file(env_file)))
+        _merge_env_defaults(_prefer_local_postgres_socket(_load_env_file(env_file)))
     os.environ.setdefault("PYTHONPYCACHEPREFIX", "/private/tmp/pycache_powerchurch")
     os.environ["POWER_CHURCH_LEGACY_DB_PATH"] = str(db_path)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "power_church_site.settings")

@@ -34,13 +34,7 @@
           {% endfor %}
         </select>
       </label>
-      <label>
-        Destino do lote
-        <select name="storage_backend">
-          <option value="legacy" selected>Operacional atual (legado validado)</option>
-          <option value="postgres_native">Postgres nativo de validacao</option>
-        </select>
-      </label>
+      <input type="hidden" name="storage_backend" value="postgres_native">
       <label>
         PDF
         <input type="file" name="extrato_pdf" accept="application/pdf">
@@ -49,6 +43,7 @@
     </form>
     <p class="muted small">Chave segura: use "Comparar Swift x PyMuPDF antes de gravar" quando estiver homologando a leitura portavel. Se houver divergencia, o lote nao e gravado.</p>
     <p class="muted small">Padrao desta versao: sempre usar o extrato completo do banco, mesmo quando houver PDF separado so de PIX.</p>
+    <p class="muted small">Novo padrao operacional: cada novo lote de extrato ja nasce no Postgres nativo. O caminho legado fica preservado apenas para historico e conferencias antigas.</p>
   </section>
 
   {% if lots %}

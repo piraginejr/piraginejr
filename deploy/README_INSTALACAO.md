@@ -106,6 +106,54 @@ Para o Django em staging paralelo:
 docker compose -f docker-compose.django.yml up --build
 ```
 
+## Runtime Local No Mesmo Modelo Da Nuvem
+
+Para operar localmente ja no desenho de volumes persistentes que vai para a hospedagem, o projeto agora usa:
+
+- `/Users/piraginejr/power_church_postgres_runtime/`
+
+Esse runtime separado guarda:
+
+- `data/` inteiro como volume persistente unico do Django;
+- Postgres do container;
+- banco legado de referencia dentro de `data/`;
+- envelopes, extratos, planilhas, fotos, branding e homologacao dentro de `data/`;
+- relatorios;
+- backups;
+- logs.
+
+Esse caminho fica fora do `Documents/iCloud`, justamente para evitar lentidao e lock durante copia de envelopes, fotos e uploads.
+
+Preparar a estrutura e sincronizar os dados atuais:
+
+```bash
+./scripts/preparar_runtime_postgres_local.sh --sync-existing-data
+```
+
+Subir o stack Docker local do Django/Postgres:
+
+```bash
+./scripts/subir_runtime_postgres_local.sh
+```
+
+Parar o stack:
+
+```bash
+./scripts/parar_runtime_postgres_local.sh
+```
+
+Arquivos principais desse fluxo:
+
+- [docker-compose.runtime.yml](/Users/piraginejr/Documents/New project/Teste/Power Church/docker-compose.runtime.yml)
+- [runtime.env.postgres.local.example](/Users/piraginejr/Documents/New project/Teste/Power Church/deploy/runtime.env.postgres.local.example)
+- [docker-entrypoint-django-runtime.sh](/Users/piraginejr/Documents/New project/Teste/Power Church/deploy/docker-entrypoint-django-runtime.sh)
+
+Entrada publica local do ambiente novo:
+
+```text
+http://127.0.0.1:8001/accounts/login/
+```
+
 Depois de subir:
 
 ```bash

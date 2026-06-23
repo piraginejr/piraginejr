@@ -7,8 +7,12 @@ from django.db import OperationalError, ProgrammingError
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
+from power_church_django.services.audit_native import (
+    operational_audit_postgres,
+    search_receipt_people_postgres,
+    technical_audit_postgres,
+)
 from power_church_django.services.django_audit import list_django_audit_events, list_system_email_events, resend_system_email_event
-from power_church_django.services.legacy import LegacyDatabaseError, operational_audit, search_receipt_people, technical_audit
 
 
 def _int_param(request: HttpRequest, name: str, default: int) -> int:
@@ -40,7 +44,7 @@ def _actor(request: HttpRequest) -> str:
 def _search_person_by_id(person_id: int) -> dict[str, object] | None:
     if person_id <= 0:
         return None
-    for item in search_receipt_people(str(person_id), limit=10):
+    for item in search_receipt_people_postgres(str(person_id), limit=10):
         try:
             if int(item.get("id") or 0) == person_id:
                 return item
@@ -80,7 +84,7 @@ def index(request: HttpRequest) -> HttpResponse:
                 page_size=_int_param(request, "page_size", 120),
             )
             if context["person_lookup"]:
-                context["email_people"] = search_receipt_people(context["person_lookup"])
+                context["email_people"] = search_receipt_people_postgres(context["person_lookup"])
             email_audit["previous_query"] = _query(
                 modo="emails",
                 email_kind=context["email_kind"],
@@ -125,7 +129,7 @@ def index(request: HttpRequest) -> HttpResponse:
             )
             context["django_audit"] = django_audit
         elif mode == "tecnica":
-            technical = technical_audit(
+            technical = technical_audit_postgres(
                 action=context["acao"],
                 table=context["tabela"],
                 page=_int_param(request, "page", 1),
@@ -148,14 +152,14 @@ def index(request: HttpRequest) -> HttpResponse:
             context["technical"] = technical
         else:
             if context["merge_lookup"]:
-                context["merge_people"] = search_receipt_people(context["merge_lookup"], limit=20)
+                context["merge_people"] = search_receipt_people_postgres(context["merge_lookup"], limit=20)
             if context["merge_primary_lookup"]:
-                context["merge_primary_people"] = search_receipt_people(context["merge_primary_lookup"], limit=20)
+                context["merge_primary_people"] = search_receipt_people_postgres(context["merge_primary_lookup"], limit=20)
             if context["merge_duplicate_lookup"]:
-                context["merge_duplicate_people"] = search_receipt_people(context["merge_duplicate_lookup"], limit=20)
+                context["merge_duplicate_people"] = search_receipt_people_postgres(context["merge_duplicate_lookup"], limit=20)
             context["merge_primary_person"] = _search_person_by_id(context["merge_primary_id"])
             context["merge_duplicate_person"] = _search_person_by_id(context["merge_duplicate_id"])
-            audit = operational_audit(
+            audit = operational_audit_postgres(
                 tipo=context["tipo"],
                 severidade=context["severidade"],
                 page=_int_param(request, "page", 1),
@@ -174,7 +178,7 @@ def index(request: HttpRequest) -> HttpResponse:
                 page_size=audit["page_size"],
             )
             context["audit"] = audit
-    except (LegacyDatabaseError, LookupError, OperationalError, ProgrammingError) as exc:
+    except (LookupError, OperationalError, ProgrammingError, ValueError) as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/audit/index.html", context)
 
@@ -202,7 +206,7 @@ def email_resend(request: HttpRequest) -> HttpResponse:
             request,
             f"{str(result.get('kind') or '').title()} reenviado para {result.get('destination') or '-'} com sucesso.",
         )
-    except (LegacyDatabaseError, LookupError, OperationalError, ProgrammingError) as exc:
+    except (LookupError, OperationalError, ProgrammingError, ValueError) as exc:
         messages.error(request, str(exc))
     except Exception as exc:
         messages.error(request, f"Nao foi possivel reenviar o e-mail: {exc}")

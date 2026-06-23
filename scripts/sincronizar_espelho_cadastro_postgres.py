@@ -33,6 +33,13 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return env
 
 
+def _merge_env_defaults(values: dict[str, str]) -> None:
+    for key, value in values.items():
+        current = os.environ.get(key)
+        if current is None or not str(current).strip():
+            os.environ[key] = value
+
+
 def _run_inside_venv() -> int | None:
     if not DJANGO_VENV_PYTHON.exists():
         return None
@@ -79,7 +86,7 @@ def main() -> int:
 
     env_file = Path(args.env_file).expanduser().resolve()
     if env_file.exists():
-        os.environ.update(_load_env_file(env_file))
+        _merge_env_defaults(_load_env_file(env_file))
     os.environ.setdefault("PYTHONPYCACHEPREFIX", "/private/tmp/pycache_powerchurch")
     os.environ["POWER_CHURCH_LEGACY_DB_PATH"] = str(Path(args.db).expanduser().resolve())
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "power_church_site.settings")

@@ -228,6 +228,54 @@ class PersonContributionSnapshot(models.Model):
         return f"{self.person_id}:{self.amount}"
 
 
+class PersonSecureTrashSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada", db_index=True)
+    person_name = models.CharField("nome da pessoa", max_length=240, blank=True)
+    person_cpf = models.CharField("cpf da pessoa", max_length=32, blank=True)
+    original_status = models.CharField("status original", max_length=64, blank=True)
+    original_code = models.CharField("codigo original", max_length=80, blank=True)
+    reason = models.TextField("motivo", blank=True)
+    operator = models.CharField("operador", max_length=160, blank=True)
+    snapshot_data = models.JSONField("snapshot", default=dict, blank=True)
+    restored = models.BooleanField("restaurado", default=False, db_index=True)
+    restored_at = models.DateTimeField("restaurado em", null=True, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "lixeira segura de pessoa"
+        verbose_name_plural = "lixeira segura de pessoas"
+        ordering = ["-created_at", "-legacy_id"]
+        db_table = "people_personsecuretrashsnapshot"
+
+    def __str__(self) -> str:
+        return self.person_name or f"lixeira #{self.legacy_id}"
+
+
+class PersonSecurePurgeSnapshot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada", db_index=True)
+    trash_legacy_id = models.IntegerField("lixeira legada", db_index=True)
+    name_hash = models.CharField("hash do nome", max_length=128, blank=True)
+    cpf_hash = models.CharField("hash do cpf", max_length=128, blank=True)
+    reason = models.TextField("motivo", blank=True)
+    operator = models.CharField("operador", max_length=160, blank=True)
+    tombstone_data = models.JSONField("tombstone", default=dict, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "purga segura de pessoa"
+        verbose_name_plural = "purgas seguras de pessoas"
+        ordering = ["-created_at", "-legacy_id"]
+        db_table = "people_personsecurepurgesnapshot"
+
+    def __str__(self) -> str:
+        return f"purga #{self.legacy_id}"
+
+
 class HouseholdProfile(models.Model):
     signature = models.CharField("assinatura do nucleo", max_length=500, unique=True)
     head_person_id = models.IntegerField("cabeca da familia", null=True, blank=True, db_index=True)
@@ -242,3 +290,79 @@ class HouseholdProfile(models.Model):
 
     def __str__(self) -> str:
         return self.display_name_override or self.signature
+
+
+class NativePeopleImportLot(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    import_type = models.CharField("tipo", max_length=80, db_index=True)
+    file_name = models.CharField("arquivo", max_length=260, blank=True)
+    file_hash = models.CharField("hash do arquivo", max_length=128, blank=True)
+    status = models.CharField("status", max_length=64, blank=True, db_index=True)
+    total_lines = models.IntegerField("linhas totais", default=0)
+    imported_lines = models.IntegerField("linhas importadas", default=0)
+    ignored_lines = models.IntegerField("linhas ignoradas", default=0)
+    error_lines = models.IntegerField("linhas com erro", default=0)
+    open_pendencies = models.IntegerField("pendencias abertas", default=0)
+    active_people = models.IntegerField("pessoas ativas", default=0)
+    without_name = models.IntegerField("fichas sem nome", default=0)
+    review_mappings = models.IntegerField("campos para revisar", default=0)
+    created_at_display = models.CharField("criado em exibicao", max_length=80, blank=True)
+    confirmed_at_display = models.CharField("confirmado em exibicao", max_length=80, blank=True)
+    status_rows_json = models.JSONField("resumo por status", default=list, blank=True)
+    mapping_rows_json = models.JSONField("mapeamentos", default=list, blank=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "lote nativo de importacao de pessoas"
+        verbose_name_plural = "lotes nativos de importacao de pessoas"
+        ordering = ["-legacy_id"]
+        db_table = "people_nativepeopleimportlot"
+
+    def __str__(self) -> str:
+        return f"lote #{self.legacy_id}"
+
+
+class NativePeopleImportPending(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    lot = models.ForeignKey(NativePeopleImportLot, on_delete=models.CASCADE, related_name="pendings")
+    line_number = models.IntegerField("numero da linha", default=0, db_index=True)
+    severity = models.CharField("severidade", max_length=32, blank=True, db_index=True)
+    issue_type = models.CharField("tipo", max_length=120, blank=True, db_index=True)
+    description = models.TextField("descricao", blank=True)
+    suggested_action = models.TextField("acao sugerida", blank=True)
+    resolved = models.BooleanField("resolvido", default=False, db_index=True)
+    person_name = models.CharField("nome da pessoa", max_length=240, blank=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "pendencia nativa de importacao de pessoas"
+        verbose_name_plural = "pendencias nativas de importacao de pessoas"
+        ordering = ["resolved", "-severity", "line_number", "legacy_id"]
+        db_table = "people_nativepeopleimportpending"
+
+    def __str__(self) -> str:
+        return f"pendencia #{self.legacy_id}"
+
+
+class NativePeopleImportLine(models.Model):
+    legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
+    lot = models.ForeignKey(NativePeopleImportLot, on_delete=models.CASCADE, related_name="lines")
+    line_number = models.IntegerField("numero da linha", default=0, db_index=True)
+    status = models.CharField("status", max_length=64, blank=True, db_index=True)
+    original_name = models.CharField("nome original", max_length=240, blank=True)
+    normalized_action = models.CharField("acao normalizada", max_length=160, blank=True)
+    person_legacy_id = models.IntegerField("pessoa legada", null=True, blank=True, db_index=True)
+    person_name = models.CharField("nome da ficha", max_length=240, blank=True)
+    person_cpf = models.CharField("cpf da ficha", max_length=32, blank=True)
+    person_status = models.CharField("status da ficha", max_length=64, blank=True)
+    person_active = models.BooleanField("ficha ativa", default=False, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "linha nativa de importacao de pessoas"
+        verbose_name_plural = "linhas nativas de importacao de pessoas"
+        ordering = ["line_number", "legacy_id"]
+        db_table = "people_nativepeopleimportline"
+
+    def __str__(self) -> str:
+        return f"linha #{self.line_number}"

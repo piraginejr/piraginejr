@@ -16,11 +16,8 @@ from power_church_django.apps.people.models import (
     PersonContributorSnapshot,
     PersonSnapshot,
 )
-from power_church_django.services.legacy import (
-    format_status,
-    organized_family_nuclei,
-    status_sigla,
-)
+from power_church_django.services.people_read_native import organized_family_nuclei
+from power_church_django.services.runtime_formatting import format_status, status_sigla
 
 
 EXPORT_FORMATS = {

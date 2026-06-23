@@ -1019,6 +1019,33 @@ def _merge_notes(primary_notes: object, duplicate_notes: object, merge_note: str
     return "\n".join(chunks)
 
 
+def _coerce_possible_birth_date(value: object) -> tuple[str, date | None]:
+    raw = normalize_query(value)
+    if not raw:
+        return "", None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            parsed = datetime.strptime(raw, fmt).date()
+            return raw, parsed
+        except ValueError:
+            continue
+    return raw, None
+
+
+def _merge_birth_date(primary_value: object, duplicate_value: object) -> tuple[str, bool]:
+    primary_raw, primary_date = _coerce_possible_birth_date(primary_value)
+    duplicate_raw, duplicate_date = _coerce_possible_birth_date(duplicate_value)
+    if primary_date and duplicate_date and primary_date != duplicate_date:
+        return "", True
+    if primary_date and not duplicate_date:
+        return primary_raw, False
+    if duplicate_date and not primary_date:
+        return duplicate_raw, False
+    if primary_date and duplicate_date:
+        return primary_raw or duplicate_raw, False
+    return _merge_pick_text(primary_raw, duplicate_raw), False
+
+
 def _address_merge_key(row: sqlite3.Row | Mapping[str, object] | None) -> tuple[str, ...]:
     if row is None:
         return ("", "", "", "", "", "", "")
@@ -1243,9 +1270,8 @@ def merge_people(
         duplicate_cpf = clean_cpf(duplicate["cpf"])
         if primary_cpf and duplicate_cpf and primary_cpf != duplicate_cpf:
             raise LegacyWriteError("As fichas possuem CPFs diferentes. Revise manualmente antes de qualquer merge.")
-        primary_birth = normalize_query(primary["data_nascimento"])
-        duplicate_birth = normalize_query(duplicate["data_nascimento"])
-        if primary_birth and duplicate_birth and primary_birth != duplicate_birth:
+        merged_birth_date, birth_conflict = _merge_birth_date(primary["data_nascimento"], duplicate["data_nascimento"])
+        if birth_conflict:
             raise LegacyWriteError("As fichas possuem datas de nascimento diferentes. Revise manualmente antes de mesclar.")
         primary_sex = normalize_query(primary["sexo"])
         duplicate_sex = normalize_query(duplicate["sexo"])
@@ -1264,7 +1290,7 @@ def merge_people(
             "nome_social": _merge_pick_text(primary["nome_social"], duplicate["nome_social"]),
             "cpf": primary_cpf or duplicate_cpf,
             "rg": _merge_pick_text(primary["rg"], duplicate["rg"]),
-            "data_nascimento": _merge_pick_text(primary["data_nascimento"], duplicate["data_nascimento"]),
+            "data_nascimento": merged_birth_date,
             "sexo": _merge_pick_text(primary["sexo"], duplicate["sexo"]),
             "estado_civil": _merge_pick_text(primary["estado_civil"], duplicate["estado_civil"]),
             "email_principal": _merge_pick_text(primary["email_principal"], duplicate["email_principal"]),

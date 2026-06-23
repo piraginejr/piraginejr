@@ -161,3 +161,236 @@ class ContributionTypeSnapshot(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class NativeContribution(models.Model):
+    legacy_id = models.IntegerField("id publico", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada", null=True, blank=True, db_index=True)
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    contributor_source = models.CharField("origem do contribuinte", max_length=32, blank=True, db_index=True)
+    contributor_name = models.CharField("nome do contribuinte", max_length=240, blank=True)
+    contributor_document = models.CharField("documento do contribuinte", max_length=64, blank=True)
+    contributor_type = models.CharField("tipo do contribuinte", max_length=64, blank=True)
+    native_aux_contributor_id = models.IntegerField("contribuinte auxiliar nativo", null=True, blank=True, db_index=True)
+    received_at = models.DateField("data de recebimento", null=True, blank=True, db_index=True)
+    received_at_raw = models.CharField("data de recebimento bruta", max_length=32, blank=True)
+    competence = models.CharField("competencia", max_length=32, blank=True, db_index=True)
+    competence_order = models.IntegerField("ordem da competencia", default=0, db_index=True)
+    amount = models.DecimalField("valor", max_digits=14, decimal_places=2, default=0)
+    contribution_type_legacy_id = models.IntegerField("tipo legado", db_index=True)
+    contribution_type_name = models.CharField("tipo", max_length=160, blank=True)
+    campaign_legacy_id = models.IntegerField("campanha legada", null=True, blank=True, db_index=True)
+    campaign_name = models.CharField("campanha", max_length=160, blank=True)
+    receipt_method_legacy_id = models.IntegerField("forma legada", null=True, blank=True, db_index=True)
+    receipt_method_name = models.CharField("forma", max_length=160, blank=True)
+    operational_status = models.CharField("status operacional", max_length=64, blank=True, db_index=True)
+    notes = models.TextField("observacoes", blank=True)
+    statement_movement_legacy_id = models.IntegerField("movimento de extrato legado", null=True, blank=True, db_index=True)
+    pix_movement_legacy_id = models.IntegerField("movimento PIX legado", null=True, blank=True, db_index=True)
+    split_parent_legacy_id = models.IntegerField("contribuicao origem do rateio", null=True, blank=True, db_index=True)
+    source = models.CharField("origem", max_length=80, blank=True, db_index=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_by = models.CharField("criado por", max_length=160, blank=True)
+    updated_by = models.CharField("atualizado por", max_length=160, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "contribuicao nativa"
+        verbose_name_plural = "contribuicoes nativas"
+        ordering = ["-competence_order", "-received_at", "-legacy_id"]
+        indexes = [
+            models.Index(fields=["organization_id", "person_legacy_id", "is_active"]),
+            models.Index(fields=["organization_id", "operational_status", "competence"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.legacy_id}:{self.amount}"
+
+
+class NativeAuxContributor(models.Model):
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    legacy_reference_id = models.IntegerField("contribuinte legado de origem", null=True, blank=True, db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada vinculada", null=True, blank=True, db_index=True)
+    name = models.CharField("nome", max_length=240)
+    normalized_name = models.CharField("nome normalizado", max_length=240, db_index=True)
+    primary_document = models.CharField("documento principal", max_length=64, blank=True, db_index=True)
+    document_type = models.CharField("tipo do documento", max_length=32, blank=True)
+    contributor_type = models.CharField("tipo", max_length=64, blank=True)
+    origin = models.CharField("origem", max_length=120, blank=True)
+    quality = models.CharField("qualidade", max_length=120, blank=True)
+    status = models.CharField("status", max_length=64, blank=True)
+    notes = models.TextField("observacoes", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "contribuinte auxiliar nativo"
+        verbose_name_plural = "contribuintes auxiliares nativos"
+        ordering = ["name", "id"]
+        indexes = [
+            models.Index(fields=["organization_id", "is_active", "name"]),
+            models.Index(fields=["organization_id", "primary_document"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class NativeEnvelope(models.Model):
+    legacy_id = models.IntegerField("id publico", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    native_lot_legacy_id = models.IntegerField("lote nativo", null=True, blank=True, db_index=True)
+    lot_name = models.CharField("nome do lote", max_length=180, blank=True)
+    competence = models.CharField("competencia", max_length=32, blank=True, db_index=True)
+    competence_order = models.IntegerField("ordem da competencia", default=0, db_index=True)
+    received_at = models.DateField("data de recebimento", null=True, blank=True, db_index=True)
+    received_at_raw = models.CharField("data de recebimento bruta", max_length=32, blank=True)
+    total_informed = models.DecimalField("total informado", max_digits=14, decimal_places=2, default=0)
+    total_lines = models.DecimalField("total das linhas", max_digits=14, decimal_places=2, default=0)
+    informed_name = models.CharField("nome informado", max_length=240, blank=True)
+    informed_phone = models.CharField("telefone informado", max_length=64, blank=True)
+    informed_address = models.CharField("endereco informado", max_length=255, blank=True)
+    person_legacy_id = models.IntegerField("pessoa legada", null=True, blank=True, db_index=True)
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    native_aux_contributor_id = models.IntegerField("contribuinte auxiliar nativo", null=True, blank=True, db_index=True)
+    receipt_method_legacy_id = models.IntegerField("forma legado", null=True, blank=True, db_index=True)
+    receipt_method_name = models.CharField("forma", max_length=160, blank=True)
+    operational_status = models.CharField("status operacional", max_length=64, blank=True, db_index=True)
+    source = models.CharField("origem operacional", max_length=160, blank=True)
+    status = models.CharField("status", max_length=40, blank=True, db_index=True)
+    notes = models.TextField("observacoes", blank=True)
+    justification = models.TextField("justificativa", blank=True)
+    image_original_name = models.CharField("nome original da imagem", max_length=255, blank=True)
+    image_hash = models.CharField("hash da imagem", max_length=120, blank=True, db_index=True)
+    image_content_type = models.CharField("content type da imagem", max_length=120, blank=True)
+    image_size = models.IntegerField("tamanho da imagem", default=0)
+    image_path = models.CharField("caminho da imagem", max_length=500, blank=True)
+    traceability_form = models.CharField("forma identificada", max_length=64, blank=True)
+    traceability_provider = models.CharField("banco operadora", max_length=120, blank=True)
+    traceability_check_number = models.CharField("numero do cheque", max_length=64, blank=True)
+    traceability_operation_number = models.CharField("numero da operacao", max_length=64, blank=True)
+    traceability_nsu_tid = models.CharField("nsu tid", max_length=64, blank=True)
+    traceability_card_suffix = models.CharField("final do cartao", max_length=32, blank=True)
+    traceability_operation_date = models.DateField("data da operacao", null=True, blank=True)
+    traceability_operation_date_raw = models.CharField("data da operacao bruta", max_length=32, blank=True)
+    traceability_operation_amount = models.DecimalField("valor da operacao", max_digits=14, decimal_places=2, null=True, blank=True)
+    traceability_status = models.CharField("status de conciliacao", max_length=64, blank=True)
+    traceability_notes = models.TextField("observacoes de conciliacao", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_by = models.CharField("criado por", max_length=160, blank=True)
+    updated_by = models.CharField("atualizado por", max_length=160, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "envelope nativo"
+        verbose_name_plural = "envelopes nativos"
+        ordering = ["-competence_order", "-received_at", "-legacy_id"]
+        indexes = [
+            models.Index(fields=["organization_id", "competence", "status"]),
+            models.Index(fields=["organization_id", "person_legacy_id", "is_active"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.legacy_id}:{self.total_informed}"
+
+
+class NativeEnvelopeLot(models.Model):
+    legacy_id = models.IntegerField("id publico", unique=True, db_index=True)
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    name = models.CharField("nome", max_length=180)
+    competence = models.CharField("competencia", max_length=32, blank=True, db_index=True)
+    competence_order = models.IntegerField("ordem da competencia", default=0, db_index=True)
+    default_received_at = models.DateField("data padrao", null=True, blank=True)
+    default_received_at_raw = models.CharField("data padrao bruta", max_length=32, blank=True)
+    default_source = models.CharField("origem operacional padrao", max_length=160, blank=True)
+    default_contribution_type_legacy_id = models.IntegerField("tipo legado padrao", null=True, blank=True, db_index=True)
+    default_campaign_legacy_id = models.IntegerField("campanha legada padrao", null=True, blank=True, db_index=True)
+    default_receipt_method_legacy_id = models.IntegerField("forma legada padrao", null=True, blank=True, db_index=True)
+    folder_path = models.CharField("pasta", max_length=500, blank=True)
+    notes = models.TextField("observacoes", blank=True)
+    status = models.CharField("status", max_length=40, blank=True, db_index=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_by = models.CharField("criado por", max_length=160, blank=True)
+    updated_by = models.CharField("atualizado por", max_length=160, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "lote nativo de envelope"
+        verbose_name_plural = "lotes nativos de envelope"
+        ordering = ["-competence_order", "-legacy_id"]
+        indexes = [
+            models.Index(fields=["organization_id", "competence", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class NativeEnvelopeItem(models.Model):
+    legacy_id = models.IntegerField("id publico", unique=True, db_index=True)
+    envelope = models.ForeignKey(NativeEnvelope, on_delete=models.CASCADE, related_name="items")
+    person_legacy_id = models.IntegerField("pessoa legada", null=True, blank=True, db_index=True)
+    contributor_legacy_id = models.IntegerField("contribuinte legado", null=True, blank=True, db_index=True)
+    native_aux_contributor_id = models.IntegerField("contribuinte auxiliar nativo", null=True, blank=True, db_index=True)
+    contributor_name = models.CharField("nome do contribuinte", max_length=240, blank=True)
+    contributor_document = models.CharField("documento do contribuinte", max_length=64, blank=True)
+    contribution_legacy_id = models.IntegerField("contribuicao legada", null=True, blank=True, db_index=True)
+    contribution_type_legacy_id = models.IntegerField("tipo legado", db_index=True)
+    contribution_type_name = models.CharField("tipo", max_length=160, blank=True)
+    campaign_legacy_id = models.IntegerField("campanha legada", null=True, blank=True, db_index=True)
+    campaign_name = models.CharField("campanha", max_length=160, blank=True)
+    amount = models.DecimalField("valor", max_digits=14, decimal_places=2, default=0)
+    notes = models.TextField("observacoes", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "item de envelope nativo"
+        verbose_name_plural = "itens de envelope nativo"
+        ordering = ["envelope_id", "legacy_id"]
+        indexes = [
+            models.Index(fields=["envelope", "is_active"]),
+            models.Index(fields=["contribution_legacy_id"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.envelope_id}:{self.amount}"
+
+
+class NativeEnvelopeProfileUpdate(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pendente", "Pendente"
+        APPLIED = "aplicado", "Aplicado"
+        IGNORED = "ignorado", "Ignorado"
+
+    envelope = models.ForeignKey(NativeEnvelope, on_delete=models.CASCADE, related_name="profile_updates")
+    organization_id = models.IntegerField("organizacao", db_index=True)
+    person_legacy_id = models.IntegerField("pessoa legada", db_index=True)
+    field_name = models.CharField("campo", max_length=64, db_index=True)
+    current_value = models.TextField("valor da ficha", blank=True)
+    envelope_value = models.TextField("valor do envelope", blank=True)
+    status = models.CharField("status", max_length=24, choices=Status.choices, default=Status.PENDING, db_index=True)
+    notes = models.TextField("observacoes", blank=True)
+    created_by = models.CharField("criado por", max_length=160, blank=True)
+    updated_by = models.CharField("atualizado por", max_length=160, blank=True)
+    created_at = models.DateTimeField("criado em", auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField("atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "pendencia cadastral de envelope"
+        verbose_name_plural = "pendencias cadastrais de envelope"
+        ordering = ["envelope_id", "status", "field_name", "id"]
+        indexes = [
+            models.Index(fields=["envelope", "status"]),
+            models.Index(fields=["person_legacy_id", "status", "field_name"]),
+            models.Index(fields=["organization_id", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.envelope_id}:{self.field_name}:{self.status}"

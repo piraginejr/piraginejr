@@ -54,6 +54,15 @@ Padrao operacional:
 
 ## 4. Roteiros Do Operador
 
+### Roteiro Mestre Final
+
+- roteiro final: [ROTEIRO_OPERADOR_FINAL_MIGRACAO_ZERO_HIBRIDO_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/ROTEIRO_OPERADOR_FINAL_MIGRACAO_ZERO_HIBRIDO_V1.md)
+- fechamento final: [FECHAMENTO_FINAL_MIGRACAO_ZERO_HIBRIDO_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/FECHAMENTO_FINAL_MIGRACAO_ZERO_HIBRIDO_V1.md)
+- uso recomendado:
+  - executar depois das etapas tecnicas concluídas;
+  - usar como roteiro unico de regressao antes da subida hospedada;
+  - registrar bugs reais encontrados depois da migracao grande.
+
 ### Etapa 1
 
 - roteiro: [ROTEIRO_OPERADOR_ETAPA1_FUNDACAO_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/data/homologacao/ROTEIRO_OPERADOR_ETAPA1_FUNDACAO_V1.md)

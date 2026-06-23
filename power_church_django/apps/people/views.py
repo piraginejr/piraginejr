@@ -11,44 +11,44 @@ from power_church_django.services.data_exchange import (
     people_export_dataset,
     people_export_form_context,
 )
+from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.family_profiles import update_household_profile
-from power_church_django.services.legacy import (
-    LegacyDatabaseError,
+from power_church_django.services.people_read_native import (
     family_registry_dashboard,
-    get_people_import_lot_detail,
     get_person_detail,
-    legacy_db_path,
-    list_secure_people_trash,
     list_people,
-    people_import_dashboard,
-    search_receipt_people,
     search_people_for_relationship,
 )
-from power_church_django.services.postgres_people_sync import sync_people_snapshots
-from power_church_django.services.legacy_write import (
-    LegacyWriteError,
+from power_church_django.services.people_import_native import (
+    get_people_import_lot_detail_postgres,
+    import_people_from_upload_postgres,
+    people_import_dashboard_postgres,
+)
+from power_church_django.services.people_form_support import (
     PERSON_MARITAL_STATUS_OPTIONS,
     PERSON_SEX_OPTIONS,
     PERSON_STATUS_OPTIONS,
-    create_family_group_relationships,
-    create_person,
-    create_person_relationship,
-    deactivate_person_relationship,
     empty_person_form,
-    get_person_form_initial,
-    import_people_from_upload,
-    merge_people,
     person_form_payload,
-    purge_secure_person_trash,
-    soft_delete_person,
-    suppress_family_group_suggestions,
-    suppress_family_suggestion,
-    sync_person_household_relationships,
-    update_person_relationship,
-    update_person,
-    validate_person_cpf_for_form,
-    validate_person_email_for_form,
+)
+from power_church_django.services.people_native_write import (
+    create_family_group_relationships_postgres,
+    create_person_postgres,
+    create_person_relationship_postgres,
+    deactivate_person_relationship_postgres,
+    get_person_form_initial_postgres,
+    list_secure_people_trash_postgres,
+    merge_people_postgres,
+    purge_secure_person_trash_postgres,
+    sync_person_household_relationships_postgres,
+    soft_delete_person_postgres,
+    suppress_family_group_suggestions_postgres,
+    suppress_family_suggestion_postgres,
+    update_person_postgres,
+    update_person_relationship_postgres,
+    validate_person_cpf_postgres,
+    validate_person_email_postgres,
 )
 from power_church_django.services.photos import (
     PhotoUploadError,
@@ -58,6 +58,7 @@ from power_church_django.services.photos import (
     save_member_photo_payload,
     uploaded_photo_payload,
 )
+from power_church_django.services.runtime_errors import LegacyDatabaseError, LegacyWriteError
 
 
 def index(request: HttpRequest) -> HttpResponse:
@@ -82,8 +83,14 @@ def export(request: HttpRequest) -> HttpResponse:
     status = request.GET.get("status", "")
     city = request.GET.get("city", "")
     preset = request.GET.get("preset", "")
+    source = request.GET.get("source", "")
     columns = [value for value in request.GET.getlist("column") if value.strip()]
     export_format = request.GET.get("format", "xlsx")
+    if source == "dynamic" and not columns:
+        messages.error(request, "Selecione pelo menos uma coluna antes de exportar a selecao dinamica.")
+        query = urlencode({"q": q, "status": status, "city": city})
+        target = f"/people/?{query}" if query else "/people/"
+        return redirect(f"{target}#exportacao-dinamica")
     try:
         export_data = people_export_dataset(q=q, status=status, city=city, columns=columns, preset=preset)
     except LegacyDatabaseError as exc:
@@ -101,6 +108,7 @@ def export(request: HttpRequest) -> HttpResponse:
                 "status": status,
                 "city": city,
                 "formato": export_format,
+                "origem": source or "preset",
                 "preset": export_data["preset"],
                 "colunas": export_data["columns"],
                 "quantidade_colunas": len(export_data["columns"]),
@@ -119,8 +127,8 @@ def trash(request: HttpRequest) -> HttpResponse:
         return redirect("/people/")
     context = {"title": "Lixeira segura de pessoas", "can_purge_people": _can_purge_people(request)}
     try:
-        context["trash"] = list_secure_people_trash()
-    except LegacyDatabaseError as exc:
+        context["trash"] = list_secure_people_trash_postgres()
+    except (LegacyDatabaseError, LegacyWriteError) as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/trash.html", context)
 
@@ -130,8 +138,8 @@ def purge_trash(request: HttpRequest, trash_id: int) -> HttpResponse:
         messages.error(request, "Somente superusuario pode executar a purga final.")
         return redirect("/people/trash/")
     try:
-        trash_data = list_secure_people_trash(limit=10000)
-    except LegacyDatabaseError as exc:
+        trash_data = list_secure_people_trash_postgres(limit=10000)
+    except (LegacyDatabaseError, LegacyWriteError) as exc:
         messages.error(request, str(exc))
         return redirect("/people/trash/")
     item = next((row for row in trash_data["items"] if int(row["id"] or 0) == int(trash_id or 0)), None)
@@ -150,7 +158,7 @@ def purge_trash(request: HttpRequest, trash_id: int) -> HttpResponse:
             messages.error(request, "Digite exatamente o nome exibido na lixeira para confirmar a purga.")
             return redirect(f"/people/trash/{trash_id}/purge/")
         try:
-            person_id = purge_secure_person_trash(trash_id, reason, actor=_actor_label(request))
+            person_id = purge_secure_person_trash_postgres(trash_id, reason, actor=_actor_label(request))
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
             return redirect(f"/people/trash/{trash_id}/purge/")
@@ -171,9 +179,9 @@ def validate_field(request: HttpRequest) -> JsonResponse:
     value = request.GET.get("value") or ""
     ignore_person_id = int(request.GET.get("person_id") or 0)
     if field == "cpf":
-        result = validate_person_cpf_for_form(value, ignore_person_id=ignore_person_id)
+        result = validate_person_cpf_postgres(value, ignore_person_id=ignore_person_id)
     elif field == "email_principal":
-        result = validate_person_email_for_form(value)
+        result = validate_person_email_postgres(value, ignore_person_id=ignore_person_id)
     else:
         result = {"ok": False, "message": "Campo nao reconhecido.", "normalized": ""}
     return JsonResponse(result)
@@ -229,7 +237,6 @@ def families(request: HttpRequest) -> HttpResponse:
                     display_name_override=request.POST.get("display_name_override", ""),
                     actor=_actor_label(request),
                 )
-                _sync_people_mirror_after_write(request, source="household_profile_update")
                 messages.success(request, f"Identidade familiar atualizada para {profile['display_name_effective']}.")
             except (LegacyDatabaseError, LegacyWriteError, ValueError) as exc:
                 messages.error(request, str(exc))
@@ -261,10 +268,9 @@ def families(request: HttpRequest) -> HttpResponse:
             changed = 0
             for group_ids in selected_groups:
                 if action == "suppress":
-                    changed += suppress_family_group_suggestions(group_ids, actor=_actor_label(request))
+                    changed += suppress_family_group_suggestions_postgres(group_ids, actor=_actor_label(request))
                 else:
-                    changed += create_family_group_relationships(group_ids, actor=_actor_label(request))
-            _sync_people_mirror_after_write(request, source=f"families_bulk_{action}")
+                    changed += create_family_group_relationships_postgres(group_ids, actor=_actor_label(request))
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
         else:
@@ -343,17 +349,17 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
         success_message = "Relacao familiar registrada com trilha de auditoria."
         try:
             if action == "create_family_relationship":
-                create_person_relationship(person_id, request.POST, actor=_actor_label(request))
+                create_person_relationship_postgres(person_id, request.POST, actor=_actor_label(request))
                 success_message = "Relacao familiar registrada com trilha de auditoria."
             elif action == "suppress_family_suggestion":
-                suppress_family_suggestion(
+                suppress_family_suggestion_postgres(
                     person_id,
                     int(request.POST.get("related_person_id") or 0),
                     actor=_actor_label(request),
                 )
                 success_message = "Sugestao familiar ignorada e retirada da fila por endereco."
             elif action == "update_family_relationship":
-                update_person_relationship(
+                update_person_relationship_postgres(
                     person_id,
                     int(request.POST.get("relationship_id") or 0),
                     request.POST,
@@ -361,14 +367,14 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 )
                 success_message = "Relacao familiar atualizada com trilha de auditoria."
             elif action == "deactivate_family_relationship":
-                deactivate_person_relationship(
+                deactivate_person_relationship_postgres(
                     person_id,
                     int(request.POST.get("relationship_id") or 0),
                     actor=_actor_label(request),
                 )
                 success_message = "Relacao familiar removida e protegida contra recriacao automatica."
             elif action == "sync_family_relationships":
-                summary = sync_person_household_relationships(person_id, actor=_actor_label(request))
+                summary = sync_person_household_relationships_postgres(person_id, actor=_actor_label(request))
                 messages.success(
                     request,
                     "Sincronizacao de familias domiciliares concluida: "
@@ -378,7 +384,6 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 return redirect(f"/people/{person_id}/")
             else:
                 raise LegacyWriteError("Acao de ficha nao reconhecida.")
-            _sync_people_mirror_after_write(request, source=f"person_detail_{action}")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
         else:
@@ -416,7 +421,7 @@ def merge(request: HttpRequest, person_id: int) -> HttpResponse:
         if context["merge_lookup"]:
             context["merge_candidates"] = [
                 item
-                for item in search_receipt_people(context["merge_lookup"], limit=30)
+                for item in search_receipt_people_postgres(context["merge_lookup"], limit=30)
                 if int(item["id"] or 0) != int(person_id or 0)
             ]
         else:
@@ -436,14 +441,13 @@ def merge(request: HttpRequest, person_id: int) -> HttpResponse:
             context["comparison_rows"] = []
         if request.method == "POST":
             duplicate_person_id = int(request.POST.get("duplicate_person_id") or 0)
-            result = merge_people(
+            result = merge_people_postgres(
                 person_id,
                 duplicate_person_id,
                 reason=request.POST.get("reason", ""),
                 actor=_actor_label(request),
                 prefer_duplicate_name=str(request.POST.get("prefer_duplicate_name") or "") in {"1", "on", "true", "sim"},
             )
-            _sync_people_mirror_after_write(request, source="merge_people")
             messages.success(
                 request,
                 "Mesclagem concluida com auditoria preservada. "
@@ -479,7 +483,7 @@ def delete(request: HttpRequest, person_id: int) -> HttpResponse:
             messages.error(request, "Digite exatamente o nome da pessoa para confirmar a exclusao.")
             return redirect(f"/people/{person_id}/delete/")
         try:
-            trash_id = soft_delete_person(person_id, reason, actor=_actor_label(request))
+            trash_id = soft_delete_person_postgres(person_id, reason, actor=_actor_label(request))
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
             return redirect(f"/people/{person_id}/delete/")
@@ -512,19 +516,18 @@ def new(request: HttpRequest) -> HttpResponse:
             context["error"] = str(exc)
             return render(request, "power_church_django/people/form.html", context)
         try:
-            person_id = create_person(context["form"], actor=_actor_label(request))
+            person_id = create_person_postgres(context["form"], actor=_actor_label(request))
         except LegacyWriteError as exc:
             context["error"] = str(exc)
         else:
             _save_person_photo_if_present(request, person_id, context["form"], photo_payload)
-            _sync_people_mirror_after_write(request, source="create_person")
-            messages.success(request, "Ficha criada com trilha de auditoria.")
+            messages.success(request, "Ficha criada diretamente no Postgres com trilha de auditoria.")
             return redirect(f"/people/{person_id}/")
     return render(request, "power_church_django/people/form.html", context)
 
 
 def edit(request: HttpRequest, person_id: int) -> HttpResponse:
-    initial = get_person_form_initial(person_id)
+    initial = get_person_form_initial_postgres(person_id)
     if initial is None:
         return render(
             request,
@@ -556,13 +559,12 @@ def edit(request: HttpRequest, person_id: int) -> HttpResponse:
             context["error"] = str(exc)
             return render(request, "power_church_django/people/form.html", context)
         try:
-            update_person(person_id, context["form"], actor=_actor_label(request))
+            update_person_postgres(person_id, context["form"], actor=_actor_label(request))
         except LegacyWriteError as exc:
             context["error"] = str(exc)
         else:
             _save_person_photo_if_present(request, person_id, context["form"], photo_payload)
-            _sync_people_mirror_after_write(request, source="update_person")
-            messages.success(request, "Ficha atualizada com trilha de auditoria.")
+            messages.success(request, "Ficha atualizada diretamente no Postgres com trilha de auditoria.")
             return redirect(f"/people/{person_id}/")
     return render(request, "power_church_django/people/form.html", context)
 
@@ -576,7 +578,7 @@ def imports(request: HttpRequest) -> HttpResponse:
         payload = b"".join(upload.chunks())
         allow_duplicate_file = request.POST.get("allow_duplicate_file") == "1"
         try:
-            summary = import_people_from_upload(
+            summary = import_people_from_upload_postgres(
                 upload.name,
                 payload,
                 allow_duplicate_file=allow_duplicate_file,
@@ -591,7 +593,7 @@ def imports(request: HttpRequest) -> HttpResponse:
 
     context = {"title": "Importacao de pessoas"}
     try:
-        context["dashboard"] = people_import_dashboard()
+        context["dashboard"] = people_import_dashboard_postgres()
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/imports.html", context)
@@ -600,7 +602,7 @@ def imports(request: HttpRequest) -> HttpResponse:
 def import_lot(request: HttpRequest, lot_id: int) -> HttpResponse:
     context = {"title": "Auditoria da importacao de pessoas"}
     try:
-        context["detail"] = get_people_import_lot_detail(lot_id)
+        context["detail"] = get_people_import_lot_detail_postgres(lot_id)
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/import_lot.html", context)
@@ -610,17 +612,6 @@ def _actor_label(request: HttpRequest) -> str:
     if request.user.is_authenticated:
         return f"django:{request.user.username}"
     return "django:operador_local"
-
-
-def _sync_people_mirror_after_write(request: HttpRequest, source: str = "") -> None:
-    try:
-        sync_people_snapshots(legacy_db_path(), actor=f"{_actor_label(request)}:{source or 'people_write_sync'}")
-    except Exception as exc:
-        messages.warning(
-            request,
-            "A gravacao principal foi concluida, mas o espelho PostgreSQL do cadastro nao sincronizou automaticamente. "
-            f"Detalhe tecnico: {exc}",
-        )
 
 
 def _local_or_has_permission(request: HttpRequest, codename: str) -> bool:

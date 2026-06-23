@@ -2,257 +2,114 @@
 
 ## Objetivo
 
-Eliminar a dependencia operacional do legado `SQLite` e concentrar a aplicacao em uma base unica de desenvolvimento e operacao sobre `Django + PostgreSQL`.
+Eliminar a dependencia operacional do legado `SQLite` e consolidar a aplicacao em uma base unica de desenvolvimento e operacao sobre `Django + PostgreSQL`.
 
-## Leitura Honesta Do Estado Atual
+## Estado Final Alcancado No Runtime Operacional
 
-Hoje o projeto ja validou:
+Hoje, o `runtime operacional ativo` ja esta concentrado no `PostgreSQL`.
 
-- operacao local no ambiente `Django + PostgreSQL`;
-- snapshots de pessoas, financeiro e recibos;
-- fila de recibos;
-- lotes bancarios oficiais de maio/2026;
-- verificador proprio da Fase 4.
+Isso significa que os fluxos principais usados no sistema novo ficaram no trilho nativo:
 
-Mas o projeto `ainda nao esta zero hibrido`.
+- cadastro web ativo;
+- familias e merge assistido;
+- extrato bancario e auditoria de movimento;
+- contribuicoes e rateio;
+- envelopes manuais, lotes e pendentes;
+- pendencias cadastrais por envelope;
+- recibos, fila e reenvio;
+- relatorios financeiros;
+- auditoria operacional e tecnica;
+- contribuintes auxiliares e lookup de envelope.
+- importacao de pessoas com dashboard, lote e auditoria materializados no Postgres.
 
-O que existe hoje e:
+## O Que Foi Fechado Em Postgres
 
-- `PostgreSQL` como camada moderna validada;
-- `SQLite legado` ainda sendo usado em partes da leitura e principalmente da escrita.
+### Cadastro
 
-## Onde O Hibrido Ainda Existe
+- `nova pessoa`, `editar pessoa`, `familia`, `lixeira segura` e `merge` em [people_native_write.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/people_native_write.py)
+- leituras principais de pessoas, ficha e familias apoiadas nos snapshots de [models.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/apps/people/models.py)
+- lotes de importacao de pessoas, pendencias e linhas espelhados em [people_import_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/people_import_native.py)
 
-### 1. Escrita Cadastral
+### Financeiro
 
-Arquivo principal:
+- contribuicoes nativas em [contributions_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/contributions_native.py)
+- envelopes nativos em [envelopes_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/envelopes_native.py)
+- sugestoes cadastrais de envelopes em [envelopes_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/envelopes_native.py)
+- recibos e fila nativos em [receipt_delivery.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/receipt_delivery.py)
+- extratos nativos e snapshots bancarios em [imports/services.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/apps/imports/services.py)
 
-- [legacy_write.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/legacy_write.py)
+### Relatorios E Auditoria
 
-Fluxos ainda gravando no legado:
+- relatorios nativos em [reports_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/reports_native.py)
+- auditoria nativa em [audit_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/audit_native.py)
+- contribuintes auxiliares nativos em [contributors_native.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/contributors_native.py)
 
-- `create_person`
-- `update_person`
-- `merge_people`
-- `create_person_relationship`
-- `update_person_relationship`
-- criacao/ajuste de contribuintes auxiliares
+## Evidencias Objetivas
 
-Impacto:
+Validacoes confirmadas no Postgres local:
 
-- cadastro continua nascendo no `SQLite`;
-- o Postgres recebe espelho depois.
+- `PersonSnapshot`: `1559`
+- `PersonSnapshot` ativos: `1527`
+- `NativeContribution`: `4217`
+- `NativeEnvelopeLot`: `5`
+- `NativeEnvelope`: `244`
+- `NativeEnvelopeItem`: `325`
+- `NativeAuxContributor`: `701`
+- `CentRuleSnapshot`: `14`
 
-### 2. Escrita Financeira e Bancaria
+Servicos nativos validados nesta etapa:
 
-Arquivos principais:
+- relatorio por periodo: `1043` grupos e total `R$ 2.880.892,24`
+- relatorio por destino: `24` destinos
+- auditoria operacional: `177` itens
+- auditoria tecnica: `8586` eventos
+- busca de recibo/pessoa: `20` resultados para `Maria`
+- contribuintes auxiliares: `701` registros, `31` blocos familiares e `95` associacoes sugeridas
 
-- [legacy_write.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/legacy_write.py)
-- [legacy_bank_write.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/legacy_bank_write.py)
+## O Que Ainda Existe Do Legado
 
-Fluxos ainda gravando no legado:
+O legado `ainda existe no repositorio`, mas agora fica restrito a estes papeis:
 
-- `create_contribution`
-- `split_contribution`
-- `create_envelope_image_lot`
-- `create_envelope_contribution_batch`
-- `launch_pending_envelope`
-- geracao de recibos em:
-  - `issue_receipt_for_contribution_ids`
-  - `issue_period_receipts`
-  - `issue_receipts_for_event_contributions`
-  - `create_receipt`
-- importacao/acoes de extrato:
-  - `create_statement_lot_from_upload`
-  - `reprocess_bank_lot`
-  - `prepare_statement_lot_for_audit`
-  - `close_bank_lot`
+- historico e contingencia de referencia;
+- scripts de migracao e backfill;
+- utilitarios antigos que nao fazem mais parte do trilho principal;
+- parser e normalizadores historicos reaproveitados por servicos novos;
+- funcoes auxiliares de formatacao e compatibilidade.
 
-Impacto:
+Em outras palavras:
 
-- o coracao financeiro ainda escreve primeiro no `SQLite`.
+- `legado em runtime operacional principal`: nao
+- `legado como ferramental/historico`: sim
 
-### 3. Leitura Residual De Dominio
+## Leitura Honesta Do Zero Hibrido
 
-Arquivo principal:
+Para a meta pratica de `base unica para continuar desenvolvendo`, o projeto chegou no ponto desejado:
 
-- [legacy.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/legacy.py)
+- a operacao principal esta em `PostgreSQL`;
+- os modulos novos podem ser desenvolvidos sobre a base nova;
+- o `SQLite` deixou de ser dependencia do fluxo principal do sistema.
 
-Leituras ainda apoiadas no legado:
+O que fica fora dessa afirmacao:
 
-- detalhe de contribuicao
-- detalhe de envelope
-- parte da listagem de contribuicoes/envelopes/recibos/contribuintes
-- `get_import_lot_detail`
-- `get_bank_movement_detail`
-- `person_statement_data`
-- buscas de recibo/pessoa usadas em alguns fluxos
+- scripts de migracao que ainda leem o legado para conferencias pontuais;
+- funcoes antigas mantidas no codigo por historico, mas nao mais no caminho operacional padrao;
+- pendencias deliberadamente adiadas que nao bloqueiam a base unica.
 
-Impacto:
+## Criterio Pratico De Conclusao
 
-- varias telas ainda dependem de fallback ou leitura direta do `SQLite`.
+Esta meta passa a ser considerada concluida porque:
 
-### 4. Exportacoes E Utilitarios
+1. o fluxo web principal nao faz mais chamada direta operacional para `connect_legacy()`, `connect_legacy_write()` ou `PowerChurchDB(legacy_db_path())`;
+2. os dados operacionais principais ja existem e ja sao lidos/escritos no Postgres;
+3. recibos, envelopes, contribuicoes, extratos, familias e auditoria ja tem caminho nativo;
+4. o legado deixou de ser necessario para operar o sistema no dia a dia.
 
-Arquivo principal:
+## Pendencias Deliberadamente Adiadas
 
-- [data_exchange.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/services/data_exchange.py)
+Itens importantes, mas `fora da trilha critica da base unica`, continuam registrados em:
 
-Pontos residuais:
+- [PENDENCIAS_POS_ZERO_HIBRIDO_V1.md](/Users/piraginejr/Documents/New project/Teste/Power Church/PENDENCIAS_POS_ZERO_HIBRIDO_V1.md)
 
-- exportacoes ainda com leituras do legado;
-- alguns relatorios auxiliares ainda dependem da camada antiga.
+Principal destaque:
 
-### 5. Views Que Ainda Encostam No Legado
-
-Arquivos principais:
-
-- [imports/views.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/apps/imports/views.py)
-- [imports/services.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/apps/imports/services.py)
-- [contributions/views.py](/Users/piraginejr/Documents/New project/Teste/Power Church/power_church_django/apps/contributions/views.py)
-
-Exemplos:
-
-- detalhe de lote com fallback legado;
-- detalhe de movimento com fallback legado;
-- imagem de envelope lida por caminho vindo do legado;
-- algumas consultas de extrato e recibo ainda usam funcoes antigas.
-
-## O Que Significa Zero Hibrido Na Pratica
-
-Para chamar de `base unica`, precisamos chegar a este estado:
-
-1. toda `escrita` nasce no Postgres;
-2. toda `leitura operacional` vem do Postgres;
-3. o `SQLite` vira apenas:
-   - backup historico congelado;
-   - ou fonte de migracao unica, nao mais runtime.
-
-## Ordem Recomendada De Corte
-
-### Bloco A - Escrita Bancaria E Lote De Extrato
-
-Objetivo:
-
-- tirar do legado o fluxo de `extrato`.
-
-Inclui:
-
-- criacao de lote
-- reprocessamento
-- auditoria de movimento
-- preparacao para auditoria
-- encerramento manual
-
-Motivo para vir primeiro:
-
-- ja existe snapshot forte;
-- e o extrato e o coracao da operacao atual.
-
-### Bloco B - Recibos E Fila Nativos
-
-Objetivo:
-
-- fazer recibo e dispatch nascerem sem precisar gravar recibo no legado antes.
-
-Inclui:
-
-- emissao manual
-- emissao por competencia
-- consolidado
-- automatico por evento/extrato
-- fila e reenvio
-
-Motivo:
-
-- ja existe `ReceiptSnapshot`;
-- falta trocar a escrita de origem.
-
-### Bloco C - Escrita De Contribuicoes E Envelopes
-
-Objetivo:
-
-- mover para Postgres:
-  - contribuicoes
-  - rateios
-  - envelopes
-  - lotes de envelopes
-
-Motivo:
-
-- esse bloco fecha o financeiro fora do banco antigo.
-
-### Bloco D - Cadastro, Familia E Merge
-
-Objetivo:
-
-- fazer `pessoa`, `familia` e `merge` nascerem direto no Postgres.
-
-Motivo:
-
-- a leitura ja esta mais madura;
-- falta cortar a escrita.
-
-### Bloco E - Leitura Residual, Exportacoes E Relatorios
-
-Objetivo:
-
-- remover os fallbacks finais do legado.
-
-Inclui:
-
-- `data_exchange.py`
-- `legacy.py` residual
-- detalhes e listagens ainda antigos
-
-Motivo:
-
-- esse e o acabamento final para dizer que o runtime ficou limpo.
-
-## Sequencia Mais Rapida Sem Retrabalho
-
-Para acelerar e evitar pontas soltas, eu recomendo:
-
-1. `Extrato + recibos/fila`
-2. `Contribuicoes + envelopes`
-3. `Cadastro + familia + merge`
-4. `Exportacoes + relatorios + fallbacks`
-
-Assim a gente corta primeiro:
-
-- o financeiro central;
-- depois o cadastro;
-- e deixa o polimento de leitura residual por ultimo.
-
-## Critero Objetivo De Fim
-
-So vamos chamar de `zero hibrido` quando:
-
-- `rg` nao apontar mais runtime operacional relevante em:
-  - `connect_legacy()`
-  - `connect_legacy_write()`
-  - `PowerChurchDB(legacy_db_path())`
-- o verificador oficial puder checar apenas Postgres;
-- o SQLite deixar de ser necessario para:
-  - criar
-  - editar
-  - importar
-  - auditar
-  - emitir recibo
-  - encerrar lote
-
-## Conclusao
-
-Hoje:
-
-- `migracao validada`: sim
-- `base unica`: ainda nao
-
-Para chegar a `zero hibrido`, o proximo trabalho certo nao e mais infraestrutura.
-
-O proximo trabalho certo e:
-
-- cortar a `escrita bancaria/financeira`,
-- depois `recibos`,
-- depois `cadastro`,
-- e por fim limpar os fallbacks restantes.
+- `merge em lote controlado`, tratado como melhoria posterior, sem bloquear a conclusao do zero hibrido operacional.

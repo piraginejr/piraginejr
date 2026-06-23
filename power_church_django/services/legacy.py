@@ -561,6 +561,56 @@ def _nucleus_relationship_rows_from_snapshots() -> list[dict[str, Any]]:
     ]
 
 
+def _family_financial_indexes_from_snapshots() -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+    models = _people_snapshot_models()
+    if not models:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel.")
+    contribution_model = models["contribution"]
+    contributor_model = models["contributor"]
+    contribution_index: dict[int, dict[str, Any]] = {}
+    for row in contribution_model.objects.filter(is_active=True).only(
+        "person_id",
+        "amount",
+        "received_at_raw",
+    ):
+        person_id = moneyless_int(getattr(row, "person_id", 0))
+        if not person_id:
+            continue
+        bucket = contribution_index.setdefault(
+            person_id,
+            {"count": 0, "total_value": 0.0, "last_date": ""},
+        )
+        bucket["count"] += 1
+        bucket["total_value"] += float(row.amount or 0)
+        received_at_raw = str(row.received_at_raw or "")
+        if received_at_raw and received_at_raw > str(bucket.get("last_date") or ""):
+            bucket["last_date"] = received_at_raw
+    contributor_index: dict[int, dict[str, Any]] = {}
+    for row in contributor_model.objects.filter(is_active=True).only(
+        "person_id",
+        "name",
+    ):
+        person_id = moneyless_int(getattr(row, "person_id", 0))
+        if not person_id:
+            continue
+        bucket = contributor_index.setdefault(
+            person_id,
+            {"count": 0, "names": []},
+        )
+        bucket["count"] += 1
+        name = normalize_query(getattr(row, "name", ""))
+        if name:
+            bucket["names"].append(name)
+    contributor_index = {
+        person_id: {
+            "count": values["count"],
+            "names": " / ".join(values["names"]),
+        }
+        for person_id, values in contributor_index.items()
+    }
+    return contribution_index, contributor_index
+
+
 ENVELOPE_STATUS_LABELS = {
     "aguardando_digitacao": "Aguardando digitacao",
     "lancado": "Lancado",
@@ -744,84 +794,8 @@ def list_people(q: str = "", status: str = "", city: str = "", limit: int | None
     status = (status or "").strip()
     city = normalize_query(city)
     if _people_snapshot_available():
-        try:
-            return _list_people_from_snapshots(q=q, status=status, city=city, limit=limit)
-        except LegacyDatabaseError:
-            pass
-    clauses = ["ativo = 1"]
-    params: list[Any] = []
-    if status:
-        clauses.append("COALESCE(status, '') = ?")
-        params.append(status)
-    if city:
-        clauses.append(
-            """
-            EXISTS (
-                SELECT 1
-                  FROM pessoa_enderecos pe
-                 WHERE pe.pessoa_id = pessoas.id
-                   AND NORMALIZE_MATCH(COALESCE(pe.cidade, '')) = ?
-            )
-            """
-        )
-        params.append(normalize_match_name(city))
-    if q:
-        clauses.append(_person_search_clause())
-        params.extend(_person_search_params(q))
-    where = " AND ".join(clauses)
-    with connect_legacy() as conn:
-        total = int(scalar(conn, f"SELECT COUNT(*) FROM pessoas WHERE {where}", tuple(params)) or 0)
-        limit_value = moneyless_int(limit) if limit is not None else 0
-        limit_clause = "LIMIT ?" if limit_value > 0 else ""
-        row_params: tuple[Any, ...] = (*params, limit_value) if limit_value > 0 else tuple(params)
-        rows = conn.execute(
-            f"""
-            SELECT id, codigo_interno, nome, cpf, status, ativo, arquivo_morto,
-                   email_principal, telefone_principal
-              FROM pessoas
-             WHERE {where}
-             ORDER BY nome COLLATE NOCASE ASC, id ASC
-             {limit_clause}
-            """,
-            row_params,
-        ).fetchall()
-        status_options = [
-            {"value": row["status"], "label": format_status(row["status"]), "count": int(row["total"] or 0)}
-            for row in conn.execute(
-                """
-                SELECT COALESCE(status, '') AS status, COUNT(*) AS total
-                  FROM pessoas
-                 WHERE ativo = 1
-                 GROUP BY COALESCE(status, '')
-                 ORDER BY total DESC, status ASC
-                """
-            ).fetchall()
-        ]
-    items = [
-        {
-            "id": row["id"],
-            "codigo": row["codigo_interno"] or "",
-            "nome": row["nome"] or "",
-            "cpf": row["cpf"] or "",
-            "status": format_status(row["status"]),
-            "status_raw": row["status"] or "",
-            "sigla": status_sigla(row["status"], True),
-            "ativo": "Sim" if row["ativo"] else "Nao",
-            "email": row["email_principal"] or "",
-            "telefone": row["telefone_principal"] or "",
-        }
-        for row in rows
-    ]
-    return {
-        "items": items,
-        "total": total,
-        "shown": len(items),
-        "q": q,
-        "status": status,
-        "city": city,
-        "status_options": status_options,
-        "limit": limit_value or total,
-    }
+        return _list_people_from_snapshots(q=q, status=status, city=city, limit=limit)
+    raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para listar pessoas.")
 
 
 def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20) -> list[dict[str, Any]]:
@@ -831,73 +805,8 @@ def search_people_for_relationship(person_id: int, q: str = "", limit: int = 20)
     if not person_id or (len(query) < 2 and len(digits) < 2):
         return []
     if _people_snapshot_available():
-        try:
-            return _search_people_for_relationship_from_snapshots(person_id, q=query, limit=limit)
-        except LegacyDatabaseError:
-            pass
-    limit = max(1, min(moneyless_int(limit) or 20, 50))
-    with connect_legacy() as conn:
-        person = conn.execute(
-            "SELECT organizacao_id FROM pessoas WHERE id = ? AND ativo = 1",
-            (person_id,),
-        ).fetchone()
-        if person is None:
-            return []
-        organization_id = moneyless_int(person["organizacao_id"])
-        rows = conn.execute(
-            """
-            SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
-              FROM pessoas p
-             WHERE p.organizacao_id = ?
-               AND p.ativo = 1
-               AND p.id <> ?
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM pessoa_relacionamentos r
-                     WHERE r.organizacao_id = p.organizacao_id
-                       AND r.ativo = 1
-                       AND (
-                            (r.pessoa_id = ? AND r.pessoa_relacionada_id = p.id)
-                            OR
-                            (r.pessoa_relacionada_id = ? AND r.pessoa_id = p.id)
-                       )
-               )
-               AND """
-            + _person_search_clause("p")
-            + """
-             ORDER BY p.nome COLLATE NOCASE, p.id
-             LIMIT ?
-            """,
-            (
-                organization_id,
-                person_id,
-                person_id,
-                person_id,
-                *_person_search_params(query),
-                limit,
-            ),
-        ).fetchall()
-    return [
-        {
-            "id": moneyless_int(row["id"]),
-            "nome": row["nome"] or "",
-            "codigo": row["codigo_interno"] or "",
-            "cpf": format_cpf(row["cpf"]),
-            "status": format_status(row["status"]),
-            "sigla": status_sigla(row["status"], True),
-            "label": " · ".join(
-                part
-                for part in [
-                    row["nome"] or "",
-                    status_sigla(row["status"], True),
-                    f"CPF {format_cpf(row['cpf'])}" if row["cpf"] else "CPF -",
-                    f"Cod. {row['codigo_interno']}" if row["codigo_interno"] else "",
-                ]
-                if part
-            ),
-        }
-        for row in rows
-    ]
+        return _search_people_for_relationship_from_snapshots(person_id, q=query, limit=limit)
+    raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para busca de relacionamento.")
 
 
 def get_person_detail(person_id: int) -> dict[str, Any] | None:
@@ -1046,178 +955,7 @@ def get_person_detail(person_id: int) -> dict[str, Any] | None:
                 "total_contributions_fmt": _money(total_value),
                 "audit": [],
             }
-    with connect_legacy() as conn:
-        person = conn.execute(
-            """
-            SELECT id, organizacao_id, codigo_interno, nome, nome_social, cpf, rg, data_nascimento, sexo,
-                   estado_civil, email_principal, telefone_principal, whatsapp_principal,
-                   status, arquivo_morto, observacoes, ativo, criado_em, atualizado_em
-              FROM pessoas
-             WHERE id = ? AND ativo = 1
-            """,
-            (person_id,),
-        ).fetchone()
-        if person is None:
-            return None
-        profiles = conn.execute(
-            """
-            SELECT perfil, data_inicio, data_fim, observacoes
-              FROM pessoa_perfis
-             WHERE pessoa_id = ? AND ativo = 1
-             ORDER BY perfil COLLATE NOCASE
-            """,
-            (person_id,),
-        ).fetchall()
-        contacts = conn.execute(
-            """
-            SELECT tipo, valor, principal, observacoes
-              FROM pessoa_contatos
-             WHERE pessoa_id = ?
-             ORDER BY principal DESC, tipo COLLATE NOCASE, id
-            """,
-            (person_id,),
-        ).fetchall()
-        addresses = conn.execute(
-            """
-            SELECT tipo, cep, logradouro, numero, complemento, bairro, cidade, uf, principal
-              FROM pessoa_enderecos
-             WHERE pessoa_id = ?
-             ORDER BY principal DESC, id
-            """,
-            (person_id,),
-        ).fetchall()
-        history = conn.execute(
-            """
-            SELECT tipo_evento, data_evento, titulo, descricao, origem, destino, criado_em
-              FROM pessoa_historico
-             WHERE pessoa_id = ?
-             ORDER BY COALESCE(data_evento, criado_em) DESC, id DESC
-             LIMIT 12
-            """,
-            (person_id,),
-        ).fetchall()
-        contributors = conn.execute(
-            """
-            SELECT id, nome, tipo, documento_principal, documento_tipo, origem, qualidade, status
-              FROM contribuintes
-             WHERE pessoa_id = ? AND ativo = 1
-             ORDER BY nome COLLATE NOCASE
-            """,
-            (person_id,),
-        ).fetchall()
-        identifiers = conn.execute(
-            """
-            SELECT tipo, valor, principal, observacoes
-              FROM contribuintes_identificadores
-             WHERE ativo = 1
-               AND (
-                    pessoa_id = ?
-                    OR contribuinte_id IN (
-                        SELECT id FROM contribuintes WHERE pessoa_id = ? AND ativo = 1
-                    )
-               )
-             ORDER BY principal DESC, tipo COLLATE NOCASE, valor COLLATE NOCASE
-             LIMIT 30
-            """,
-            (person_id, person_id),
-        ).fetchall()
-        family = _person_family_data(conn, person_id, moneyless_int(person["organizacao_id"]), addresses)
-        contributions = conn.execute(
-            """
-            SELECT co.id, co.data_recebimento, co.competencia, co.valor,
-                   COALESCE(co.status_operacional, '') AS status_operacional,
-                   COALESCE(t.nome, '') AS tipo_nome,
-                   COALESCE(f.nome, '') AS forma_nome,
-                   COALESCE(c.nome, '') AS origem_nome
-              FROM contribuicoes co
-              LEFT JOIN tipos_contribuicao t ON t.id = co.tipo_contribuicao_id
-              LEFT JOIN formas_recebimento f ON f.id = co.forma_recebimento_id
-              LEFT JOIN contribuintes c ON c.id = co.contribuinte_id
-             WHERE co.ativo = 1 AND co.pessoa_id = ?
-             ORDER BY COALESCE(co.competencia_ordem, 0) DESC,
-                      COALESCE(co.data_recebimento, '') DESC,
-                      co.id DESC
-             LIMIT 40
-            """,
-            (person_id,),
-        ).fetchall()
-        contribution_summary = conn.execute(
-            """
-            SELECT COALESCE(competencia, '') AS competencia,
-                   COUNT(*) AS remessas,
-                   COALESCE(SUM(valor), 0) AS total_valor,
-                   MAX(COALESCE(competencia_ordem, 0)) AS ordem
-              FROM contribuicoes
-             WHERE ativo = 1 AND pessoa_id = ?
-             GROUP BY COALESCE(competencia, '')
-             ORDER BY ordem DESC, competencia DESC
-             LIMIT 12
-            """,
-            (person_id,),
-        ).fetchall()
-        total_value = float(
-            scalar(
-                conn,
-                "SELECT COALESCE(SUM(valor), 0) FROM contribuicoes WHERE ativo = 1 AND pessoa_id = ?",
-                (person_id,),
-            )
-            or 0
-        )
-        audit = conn.execute(
-            """
-            SELECT acao, tabela, registro_id, criado_em
-              FROM auditoria
-             WHERE tabela = 'pessoas' AND registro_id = ?
-             ORDER BY COALESCE(criado_em, '') DESC, id DESC
-             LIMIT 12
-            """,
-            (person_id,),
-        ).fetchall()
-    return {
-        "person": {
-            "id": person["id"],
-            "codigo": person["codigo_interno"] or "",
-            "nome": person["nome"] or "",
-            "nome_social": person["nome_social"] or "",
-            "cpf": person["cpf"] or "",
-            "rg": person["rg"] or "",
-            "data_nascimento": br_date(person["data_nascimento"]),
-            "sexo": person["sexo"] or "",
-            "estado_civil": person["estado_civil"] or "",
-            "email": person["email_principal"] or "",
-            "telefone": person["telefone_principal"] or "",
-            "whatsapp": person["whatsapp_principal"] or "",
-            "status": format_status(person["status"]),
-            "status_raw": person["status"] or "",
-            "sigla": status_sigla(person["status"], True),
-            "ativo": "Sim" if person["ativo"] else "Nao",
-            "observacoes": person["observacoes"] or "",
-            "criado_em": br_datetime(person["criado_em"]),
-            "atualizado_em": br_datetime(person["atualizado_em"]),
-            "photo_url": member_photo_url(person["id"], person["cpf"], person["nome"]),
-        },
-        "profiles": [dict(row) for row in profiles],
-        "contacts": [dict(row) for row in contacts],
-        "addresses": [dict(row) for row in addresses],
-        "family_relationships": family["relationships"],
-        "family_suggestions": family["suggestions"],
-        "family_people_options": family["people_options"],
-        "family_relationship_type_options": FAMILY_RELATIONSHIP_OPTIONS,
-        "history": [_format_history(row) for row in history],
-        "contributors": [_format_contributor_brief(row) for row in contributors],
-        "identifiers": [dict(row) for row in identifiers],
-        "contributions": [_format_contribution_row(row) for row in contributions],
-        "contribution_summary": [
-            {
-                "competencia": row["competencia"] or "Sem competencia",
-                "remessas": int(row["remessas"] or 0),
-                "total_fmt": _money(row["total_valor"]),
-            }
-            for row in contribution_summary
-        ],
-        "total_contributions_fmt": _money(total_value),
-        "audit": [_format_audit_row(row) for row in audit],
-    }
+    raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para abrir a ficha da pessoa.")
 
 
 def list_secure_people_trash(limit: int = 200) -> dict[str, Any]:
@@ -1861,45 +1599,7 @@ def family_nuclei_dashboard(
             relationship_pairs = set()
             suppressed_pairs = set()
     else:
-        with connect_legacy() as conn:
-            rows = conn.execute(
-                """
-                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                       p.data_nascimento,
-                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-                  FROM pessoas p
-                  JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-                 WHERE p.ativo = 1
-                 ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
-                """
-            ).fetchall()
-            relationship_pairs: set[tuple[int, int]] = set()
-            suppressed_pairs: set[tuple[int, int]] = set()
-            if table_exists(conn, "pessoa_relacionamentos"):
-                relationship_rows = conn.execute(
-                    """
-                    SELECT pessoa_id, pessoa_relacionada_id
-                      FROM pessoa_relacionamentos
-                     WHERE ativo = 1
-                    """
-                ).fetchall()
-                relationship_pairs = {
-                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                    for row in relationship_rows
-                }
-                suppressed_rows = conn.execute(
-                    """
-                    SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
-                      FROM pessoa_relacionamentos
-                     WHERE ativo = 0
-                    """
-                ).fetchall()
-                suppressed_pairs = {
-                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                    for row in suppressed_rows
-                    if row["tipo_relacionamento"] == "nucleo_familiar"
-                    and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
-                }
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para a auditoria de familias.")
     if cep_filter:
         rows = [
             row for row in rows
@@ -2020,45 +1720,7 @@ def broad_family_candidates(q: str = "", cep: str = "", review: str = "all", per
             relationship_pairs = set()
             suppressed_pairs = set()
     else:
-        with connect_legacy() as conn:
-            rows = conn.execute(
-                """
-                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                       p.data_nascimento,
-                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-                  FROM pessoas p
-                  JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-                 WHERE p.ativo = 1
-                 ORDER BY p.nome COLLATE NOCASE, e.principal DESC, e.id
-                """
-            ).fetchall()
-            relationship_pairs: set[tuple[int, int]] = set()
-            suppressed_pairs: set[tuple[int, int]] = set()
-            if table_exists(conn, "pessoa_relacionamentos"):
-                relationship_rows = conn.execute(
-                    """
-                    SELECT pessoa_id, pessoa_relacionada_id
-                      FROM pessoa_relacionamentos
-                     WHERE ativo = 1
-                    """
-                ).fetchall()
-                relationship_pairs = {
-                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                    for row in relationship_rows
-                }
-                suppressed_rows = conn.execute(
-                    """
-                    SELECT pessoa_id, pessoa_relacionada_id, tipo_relacionamento, observacoes
-                      FROM pessoa_relacionamentos
-                     WHERE ativo = 0
-                    """
-                ).fetchall()
-                suppressed_pairs = {
-                    _relationship_pair(row["pessoa_id"], row["pessoa_relacionada_id"])
-                    for row in suppressed_rows
-                    if row["tipo_relacionamento"] == "nucleo_familiar"
-                    and MANUAL_FAMILY_SUPPRESSION_MARKER in normalize_match_name(row["observacoes"] or "")
-                }
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para o criterio amplo de familias.")
     if cep_filter:
         rows = [
             row for row in rows
@@ -2140,69 +1802,15 @@ def organized_family_nuclei(
         try:
             person_rows = _family_rows_from_snapshots()
             relationship_rows = _nucleus_relationship_rows_from_snapshots()
+            contribution_index, contributor_index = _family_financial_indexes_from_snapshots()
         except LegacyDatabaseError:
             person_rows = []
             relationship_rows = []
+            contribution_index = {}
+            contributor_index = {}
     else:
-        with connect_legacy() as conn:
-            person_rows = conn.execute(
-                """
-                SELECT p.id, p.codigo_interno, p.nome, p.cpf, p.status,
-                       e.cep, e.logradouro, e.numero, e.complemento, e.bairro, e.cidade, e.uf
-                  FROM pessoas p
-                  LEFT JOIN pessoa_enderecos e ON e.pessoa_id = p.id
-                 WHERE p.ativo = 1
-                 ORDER BY p.id, COALESCE(e.principal, 0) DESC, e.id
-                """
-            ).fetchall()
-            relationship_rows = conn.execute(
-                """
-                SELECT pessoa_id, pessoa_relacionada_id
-                  FROM pessoa_relacionamentos
-                 WHERE ativo = 1
-                   AND tipo_relacionamento = 'nucleo_familiar'
-                """
-            ).fetchall()
-    with connect_legacy() as conn:
-        contribution_rows = conn.execute(
-            """
-            SELECT pessoa_id,
-                   COUNT(*) AS quantidade,
-                   COALESCE(SUM(valor), 0) AS total_valor,
-                   MAX(COALESCE(data_recebimento, '')) AS ultima_data
-              FROM contribuicoes
-             WHERE ativo = 1
-               AND pessoa_id IS NOT NULL
-             GROUP BY pessoa_id
-            """
-        ).fetchall()
-        contributor_rows = conn.execute(
-            """
-            SELECT pessoa_id,
-                   COUNT(*) AS quantidade,
-                   GROUP_CONCAT(COALESCE(nome, ''), ' / ') AS nomes
-              FROM contribuintes
-             WHERE ativo = 1
-               AND pessoa_id IS NOT NULL
-             GROUP BY pessoa_id
-            """
-        ).fetchall()
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para familias domiciliares.")
     primary_rows = _pick_primary_person_rows(person_rows)
-    contribution_index = {
-        moneyless_int(row["pessoa_id"]): {
-            "count": moneyless_int(row["quantidade"]),
-            "total_value": float(row["total_valor"] or 0),
-            "last_date": row["ultima_data"] or "",
-        }
-        for row in contribution_rows
-    }
-    contributor_index = {
-        moneyless_int(row["pessoa_id"]): {
-            "count": moneyless_int(row["quantidade"]),
-            "names": row["nomes"] or "",
-        }
-        for row in contributor_rows
-    }
     graph: dict[int, set[int]] = defaultdict(set)
     for row in relationship_rows:
         left_id = moneyless_int(row["pessoa_id"])
@@ -2539,7 +2147,7 @@ def people_import_dashboard(limit: int = 12) -> dict[str, Any]:
     }
 
 
-def get_people_import_lot_detail(lot_id: int, line_limit: int = 250) -> dict[str, Any] | None:
+def get_people_import_lot_detail(lot_id: int, line_limit: int = 250, pending_limit: int = 100) -> dict[str, Any] | None:
     with connect_legacy() as conn:
         lot = conn.execute(
             """
@@ -2582,18 +2190,21 @@ def get_people_import_lot_detail(lot_id: int, line_limit: int = 250) -> dict[str
                 """,
                 (lot_id,),
             ).fetchall()
-        pending_rows = conn.execute(
-            """
+        pending_sql = """
             SELECT ip.*, il.numero_linha, p.nome AS pessoa_nome
               FROM import_pendencias ip
               LEFT JOIN import_linhas il ON il.id = ip.linha_id
               LEFT JOIN pessoas p ON p.id = il.registro_id
              WHERE ip.lote_id = ?
              ORDER BY ip.resolvido ASC, ip.severidade DESC, COALESCE(il.numero_linha, 0) ASC, ip.id ASC
-             LIMIT 100
-            """,
-            (lot_id,),
-        ).fetchall()
+        """
+        if int(pending_limit or 0) > 0:
+            pending_rows = conn.execute(
+                pending_sql + "\n LIMIT ?",
+                (lot_id, int(pending_limit or 0)),
+            ).fetchall()
+        else:
+            pending_rows = conn.execute(pending_sql, (lot_id,)).fetchall()
         line_rows = conn.execute(
             """
             SELECT
@@ -4402,54 +4013,25 @@ def search_receipt_people(q: str = "", limit: int = 20) -> list[dict[str, Any]]:
     limit = max(1, min(moneyless_int(limit) or 20, 80))
     models = _people_snapshot_models()
     if models:
-        try:
-            rows = (
-                models["person"].objects.filter(is_active=True)
-                .filter(_person_snapshot_search_q(query))
-                .order_by("normalized_name", "legacy_id")[:limit]
-            )
-            return [
-                {
-                    "id": moneyless_int(row.legacy_id),
-                    "nome": row.name or "",
-                    "codigo": row.internal_code or "",
-                    "cpf": format_cpf(row.cpf),
-                    "status": format_status(row.status),
-                    "sigla": status_sigla(row.status, True),
-                    "email": row.primary_email or "",
-                    "telefone": row.primary_phone or "",
-                }
-                for row in rows
-            ]
-        except (DjangoOperationalError, DjangoProgrammingError):
-            pass
-    with connect_legacy() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, codigo_interno, nome, cpf, status, email_principal, telefone_principal
-              FROM pessoas
-             WHERE ativo = 1
-               AND """
-            + _person_search_clause()
-            + """
-             ORDER BY nome COLLATE NOCASE ASC, id ASC
-             LIMIT ?
-            """,
-            (*_person_search_params(query), limit),
-        ).fetchall()
-    return [
-        {
-            "id": moneyless_int(row["id"]),
-            "nome": row["nome"] or "",
-            "codigo": row["codigo_interno"] or "",
-            "cpf": format_cpf(row["cpf"]),
-            "status": format_status(row["status"]),
-            "sigla": status_sigla(row["status"], True),
-            "email": row["email_principal"] or "",
-            "telefone": row["telefone_principal"] or "",
-        }
-        for row in rows
-    ]
+        rows = (
+            models["person"].objects.filter(is_active=True)
+            .filter(_person_snapshot_search_q(query))
+            .order_by("normalized_name", "legacy_id")[:limit]
+        )
+        return [
+            {
+                "id": moneyless_int(row.legacy_id),
+                "nome": row.name or "",
+                "codigo": row.internal_code or "",
+                "cpf": format_cpf(row.cpf),
+                "status": format_status(row.status),
+                "sigla": status_sigla(row.status, True),
+                "email": row.primary_email or "",
+                "telefone": row.primary_phone or "",
+            }
+            for row in rows
+        ]
+    raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para busca de recibos.")
 
 
 def receipt_new_context(person_id: int, date_start: str = "", date_end: str = "") -> dict[str, Any] | None:

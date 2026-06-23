@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import os
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -8,30 +9,58 @@ from decimal import Decimal
 from pathlib import Path
 import sqlite3
 
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, Q
 
 from power_church_core.bank_lots import StatementEntryPlan, statement_entry_plan
 from power_church_core.bank_parsers import parse_statement_pdf_by_layout, statement_should_skip_entry
-from power_church_core.normalization import format_cpf, moneyless_int, normalize_match_name, normalize_query
-
-from power_church_django.services.legacy import (
-    _money,
-    br_date,
-    br_datetime,
+from power_church_core.formatting import br_date, br_datetime
+from power_church_core.normalization import (
     document_digits,
     document_query_matches,
-    format_status,
+    format_cpf,
     format_document,
-    human_pending_review_sql,
-    legacy_db_path,
-    table_exists,
+    moneyless_int,
+    normalize_match_name,
+    normalize_query,
     valid_cpf,
 )
-from power_church_django.apps.contributions.models import ContributionTypeSnapshot
-from power_church_django.apps.people.models import PersonContactSnapshot, PersonContributionSnapshot, PersonSnapshot
+from power_church_django.services.runtime_formatting import _money, format_status
+from power_church_django.apps.contributions.models import ContributionTypeSnapshot, NativeAuxContributor, NativeContribution, NativeEnvelope
+from power_church_django.apps.people.models import (
+    PersonAddressSnapshot,
+    PersonContactSnapshot,
+    PersonContributionSnapshot,
+    PersonContributorSnapshot,
+    PersonRelationshipSnapshot,
+    PersonSnapshot,
+)
+from power_church_django.services.legacy import broad_family_candidates, organized_family_nuclei
 
-from .models import StatementImportPilotLot, StatementImportPilotMovement
+from .models import CentRuleSnapshot, StatementImportPilotLot, StatementImportPilotMovement
+
+
+class LegacyBankWriteError(RuntimeError):
+    """Compatibilidade local do fluxo de importacao nativo."""
+
+
+PDF_PROVIDER_MODES = [
+    {
+        "value": "swift_pdfkit",
+        "label": "Homologado atual (Swift/PDFKit)",
+        "description": "Mantem o leitor atual do Mac enquanto validamos a portabilidade.",
+    },
+    {
+        "value": "compare_pymupdf",
+        "label": "Comparar Swift x PyMuPDF antes de gravar",
+        "description": "Chave segura: se houver divergencia, o lote nao e gravado.",
+    },
+    {
+        "value": "pymupdf",
+        "label": "PyMuPDF direto",
+        "description": "Leitor portavel para Linux/servidor, apos homologacao do banco.",
+    },
+]
 
 
 @contextmanager
@@ -215,6 +244,9 @@ def _persist_statement_pilot_from_sqlite(
     comparison_note: str = "",
     report_path: str = "",
 ) -> StatementImportPilotLot:
+    from power_church_django.services.legacy import table_exists
+    from power_church_django.services.runtime_formatting import human_pending_review_sql
+
     conn = sqlite3.connect(sqlite_db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -424,6 +456,8 @@ def persist_statement_pilot_from_legacy(
     comparison_note: str = "Snapshot do lote operacional sincronizado para leitura em Postgres.",
     report_path: str = "",
 ) -> StatementImportPilotLot:
+    from power_church_django.services.legacy import legacy_db_path
+
     return _persist_statement_pilot_from_sqlite(
         legacy_db_path(),
         lot_id,
@@ -727,6 +761,21 @@ def _statement_default_type_id(pilot_movement: StatementImportPilotMovement) -> 
     current = _statement_selected_type_id(pilot_movement)
     if current:
         return current
+    cent_code = normalize_query(pilot_movement.cent_code)
+    organization_id = moneyless_int((pilot_movement.metadata or {}).get("organizacao_id"))
+    if cent_code and organization_id:
+        rule = (
+            CentRuleSnapshot.objects.filter(
+                organization_id=organization_id,
+                cent_code=cent_code.zfill(2),
+                is_active=True,
+            )
+            .only("contribution_type_legacy_id")
+            .order_by("legacy_id")
+            .first()
+        )
+        if rule and int(rule.contribution_type_legacy_id or 0):
+            return int(rule.contribution_type_legacy_id or 0)
     meta = pilot_movement.metadata or {}
     suggested_name = normalize_query(meta.get("tipo_sugerido"))
     if not suggested_name:
@@ -1147,4 +1196,300 @@ def close_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[st
         "auto_receipt_queued": 0,
         "auto_receipt_failed": 0,
         "auto_receipt_without_email": 0,
+    }
+
+
+def list_import_lots_postgres(limit: int = 80) -> dict[str, Any]:
+    queryset = StatementImportPilotLot.objects.order_by("-created_at", "-id")
+    rows = list(queryset[: max(1, int(limit or 80))])
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = row.metadata or {}
+        pending = int(metadata.get("pending_human_count") or 0)
+        ignored = int(
+            (metadata.get("review_counts") or {}).get("ignorado")
+            or metadata.get("ignored_count")
+            or 0
+        )
+        items.append(
+            {
+                "id": int(row.id or 0),
+                "tipo": "Extrato",
+                "banco": row.bank_name or "",
+                "layout": row.layout_code or "",
+                "nome_arquivo": row.file_name or "",
+                "periodo": f"{br_date(row.period_start.isoformat() if row.period_start else '')} a {br_date(row.period_end.isoformat() if row.period_end else '')}".strip(" a "),
+                "movimentos": int(row.movement_count or 0),
+                "total_fmt": _money(row.total_value),
+                "pendentes": pending,
+                "ignorados": ignored,
+                "status": row.lot_status or "",
+                "criado_em": br_datetime(row.created_at.isoformat() if row.created_at else ""),
+                "criado_em_raw": row.created_at.isoformat() if row.created_at else "",
+                "snapshot_backend": row.source_backend or "",
+            }
+        )
+    total = StatementImportPilotLot.objects.count()
+    return {"items": items, "total": total, "shown": len(items), "limit": limit}
+
+
+def _next_cent_rule_legacy_id() -> int:
+    value = CentRuleSnapshot.objects.aggregate(value=models.Max("legacy_id")).get("value") or 0
+    return int(value or 0) + 1
+
+
+def _next_contribution_type_legacy_id(organization_id: int) -> int:
+    value = (
+        ContributionTypeSnapshot.objects.filter(organization_id=organization_id)
+        .aggregate(value=models.Max("legacy_id"))
+        .get("value")
+        or 0
+    )
+    return int(value or 0) + 1
+
+
+def cent_rules_data_postgres(edit_rule_id: int = 0) -> dict[str, Any]:
+    organization_id = (
+        ContributionTypeSnapshot.objects.filter(is_active=True)
+        .order_by("organization_id", "legacy_id")
+        .values_list("organization_id", flat=True)
+        .first()
+        or 1
+    )
+    rules = list(
+        CentRuleSnapshot.objects.filter(organization_id=organization_id).order_by("cent_code", "legacy_id")
+    )
+    current = next((rule for rule in rules if int(rule.legacy_id or 0) == int(edit_rule_id or 0)), None)
+    types = list(
+        ContributionTypeSnapshot.objects.filter(
+            organization_id=organization_id,
+            is_active=True,
+        ).order_by("name", "legacy_id")
+    )
+    return {
+        "rules": [
+            {
+                "id": int(rule.legacy_id or 0),
+                "codigo": str(rule.cent_code or "").zfill(2),
+                "nome": rule.destination_name or "",
+                "tipo_id": int(rule.contribution_type_legacy_id or 0) or None,
+                "tipo_nome": rule.contribution_type_name or "Sem tipo vinculado",
+                "tipo_codigo": "",
+                "campanha_nome": rule.campaign_name or "",
+                "conta_codigo": rule.account_code or "",
+                "conta_nome": rule.account_name or "",
+                "ativo": bool(rule.is_active),
+            }
+            for rule in rules
+        ],
+        "types": [
+            {
+                "id": int(row.legacy_id or 0),
+                "codigo": row.code or "",
+                "nome": row.name or "",
+                "selected": bool(current and int(row.legacy_id or 0) == int(current.contribution_type_legacy_id or 0)),
+            }
+            for row in types
+        ],
+        "current": (
+            {
+                "id": int(current.legacy_id or 0),
+                "codigo": str(current.cent_code or "").zfill(2),
+                "nome": current.destination_name or "",
+                "tipo_id": int(current.contribution_type_legacy_id or 0) or None,
+                "tipo_nome": current.contribution_type_name or "",
+                "campanha_nome": current.campaign_name or "",
+                "conta_codigo": current.account_code or "",
+                "conta_nome": current.account_name or "",
+                "ativo": bool(current.is_active),
+            }
+            if current
+            else None
+        ),
+        "edit_rule_id": int(edit_rule_id or 0),
+        "active_count": sum(1 for rule in rules if rule.is_active),
+    }
+
+
+def save_cent_rule_from_form_postgres(form: Any) -> int:
+    getter = getattr(form, "get", None)
+    rule_id = moneyless_int(getter("rule_id") if getter else 0)
+    organization_id = (
+        ContributionTypeSnapshot.objects.filter(is_active=True)
+        .order_by("organization_id", "legacy_id")
+        .values_list("organization_id", flat=True)
+        .first()
+        or 1
+    )
+    cent_code = normalize_query(getter("codigo_centavos") if getter else "").zfill(2)
+    if len(cent_code) != 2 or not cent_code.isdigit():
+        raise ValueError("Informe um codigo de centavos com dois digitos.")
+    destination_name = normalize_query(getter("nome_destinacao") if getter else "")
+    if len(destination_name) < 3:
+        raise ValueError("Informe o nome da destinacao com pelo menos 3 caracteres.")
+    contribution_type_id = moneyless_int(getter("tipo_contribuicao_id") if getter else 0)
+    active = str(getter("ativo") if getter else "1").strip() != "0"
+    if contribution_type_id:
+        type_row = ContributionTypeSnapshot.objects.filter(
+            organization_id=organization_id,
+            legacy_id=contribution_type_id,
+            is_active=True,
+        ).first()
+        if type_row is None:
+            raise ValueError("Tipo de contribuicao invalido para a regra.")
+    else:
+        type_row = ContributionTypeSnapshot.objects.create(
+            legacy_id=_next_contribution_type_legacy_id(int(organization_id or 0)),
+            organization_id=int(organization_id or 0),
+            code=f"CENT.{cent_code}",
+            name=destination_name,
+            is_active=True,
+        )
+    defaults = {
+        "organization_id": int(organization_id or 0),
+        "cent_code": cent_code,
+        "destination_name": destination_name,
+        "contribution_type_legacy_id": int(type_row.legacy_id or 0),
+        "contribution_type_name": type_row.name or destination_name,
+        "campaign_name": destination_name,
+        "account_code": f"CENT.{cent_code}",
+        "account_name": destination_name,
+        "is_active": active,
+    }
+    with transaction.atomic():
+        if rule_id:
+            rule = CentRuleSnapshot.objects.filter(legacy_id=rule_id).first()
+            if rule is None:
+                raise ValueError("Regra de centavos nao encontrada.")
+            for key, value in defaults.items():
+                setattr(rule, key, value)
+            rule.save()
+        else:
+            rule = CentRuleSnapshot.objects.create(
+                legacy_id=_next_cent_rule_legacy_id(),
+                **defaults,
+            )
+    return int(rule.legacy_id or 0)
+
+
+def dashboard_summary_postgres() -> dict[str, Any]:
+    active_people = PersonSnapshot.objects.filter(is_active=True)
+    people_total = active_people.count()
+    active_members = active_people.filter(status="membro_ativo").count()
+    active_members_niteroi = PersonAddressSnapshot.objects.filter(
+        person__is_active=True,
+        person__status="membro_ativo",
+        is_primary=True,
+    ).filter(Q(city__iexact="Niteroi") | Q(city__iexact="Niterói")).values("person_id").distinct().count()
+    contributors_total = (
+        PersonContributorSnapshot.objects.filter(is_active=True).count()
+        + NativeAuxContributor.objects.filter(is_active=True).exclude(legacy_reference_id__isnull=False).count()
+    )
+    contributions_qs = NativeContribution.objects.filter(is_active=True)
+    contributions_count = contributions_qs.count()
+    contributions_total = float(
+        contributions_qs.aggregate(value=models.Sum("amount")).get("value") or 0
+    )
+    envelope_qs = NativeEnvelope.objects.filter(is_active=True)
+    envelope_count = envelope_qs.count()
+    envelope_total = float(
+        envelope_qs.aggregate(value=models.Sum("total_informed")).get("value") or 0
+    )
+    unlinked_contributions = contributions_qs.filter(person_legacy_id__isnull=True).count()
+    statement_lots = StatementImportPilotLot.objects.count()
+    pix_lots = 0
+    pending_bank_reviews = StatementImportPilotMovement.objects.filter(
+        Q(review_status__in=["revisar_pessoa", "revisar_destinacao"])
+        | Q(review_status="revisar_duplicidade", imported_contribution_legacy_id__isnull=True)
+    ).count()
+
+    relationships = PersonRelationshipSnapshot.objects.filter(
+        is_active=True,
+        relationship_type="nucleo_familiar",
+        person__is_active=True,
+        related_person__is_active=True,
+    ).values_list("person__legacy_id", "related_person__legacy_id")
+    graph: dict[int, set[int]] = defaultdict(set)
+    for left_id, right_id in relationships:
+        left = int(left_id or 0)
+        right = int(right_id or 0)
+        if not left or not right:
+            continue
+        graph[left].add(right)
+        graph[right].add(left)
+    seen: set[int] = set()
+    family_groups = 0
+    grouped_people: set[int] = set()
+    for node in sorted(graph):
+        if node in seen:
+            continue
+        stack = [node]
+        component: set[int] = set()
+        seen.add(node)
+        while stack:
+            current = stack.pop()
+            component.add(current)
+            for next_id in graph[current]:
+                if next_id not in seen:
+                    seen.add(next_id)
+                    stack.append(next_id)
+        if len(component) >= 2:
+            family_groups += 1
+            grouped_people.update(component)
+    single_groups = max(0, people_total - len(grouped_people))
+    household_total = family_groups + single_groups
+
+    household_summary = organized_family_nuclei(q="", cep="", review="all", household_kind="all")
+    household_broad = broad_family_candidates(q="", cep="", review="all")
+
+    months_qs = (
+        contributions_qs.values("competence")
+        .annotate(
+            count=models.Count("id"),
+            total=models.Sum("amount"),
+            ordem=models.Max("competence_order"),
+        )
+        .order_by("-ordem", "-competence")[:6]
+    )
+    months = [
+        {
+            "competencia": row["competence"] or "Sem competencia",
+            "count": int(row["count"] or 0),
+            "total": float(row["total"] or 0),
+            "total_fmt": _money(row["total"] or 0),
+        }
+        for row in months_qs
+    ]
+    statuses = [
+        {"status": format_status(row["status"] or ""), "count": int(row["total"] or 0)}
+        for row in (
+            active_people.values("status")
+            .annotate(total=models.Count("id"))
+            .order_by("-total", "status")
+        )
+    ]
+    return {
+        "people_total": people_total,
+        "active_members": active_members,
+        "active_members_niteroi": active_members_niteroi,
+        "contributors_total": contributors_total,
+        "contributions_count": contributions_count,
+        "contributions_total": contributions_total,
+        "contributions_total_fmt": _money(contributions_total),
+        "envelope_count": envelope_count,
+        "envelope_total": envelope_total,
+        "envelope_total_fmt": _money(envelope_total),
+        "unlinked_contributions": unlinked_contributions,
+        "statement_lots": statement_lots,
+        "pix_lots": pix_lots,
+        "total_lots": statement_lots,
+        "pending_bank_reviews": pending_bank_reviews,
+        "household_total": int(household_summary.get("total") or household_total),
+        "household_family_groups": int(household_summary.get("family_groups") or family_groups),
+        "household_single_groups": int(household_summary.get("single_groups") or single_groups),
+        "household_review_groups": int(household_summary.get("review_groups") or 0),
+        "household_broad_groups": int(household_broad.get("total") or 0),
+        "household_broad_pending": int(household_broad.get("pending_groups") or 0),
+        "months": months,
+        "people_statuses": statuses,
     }

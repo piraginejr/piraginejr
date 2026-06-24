@@ -35,7 +35,7 @@ from power_church_django.apps.people.models import (
     PersonRelationshipSnapshot,
     PersonSnapshot,
 )
-from power_church_django.services.legacy import broad_family_candidates, organized_family_nuclei
+from power_church_django.services.legacy import broad_family_candidates_summary, organized_family_nuclei_summary
 
 from .models import CentRuleSnapshot, StatementImportPilotLot, StatementImportPilotMovement
 
@@ -1439,8 +1439,8 @@ def dashboard_summary_postgres() -> dict[str, Any]:
     single_groups = max(0, people_total - len(grouped_people))
     household_total = family_groups + single_groups
 
-    household_summary = organized_family_nuclei(q="", cep="", review="all", household_kind="all")
-    household_broad = broad_family_candidates(q="", cep="", review="all")
+    household_summary = organized_family_nuclei_summary()
+    household_broad = broad_family_candidates_summary()
 
     months_qs = (
         contributions_qs.values("competence")

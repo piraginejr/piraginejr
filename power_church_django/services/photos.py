@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from django.conf import settings
 
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif")
 PHOTO_MAX_BYTES = 8 * 1024 * 1024
+_PHOTO_INDEX_LOCK = threading.Lock()
+_PHOTO_INDEX_CACHE: dict[Path, tuple[int | None, tuple[Path, ...], set[str]]] = {}
 
 
 class PhotoUploadError(ValueError):
@@ -48,15 +51,62 @@ def member_photo_example_filename(person_id: int, cpf: object, name: object, ext
     return f"{member_photo_stem(person_id, cpf, name)}{extension}"
 
 
+def _folder_signature(folder: Path) -> int | None:
+    try:
+        return folder.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _folder_photo_index(folder: Path) -> tuple[Path, ...]:
+    signature = _folder_signature(folder)
+    with _PHOTO_INDEX_LOCK:
+        cached = _PHOTO_INDEX_CACHE.get(folder)
+        if cached and cached[0] == signature:
+            return cached[1]
+    if signature is None:
+        entries: tuple[Path, ...] = ()
+    else:
+        entries = tuple(
+            sorted(
+                match
+                for match in folder.iterdir()
+                if match.is_file() and match.suffix.lower() in PHOTO_EXTENSIONS
+            )
+        )
+    names = {entry.name for entry in entries}
+    with _PHOTO_INDEX_LOCK:
+        _PHOTO_INDEX_CACHE[folder] = (signature, entries, names)
+    return entries
+
+
+def _folder_has_named_photo(folder: Path, filename: str) -> bool:
+    signature = _folder_signature(folder)
+    with _PHOTO_INDEX_LOCK:
+        cached = _PHOTO_INDEX_CACHE.get(folder)
+        if cached and cached[0] == signature:
+            return filename in cached[2]
+    _folder_photo_index(folder)
+    with _PHOTO_INDEX_LOCK:
+        cached = _PHOTO_INDEX_CACHE.get(folder)
+        return bool(cached and filename in cached[2])
+
+
+def _invalidate_photo_folder(folder: Path) -> None:
+    with _PHOTO_INDEX_LOCK:
+        _PHOTO_INDEX_CACHE.pop(folder, None)
+
+
 def find_member_photo(person_id: int, cpf: object, name: object) -> Path | None:
     stem = member_photo_stem(person_id, cpf, name)
     for folder in (member_photo_folder(person_id), photo_dir()):
         for extension in PHOTO_EXTENSIONS:
             candidate = folder / f"{stem}{extension}"
-            if candidate.exists():
+            if _folder_has_named_photo(folder, candidate.name):
                 return candidate
-        for match in sorted(folder.glob(f"membro_{int(person_id):06d}__*")):
-            if match.is_file() and match.suffix.lower() in PHOTO_EXTENSIONS:
+        prefix = f"membro_{int(person_id):06d}__"
+        for match in _folder_photo_index(folder):
+            if match.name.startswith(prefix):
                 return match
     return None
 
@@ -73,10 +123,9 @@ def list_member_photo_variants(person_id: int) -> list[Path]:
     matches: list[Path] = []
     seen: set[Path] = set()
     for folder in (member_photo_folder(person_id), photo_dir()):
-        if not folder.exists():
-            continue
-        for match in sorted(folder.glob(f"membro_{int(person_id):06d}__*")):
-            if match.is_file() and match.suffix.lower() in PHOTO_EXTENSIONS and match not in seen:
+        prefix = f"membro_{int(person_id):06d}__"
+        for match in _folder_photo_index(folder):
+            if match.name.startswith(prefix) and match not in seen:
                 matches.append(match)
                 seen.add(match)
     return matches
@@ -141,4 +190,6 @@ def save_member_photo_payload(
         existing.unlink(missing_ok=True)
     target = folder / member_photo_example_filename(person_id, cpf, name, extension)
     target.write_bytes(payload)
+    _invalidate_photo_folder(folder)
+    _invalidate_photo_folder(photo_dir())
     return target

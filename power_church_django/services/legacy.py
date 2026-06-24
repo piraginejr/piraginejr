@@ -759,8 +759,8 @@ def dashboard_summary() -> dict[str, Any]:
                 """
             ).fetchall()
         ]
-    household_summary = organized_family_nuclei(q="", cep="", review="all", household_kind="all")
-    household_broad = broad_family_candidates(q="", cep="", review="all")
+    household_summary = organized_family_nuclei_summary()
+    household_broad = broad_family_candidates_summary()
 
     return {
         "people_total": people_total,
@@ -1201,6 +1201,17 @@ def _family_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _family_summary_person_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": moneyless_int(row["id"]),
+        "nome": row["nome"] or "",
+        "complemento": row["complemento"] or "",
+        "endereco": _format_address_line(row),
+        "exact_key": family_address_key(row),
+        "base_key": family_base_address_key(row),
+    }
+
+
 def _household_short_name(value: object) -> str:
     text = " ".join(str(value or "").strip().split())
     if not text:
@@ -1482,6 +1493,128 @@ def _organized_family_surname_label(people: list[dict[str, Any]]) -> str:
         key = sorted(broad_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
         return key.title()
     return ""
+
+
+def organized_family_nuclei_summary() -> dict[str, int]:
+    if _people_snapshot_available():
+        try:
+            person_rows = _family_rows_from_snapshots()
+            relationship_rows = _nucleus_relationship_rows_from_snapshots()
+        except LegacyDatabaseError:
+            person_rows = []
+            relationship_rows = []
+    else:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para familias domiciliares.")
+    primary_rows = _pick_primary_person_rows(person_rows)
+    graph: dict[int, set[int]] = defaultdict(set)
+    for row in relationship_rows:
+        left_id = moneyless_int(row["pessoa_id"])
+        right_id = moneyless_int(row["pessoa_relacionada_id"])
+        if not left_id or not right_id:
+            continue
+        if left_id not in primary_rows or right_id not in primary_rows:
+            continue
+        graph[left_id].add(right_id)
+        graph[right_id].add(left_id)
+
+    def _group_needs_review(component_ids: list[int]) -> bool:
+        people = [
+            _family_summary_person_from_row(primary_rows[person_id])
+            for person_id in sorted(set(component_ids))
+            if person_id in primary_rows
+        ]
+        if not people:
+            return False
+        return bool(_family_alignment_payload(people).get("needs_review"))
+
+    seen: set[int] = set()
+    assigned_ids: set[int] = set()
+    family_groups = 0
+    single_groups = 0
+    review_groups = 0
+
+    for node in sorted(graph):
+        if node in seen:
+            continue
+        stack = [node]
+        component_ids: list[int] = []
+        seen.add(node)
+        while stack:
+            current = stack.pop()
+            component_ids.append(current)
+            for next_id in graph[current]:
+                if next_id not in seen:
+                    seen.add(next_id)
+                    stack.append(next_id)
+        if not component_ids:
+            continue
+        assigned_ids.update(component_ids)
+        if len(component_ids) <= 1:
+            single_groups += 1
+        else:
+            family_groups += 1
+        if _group_needs_review(component_ids):
+            review_groups += 1
+
+    for person_id in sorted(primary_rows):
+        if person_id in assigned_ids:
+            continue
+        single_groups += 1
+        if _group_needs_review([person_id]):
+            review_groups += 1
+
+    return {
+        "total": family_groups + single_groups,
+        "family_groups": family_groups,
+        "single_groups": single_groups,
+        "review_groups": review_groups,
+    }
+
+
+def broad_family_candidates_summary() -> dict[str, int]:
+    if _people_snapshot_available():
+        try:
+            rows = _family_rows_from_snapshots()
+            relationship_pairs, suppressed_pairs = _family_relationship_sets_from_snapshots()
+        except LegacyDatabaseError:
+            rows = []
+            relationship_pairs = set()
+            suppressed_pairs = set()
+    else:
+        raise LegacyDatabaseError("Espelho cadastral Postgres indisponivel para o criterio amplo de familias.")
+
+    base_groups: dict[tuple[str, ...], dict[int, dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        base_key = family_base_address_key(row)
+        person_id = moneyless_int(row["id"])
+        if not base_key or not person_id:
+            continue
+        base_groups[base_key].setdefault(person_id, row)
+
+    total_groups = 0
+    pending_groups = 0
+    consolidated_groups = 0
+    for group_rows in base_groups.values():
+        person_ids = sorted(group_rows)
+        if len(person_ids) < 2:
+            continue
+        total_groups += 1
+        missing_relationships = 0
+        for index, left_id in enumerate(person_ids):
+            for right_id in person_ids[index + 1 :]:
+                pair = _relationship_pair(left_id, right_id)
+                if pair not in relationship_pairs and pair not in suppressed_pairs:
+                    missing_relationships += 1
+        if missing_relationships > 0:
+            pending_groups += 1
+        else:
+            consolidated_groups += 1
+
+    return {
+        "total": total_groups,
+        "pending_groups": pending_groups,
+        "consolidated_groups": consolidated_groups,
+    }
 
 
 def _organized_family_payload(

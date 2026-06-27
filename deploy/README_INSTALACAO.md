@@ -61,7 +61,7 @@ Com isso, este pacote passa a cuidar principalmente de:
 - `system/ubuntu-24.04.txt`: pacotes de sistema esperados no Linux alvo.
 - `install_local_mac.sh`: prepara opcionalmente o ambiente local de desenvolvimento.
 - `install_ubuntu_server.sh`: roteiro executavel para preparar servidor Linux.
-- `backup_sqlite.sh`: gera backup consistente do banco SQLite.
+- `backup_sqlite.sh`: ponto de entrada compativel; no modo atual ele prioriza backup do runtime Docker/PostgreSQL e, se esse runtime nao existir, cai no backup SQLite legado.
 - `restore_sqlite.sh`: restaura backup preservando uma copia pre-restore.
 - `env.example`: variaveis de ambiente padrao.
 - `../scripts/verificar_dependencias_servidor.py`: valida se o ambiente esta pronto.
@@ -124,6 +124,12 @@ Esse runtime separado guarda:
 
 Esse caminho fica fora do `Documents/iCloud`, justamente para evitar lentidao e lock durante copia de envelopes, fotos e uploads.
 
+Observacao importante:
+
+- as credenciais atuais do runtime local/homologacao sao temporarias de ambiente de teste;
+- elas nao devem ser tratadas como segredos definitivos de producao;
+- antes da subida em nuvem/producao, trocar usuario, senha e demais segredos no `runtime.env` real.
+
 Preparar a estrutura e sincronizar os dados atuais:
 
 ```bash
@@ -135,6 +141,14 @@ Subir o stack Docker local do Django/Postgres:
 ```bash
 ./scripts/subir_runtime_postgres_local.sh
 ```
+
+Gerar backup do que esta rodando no runtime Docker:
+
+```bash
+./scripts/powerbackup_runtime.sh
+```
+
+Se algum atalho externo ainda chamar `deploy/backup_sqlite.sh`, ele agora redireciona automaticamente para esse backup do runtime quando o ambiente Docker/Postgres estiver configurado.
 
 Parar o stack:
 

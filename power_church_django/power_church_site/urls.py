@@ -21,6 +21,7 @@ urlpatterns = [
     path("branding/logo", brand_logo, name="brand_logo"),
     path("admin/", admin.site.urls),
     path("accounts/", include("power_church_django.apps.accounts.urls")),
+    path("api/v1/", include("power_church_django.apps.api.urls")),
     path("people/", include("power_church_django.apps.people.urls")),
     path("contributors/", contributors, name="contributors"),
     path("contributors/<int:contributor_id>/", contributor_detail, name="contributor_detail"),

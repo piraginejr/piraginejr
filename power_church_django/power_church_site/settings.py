@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 
@@ -36,6 +37,11 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "sim", "on"}
 
 
+def env_list(name: str, default: str = "") -> list[str]:
+    value = os.environ.get(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 SECRET_KEY = os.environ.get("POWER_CHURCH_DJANGO_SECRET_KEY", "dev-only-change-before-production")
 DEBUG = env_bool("POWER_CHURCH_DJANGO_DEBUG", True)
 ALLOWED_HOSTS = [
@@ -46,11 +52,13 @@ ALLOWED_HOSTS = [
 
 INSTALLED_APPS = [
     "auditlog",
+    "corsheaders",
     "crispy_forms",
     "crispy_bootstrap5",
     "django_filters",
     "django_tables2",
     "djmoney",
+    "rest_framework",
     "formtools",
     "guardian",
     "import_export",
@@ -67,12 +75,14 @@ INSTALLED_APPS = [
     "power_church_django.apps.imports",
     "power_church_django.apps.audit",
     "power_church_django.apps.reports",
+    "power_church_django.apps.api",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -193,5 +203,26 @@ ANYMAIL = {}
 
 DATA_UPLOAD_MAX_NUMBER_FILES = int(os.environ.get("POWER_CHURCH_DATA_UPLOAD_MAX_NUMBER_FILES", "5000"))
 DATA_UPLOAD_MAX_NUMBER_FIELDS = int(os.environ.get("POWER_CHURCH_DATA_UPLOAD_MAX_NUMBER_FIELDS", "20000"))
+
+CORS_ALLOW_ALL_ORIGINS = env_bool("POWER_CHURCH_CORS_ALLOW_ALL_ORIGINS", False)
+CORS_ALLOWED_ORIGINS = env_list("POWER_CHURCH_CORS_ALLOWED_ORIGINS", "")
+CORS_ALLOW_CREDENTIALS = env_bool("POWER_CHURCH_CORS_ALLOW_CREDENTIALS", True)
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(os.environ.get("POWER_CHURCH_JWT_ACCESS_MINUTES", "30"))),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=int(os.environ.get("POWER_CHURCH_JWT_REFRESH_DAYS", "7"))),
+    "ROTATE_REFRESH_TOKENS": env_bool("POWER_CHURCH_JWT_ROTATE_REFRESH_TOKENS", False),
+    "BLACKLIST_AFTER_ROTATION": env_bool("POWER_CHURCH_JWT_BLACKLIST_AFTER_ROTATION", False),
+    "UPDATE_LAST_LOGIN": env_bool("POWER_CHURCH_JWT_UPDATE_LAST_LOGIN", True),
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

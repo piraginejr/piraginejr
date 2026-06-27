@@ -19,6 +19,9 @@ django-money>=3.6,<4
 django-crispy-forms>=2.6,<3
 crispy-bootstrap5>=2026.3,<2027
 django-anymail>=13.1,<14
+djangorestframework>=3.16,<4
+djangorestframework-simplejwt>=5.5,<6
+django-cors-headers>=4.8,<5
 
 # Pacotes instalados/preparados para provas futuras, mas ainda nao ativados
 # automaticamente no fluxo operacional.

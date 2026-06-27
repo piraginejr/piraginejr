@@ -15,6 +15,7 @@ class AppLoginRequiredMiddleware:
         "/accounts/login/",
         "/accounts/relogin/",
         "/accounts/logout/",
+        "/api/",
         "/branding/logo",
         "/admin/",
         "/static/",

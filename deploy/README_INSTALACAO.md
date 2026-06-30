@@ -66,10 +66,10 @@ Com isso, este pacote passa a cuidar principalmente de:
 - `env.example`: variaveis de ambiente padrao.
 - `../scripts/verificar_dependencias_servidor.py`: valida se o ambiente esta pronto.
 - `../scripts/verificar_pacote_instalacao.py`: valida se o pacote de instalacao continua completo.
-- `ROTINA_ATUALIZACAO_NUVEM_RUNTIME.md`: metodologia de atualizacao incremental via `cloud-release`.
-- `CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md`: checklist operacional para o administrador da nuvem.
-- `../scripts/deploy_cloud_release.sh`: rotina padrao de deploy controlado na nuvem.
-- `../scripts/rollback_cloud_release.sh`: rotina padrao de rollback controlado na nuvem.
+- `ROTINA_ATUALIZACAO_NUVEM_RUNTIME.md`: metodologia atual de entrega continua via `main`, com sincronizacao automatica do servidor.
+- `CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md`: checklist operacional atualizado para a rotina automatica da `main`.
+- `../scripts/deploy_cloud_release.sh`: contingencia de deploy controlado, mantida como ferramenta extraordinaria.
+- `../scripts/rollback_cloud_release.sh`: contingencia de rollback controlado, mantida para casos emergenciais.
 
 ## Entrega Minima Para A Infraestrutura Hospedada
 
@@ -198,9 +198,9 @@ So depois disso faz sentido publicar em servidor externo.
 
 Quando o cliente ja estiver no ar, o modelo recomendado deixa de ser pacote solto/manual e passa a ser:
 
-- desenvolvimento em `main`;
-- liberacao homologada em `cloud-release`;
-- servidor puxando apenas `cloud-release`.
+- desenvolvimento e homologacao em `main`;
+- `push` apenas do que esta validado localmente;
+- servidor puxando `main` automaticamente em janela fixa de 30 minutos.
 
 Documentos e scripts dessa rotina:
 
@@ -208,3 +208,8 @@ Documentos e scripts dessa rotina:
 - [CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md](/Users/piraginejr/Documents/New project/Teste/Power Church/deploy/CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md)
 - [deploy_cloud_release.sh](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/deploy_cloud_release.sh)
 - [rollback_cloud_release.sh](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/rollback_cloud_release.sh)
+
+Observacao:
+
+- `cloud-release` deixa de ser trilha operacional padrao;
+- ela permanece apenas como opcao extraordinaria de contingencia ou historico de transicao.

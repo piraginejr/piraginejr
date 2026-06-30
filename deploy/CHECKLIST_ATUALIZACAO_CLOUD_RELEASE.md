@@ -1,12 +1,18 @@
-# Checklist De Atualizacao Cloud Release
+# Checklist De Atualizacao Do Main Na Nuvem
 
 Use esta lista toda vez que a nuvem receber atualizacao do Power Church.
+
+Observacao:
+
+- o nome do arquivo foi mantido por compatibilidade historica;
+- a rotina abaixo ja foi atualizada para o metodo novo, baseado em `main`.
 
 ## Antes Da Atualizacao
 
 - [ ] confirmar a janela de atualizacao com o responsavel
-- [ ] confirmar a branch de liberacao: `cloud-release`
+- [ ] confirmar a branch de liberacao: `main`
 - [ ] confirmar o SHA alvo informado pela equipe
+- [ ] confirmar se a sincronizacao automatica de 30 minutos esta ativa
 - [ ] confirmar se a mudanca afeta:
 - [ ] envelopes
 - [ ] recibos
@@ -33,26 +39,23 @@ Comando padrao:
 ## Atualizacao Do Codigo
 
 - [ ] confirmar que o worktree do servidor esta limpo
-- [ ] confirmar que a branch local do servidor esta em `cloud-release`
-- [ ] buscar atualizacoes do remoto
-- [ ] atualizar para a ref aprovada
+- [ ] confirmar que a branch local do servidor esta em `main`
+- [ ] confirmar que o servidor puxou a `main` na janela prevista
+- [ ] se nao puxou, executar a contingencia manual
 
-Comando padrao:
-
-```bash
-./scripts/deploy_cloud_release.sh
-```
-
-Opcional, para ref especifica:
+Contingencia manual:
 
 ```bash
-./scripts/deploy_cloud_release.sh --ref origin/cloud-release
+git fetch origin main
+git checkout main
+git pull --rebase origin main
+docker compose --env-file "$POWER_CHURCH_RUNTIME_DIR/env/runtime.env" -f docker-compose.runtime.yml up -d --build
 ```
 
 ## Rebuild E Subida
 
-- [ ] rebuild do container Django executado
-- [ ] `docker compose up -d` executado
+- [ ] rebuild do container Django executado, quando aplicavel
+- [ ] `docker compose up -d` executado, quando aplicavel
 - [ ] migrations rodaram sem erro
 - [ ] collectstatic rodou sem erro
 - [ ] containers ficaram `Up` e `healthy`
@@ -92,6 +95,7 @@ Quando a release afetar API:
 
 - [ ] registrar SHA anterior
 - [ ] registrar SHA novo
+- [ ] registrar se a entrada veio pela janela automatica ou por contingencia manual
 - [ ] registrar horario da implantacao
 - [ ] registrar quem executou
 - [ ] registrar caminhos dos backups
@@ -107,16 +111,19 @@ Fazer rollback se houver qualquer um destes:
 - [ ] fluxo operacional critico falha
 - [ ] migrations causam comportamento invalido
 
-Comando padrao:
+Padrao preferencial:
 
 ```bash
-./scripts/rollback_cloud_release.sh
+git revert <sha_problematico>
+git push origin main
 ```
 
-Rollback para SHA especifico:
+Contingencia manual para retorno imediato:
 
 ```bash
-./scripts/rollback_cloud_release.sh --sha <sha_anterior>
+git checkout main
+git reset --hard <sha_anterior_aprovado>
+docker compose --env-file "$POWER_CHURCH_RUNTIME_DIR/env/runtime.env" -f docker-compose.runtime.yml up -d --build
 ```
 
 ## Depois Do Rollback

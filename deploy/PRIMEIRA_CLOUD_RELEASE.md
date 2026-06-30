@@ -1,5 +1,7 @@
 # Primeira Cloud Release
 
+> Documento historico. A operacao atual da nuvem passou a acompanhar `main` por sincronizacao automatica em janela fixa. Esta nota fica preservada apenas como registro da primeira entrega controlada.
+
 ## Objetivo
 
 Executar **uma unica atualizacao controlada** na nuvem, levando:
@@ -8,7 +10,7 @@ Executar **uma unica atualizacao controlada** na nuvem, levando:
 - trava multioperador com `em_digitacao`;
 - rotina padronizada de backup, deploy e rollback.
 
-## Branch De Liberacao
+## Branch De Liberacao Da Epoca
 
 - branch: `cloud-release`
 - base: `origin/main`

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from django.db import models, transaction
+from django.utils import timezone
 
 from power_church_core.formatting import br_date, br_datetime, br_money, competencia_from_date, parse_money
 from power_church_core.normalization import normalize_query
@@ -36,6 +37,18 @@ from power_church_django.services.runtime_errors import LegacyWriteError
 from power_church_django.services.runtime_formatting import CONTRIBUTION_STATUS_OPTIONS, _clean_optional_text
 from power_church_django.services.runtime_support import envelope_upload_root
 
+ENVELOPE_PENDING_STATUS = "aguardando_digitacao"
+ENVELOPE_IN_PROGRESS_STATUS = "em_digitacao"
+ENVELOPE_IN_PROGRESS_TIMEOUT = timedelta(minutes=30)
+ENVELOPE_OPEN_STATUSES = {ENVELOPE_PENDING_STATUS, ENVELOPE_IN_PROGRESS_STATUS}
+ENVELOPE_STATUS_LABELS = {
+    ENVELOPE_PENDING_STATUS: "Aguardando digitacao",
+    ENVELOPE_IN_PROGRESS_STATUS: "Em digitacao",
+    "lancado": "Lancado",
+    "ignorado": "Ignorado",
+    "duplicado": "Duplicado",
+}
+
 
 def _default_organization_id() -> int:
     value = PersonSnapshot.objects.filter(is_active=True).order_by("organization_id", "legacy_id").values_list("organization_id", flat=True).first()
@@ -55,6 +68,59 @@ def _next_native_envelope_item_legacy_id() -> int:
 def _next_native_envelope_lot_legacy_id() -> int:
     value = NativeEnvelopeLot.objects.aggregate(value=models.Max("legacy_id")).get("value") or 0
     return int(value or 0) + 1
+
+
+def _envelope_lock_owner_label(envelope: NativeEnvelope) -> str:
+    return normalize_query(envelope.updated_by) or "outro operador"
+
+
+def _envelope_status_label(status: str) -> str:
+    return ENVELOPE_STATUS_LABELS.get(str(status or ""), str(status or ""))
+
+
+def _is_stale_envelope_lock(envelope: NativeEnvelope, *, now: datetime | None = None) -> bool:
+    if str(envelope.status or "") != ENVELOPE_IN_PROGRESS_STATUS:
+        return False
+    now = now or timezone.now()
+    updated_at = envelope.updated_at or now
+    return updated_at <= now - ENVELOPE_IN_PROGRESS_TIMEOUT
+
+
+def _can_claim_envelope(envelope: NativeEnvelope, actor: str, *, now: datetime | None = None) -> bool:
+    status = str(envelope.status or "")
+    actor = normalize_query(actor) or "django"
+    if status == ENVELOPE_PENDING_STATUS:
+        return True
+    if status != ENVELOPE_IN_PROGRESS_STATUS:
+        return False
+    if normalize_query(envelope.updated_by) == actor:
+        return True
+    return _is_stale_envelope_lock(envelope, now=now)
+
+
+def _claim_envelope_for_digitization(envelope: NativeEnvelope, actor: str) -> None:
+    actor = normalize_query(actor) or "django"
+    envelope.status = ENVELOPE_IN_PROGRESS_STATUS
+    envelope.updated_by = actor
+    envelope.save(update_fields=["status", "updated_by", "updated_at"])
+    if int(envelope.native_lot_legacy_id or 0):
+        _refresh_envelope_lot_status_postgres(int(envelope.native_lot_legacy_id or 0), actor=actor)
+
+
+def _refresh_envelope_lot_status_postgres(lot_id: int, actor: str = "") -> None:
+    lot_id = int(lot_id or 0)
+    if not lot_id:
+        return
+    has_open_work = NativeEnvelope.objects.filter(
+        native_lot_legacy_id=lot_id,
+        is_active=True,
+        status__in=sorted(ENVELOPE_OPEN_STATUSES),
+    ).exists()
+    lot_status = "parcial" if has_open_work else "digitado"
+    NativeEnvelopeLot.objects.filter(legacy_id=lot_id, is_active=True).update(
+        status=lot_status,
+        updated_by=normalize_query(actor) or "",
+    )
 
 
 def _parse_participant_reference(raw_value: object) -> tuple[int, int, str, str]:
@@ -699,8 +765,7 @@ def _materialize_native_envelope(
                 is_active=True,
             )
     if int(envelope.native_lot_legacy_id or 0):
-        lot_status = "parcial" if NativeEnvelope.objects.filter(native_lot_legacy_id=int(envelope.native_lot_legacy_id or 0), is_active=True, status="aguardando_digitacao").exists() else "digitado"
-        NativeEnvelopeLot.objects.filter(legacy_id=int(envelope.native_lot_legacy_id or 0), is_active=True).update(status=lot_status, updated_by=actor)
+        _refresh_envelope_lot_status_postgres(int(envelope.native_lot_legacy_id or 0), actor=actor)
     refresh_envelope_profile_updates_postgres(envelope, actor=actor)
     try:
         record_django_audit_event(
@@ -726,7 +791,7 @@ def create_envelope_contribution_batch_postgres(payload: Any, upload: Any, actor
     envelope = NativeEnvelope.objects.create(
         legacy_id=envelope_legacy_id,
         organization_id=_default_organization_id(),
-        status="aguardando_digitacao",
+        status=ENVELOPE_PENDING_STATUS,
         image_original_name=str(file_payload.get("filename") or ""),
         image_hash=str(file_payload.get("hash") or ""),
         image_content_type=str(file_payload.get("content_type") or ""),
@@ -805,7 +870,7 @@ def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[
                 receipt_method_name="",
                 operational_status="regular",
                 source=lot.default_source or "Envelope digitalizado",
-                status="duplicado" if duplicate else "aguardando_digitacao",
+                status="duplicado" if duplicate else ENVELOPE_PENDING_STATUS,
                 notes="",
                 justification="",
                 image_original_name=str(file_payload.get("filename") or ""),
@@ -824,14 +889,41 @@ def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[
     return {"lot_id": int(lot.legacy_id or 0), "envelope_ids": envelope_ids, "duplicates": duplicates}
 
 
-def get_next_pending_envelope_id_postgres(lot_id: int) -> int:
-    row = (
-        NativeEnvelope.objects.filter(native_lot_legacy_id=int(lot_id or 0), is_active=True, status="aguardando_digitacao")
-        .order_by("legacy_id")
-        .values_list("legacy_id", flat=True)
-        .first()
-    )
-    return int(row or 0)
+def get_next_pending_envelope_id_postgres(lot_id: int, actor: str = "") -> int:
+    lot_id = int(lot_id or 0)
+    if not lot_id:
+        return 0
+    actor = normalize_query(actor) or "django"
+    now = timezone.now()
+    with transaction.atomic():
+        current = (
+            NativeEnvelope.objects.select_for_update()
+            .filter(
+                native_lot_legacy_id=lot_id,
+                is_active=True,
+                status=ENVELOPE_IN_PROGRESS_STATUS,
+                updated_by=actor,
+            )
+            .order_by("legacy_id")
+            .first()
+        )
+        if current and not _is_stale_envelope_lock(current, now=now):
+            _claim_envelope_for_digitization(current, actor)
+            return int(current.legacy_id or 0)
+        for envelope in (
+            NativeEnvelope.objects.select_for_update()
+            .filter(
+                native_lot_legacy_id=lot_id,
+                is_active=True,
+                status__in=sorted(ENVELOPE_OPEN_STATUSES),
+            )
+            .order_by("legacy_id")
+        ):
+            if not _can_claim_envelope(envelope, actor, now=now):
+                continue
+            _claim_envelope_for_digitization(envelope, actor)
+            return int(envelope.legacy_id or 0)
+    return 0
 
 
 def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
@@ -841,14 +933,18 @@ def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
     rows = list(
         NativeEnvelope.objects.filter(native_lot_legacy_id=int(lot.legacy_id or 0), is_active=True).order_by("legacy_id")
     )
-    counts = {"total": 0, "pendentes": 0, "lancados": 0, "ignorados": 0, "duplicados": 0}
+    counts = {"total": 0, "pendentes": 0, "em_digitacao": 0, "lancados": 0, "ignorados": 0, "duplicados": 0}
     total_launched = 0.0
     next_pending_id = 0
     items: list[dict[str, Any]] = []
     for order, row in enumerate(rows, start=1):
         counts["total"] += 1
-        if row.status == "aguardando_digitacao":
+        if row.status == ENVELOPE_PENDING_STATUS:
             counts["pendentes"] += 1
+            if not next_pending_id:
+                next_pending_id = int(row.legacy_id or 0)
+        elif row.status == ENVELOPE_IN_PROGRESS_STATUS:
+            counts["em_digitacao"] += 1
             if not next_pending_id:
                 next_pending_id = int(row.legacy_id or 0)
         elif row.status == "lancado":
@@ -868,11 +964,11 @@ def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
                 "nome": row.informed_name or row.image_original_name or "Envelope sem nome",
                 "forma": row.receipt_method_name or "Nao informada",
                 "status": row.status or "",
-                "status_label": row.status or "",
+                "status_label": _envelope_status_label(row.status or ""),
                 "total_fmt": br_money(row.total_informed or 0),
                 "observacoes": row.notes or "",
                 "detail_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/",
-                "launch_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/launch/" if row.status == "aguardando_digitacao" else "",
+                "launch_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/launch/" if row.status in ENVELOPE_OPEN_STATUSES else "",
                 "image_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/image/" if row.image_path else "",
             }
         )
@@ -897,10 +993,20 @@ def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
     }
 
 
-def pending_envelope_contribution_context_postgres(envelope_id: int) -> dict[str, Any] | None:
-    envelope = NativeEnvelope.objects.filter(legacy_id=int(envelope_id or 0), is_active=True).first()
-    if envelope is None or str(envelope.status or "") != "aguardando_digitacao":
-        return None
+def pending_envelope_contribution_context_postgres(envelope_id: int, actor: str = "") -> dict[str, Any] | None:
+    actor = normalize_query(actor) or "django"
+    now = timezone.now()
+    with transaction.atomic():
+        envelope = NativeEnvelope.objects.select_for_update().filter(legacy_id=int(envelope_id or 0), is_active=True).first()
+        if envelope is None:
+            return None
+        status = str(envelope.status or "")
+        if status not in ENVELOPE_OPEN_STATUSES:
+            return None
+        if not _can_claim_envelope(envelope, actor, now=now):
+            owner = _envelope_lock_owner_label(envelope)
+            raise LegacyWriteError(f"Envelope em digitacao por {owner}. Abra o proximo disponivel.")
+        _claim_envelope_for_digitization(envelope, actor)
     context = envelope_contribution_context_postgres()
     suffix = Path(str(envelope.image_path or "")).suffix.lower()
     context.update(
@@ -909,7 +1015,7 @@ def pending_envelope_contribution_context_postgres(envelope_id: int) -> dict[str
                 "id": int(envelope.legacy_id or 0),
                 "lote_id": int(envelope.native_lot_legacy_id or 0),
                 "status": envelope.status or "",
-                "status_label": envelope.status or "",
+                "status_label": _envelope_status_label(envelope.status or ""),
                 "arquivo": envelope.image_original_name or "",
                 "image_url": f"/contributions/envelopes/{int(envelope.legacy_id or 0)}/image/" if envelope.image_path else "",
                 "is_image": suffix in {".jpg", ".jpeg", ".png", ".webp"},
@@ -949,32 +1055,49 @@ def pending_envelope_contribution_context_postgres(envelope_id: int) -> dict[str
 
 
 def launch_pending_envelope_postgres(envelope_id: int, payload: Any, actor: str = "") -> dict[str, object]:
-    envelope = NativeEnvelope.objects.filter(legacy_id=int(envelope_id or 0), is_active=True).first()
-    if envelope is None:
-        raise LegacyWriteError("Envelope pendente nao encontrado.")
-    if str(envelope.status or "") == "lancado":
-        raise LegacyWriteError("Este envelope ja foi lancado.")
-    if str(envelope.status or "") in {"ignorado", "duplicado"}:
-        raise LegacyWriteError("Este envelope nao esta disponivel para lancamento.")
-    result = _materialize_native_envelope(envelope, payload, actor=actor, source="postgres_pending_envelope")
+    actor = normalize_query(actor) or "django"
+    with transaction.atomic():
+        envelope = NativeEnvelope.objects.select_for_update().filter(legacy_id=int(envelope_id or 0), is_active=True).first()
+        if envelope is None:
+            raise LegacyWriteError("Envelope pendente nao encontrado.")
+        status = str(envelope.status or "")
+        if status == "lancado":
+            raise LegacyWriteError("Este envelope ja foi lancado.")
+        if status in {"ignorado", "duplicado"}:
+            raise LegacyWriteError("Este envelope nao esta disponivel para lancamento.")
+        if status not in ENVELOPE_OPEN_STATUSES:
+            raise LegacyWriteError("Este envelope nao esta disponivel para lancamento.")
+        if not _can_claim_envelope(envelope, actor):
+            owner = _envelope_lock_owner_label(envelope)
+            raise LegacyWriteError(f"Envelope em digitacao por {owner}. Abra o proximo disponivel.")
+        result = _materialize_native_envelope(envelope, payload, actor=actor, source="postgres_pending_envelope")
     result["reconciliation"] = {"matched": False, "reason": "postgres_pending_manual"}
     return result
 
 
 def ignore_pending_envelope_postgres(envelope_id: int, justification: str = "", actor: str = "") -> dict[str, object]:
-    envelope = NativeEnvelope.objects.filter(legacy_id=int(envelope_id or 0), is_active=True).first()
-    if envelope is None:
-        raise LegacyWriteError("Envelope pendente nao encontrado.")
-    if str(envelope.status or "") == "lancado":
-        raise LegacyWriteError("Este envelope ja foi lancado.")
-    envelope.status = "ignorado"
-    if normalize_query(justification):
-        envelope.justification = normalize_query(justification)
-    envelope.updated_by = actor
-    envelope.save(update_fields=["status", "justification", "updated_by", "updated_at"])
+    actor = normalize_query(actor) or "django"
+    with transaction.atomic():
+        envelope = NativeEnvelope.objects.select_for_update().filter(legacy_id=int(envelope_id or 0), is_active=True).first()
+        if envelope is None:
+            raise LegacyWriteError("Envelope pendente nao encontrado.")
+        status = str(envelope.status or "")
+        if status == "lancado":
+            raise LegacyWriteError("Este envelope ja foi lancado.")
+        if status == "duplicado":
+            raise LegacyWriteError("Este envelope nao esta disponivel para lancamento.")
+        if status not in ENVELOPE_OPEN_STATUSES:
+            raise LegacyWriteError("Este envelope nao esta disponivel para lancamento.")
+        if not _can_claim_envelope(envelope, actor):
+            owner = _envelope_lock_owner_label(envelope)
+            raise LegacyWriteError(f"Envelope em digitacao por {owner}. Abra o proximo disponivel.")
+        envelope.status = "ignorado"
+        if normalize_query(justification):
+            envelope.justification = normalize_query(justification)
+        envelope.updated_by = actor
+        envelope.save(update_fields=["status", "justification", "updated_by", "updated_at"])
     if int(envelope.native_lot_legacy_id or 0):
-        lot_status = "parcial" if NativeEnvelope.objects.filter(native_lot_legacy_id=int(envelope.native_lot_legacy_id or 0), is_active=True, status="aguardando_digitacao").exists() else "digitado"
-        NativeEnvelopeLot.objects.filter(legacy_id=int(envelope.native_lot_legacy_id or 0), is_active=True).update(status=lot_status, updated_by=actor)
+        _refresh_envelope_lot_status_postgres(int(envelope.native_lot_legacy_id or 0), actor=actor)
     return {"envelope_id": int(envelope.legacy_id or 0), "lot_id": int(envelope.native_lot_legacy_id or 0)}
 
 
@@ -1085,7 +1208,7 @@ def list_envelopes_postgres(q: str = "", competencia: str = "") -> dict[str, Any
         if visible_lot_ids and lot_id not in visible_lot_ids and (q or competencia):
             continue
         lot_rows = [row for row in rows if int(row.native_lot_legacy_id or 0) == lot_id]
-        next_pending_id = next((int(row.legacy_id or 0) for row in lot_rows if str(row.status or "") == "aguardando_digitacao"), 0)
+        next_pending_id = next((int(row.legacy_id or 0) for row in lot_rows if str(row.status or "") in ENVELOPE_OPEN_STATUSES), 0)
         lots.append(
             {
                 "id": lot_id,
@@ -1094,7 +1217,8 @@ def list_envelopes_postgres(q: str = "", competencia: str = "") -> dict[str, Any
                 "status": lot.status or "",
                 "status_label": lot.status or "",
                 "total_envelopes": len(lot_rows),
-                "pendentes": sum(1 for row in lot_rows if str(row.status or "") == "aguardando_digitacao"),
+                "pendentes": sum(1 for row in lot_rows if str(row.status or "") == ENVELOPE_PENDING_STATUS),
+                "em_digitacao": sum(1 for row in lot_rows if str(row.status or "") == ENVELOPE_IN_PROGRESS_STATUS),
                 "lancados": sum(1 for row in lot_rows if str(row.status or "") == "lancado"),
                 "ignorados": sum(1 for row in lot_rows if str(row.status or "") == "ignorado"),
                 "duplicados": sum(1 for row in lot_rows if str(row.status or "") == "duplicado"),
@@ -1117,11 +1241,11 @@ def list_envelopes_postgres(q: str = "", competencia: str = "") -> dict[str, Any
                 "nome_informado": row.informed_name or "",
                 "sigla": "PG" if int(row.person_legacy_id or 0) else "AUX",
                 "forma": row.receipt_method_name or "Nao informada",
-                "status_label": row.status or "lancado",
+                "status_label": _envelope_status_label(row.status or "lancado"),
                 "image_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/image/" if row.image_path else "",
                 "detail_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/",
                 "edit_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/edit/" if str(row.status or "") == "lancado" else "",
-                "launch_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/launch/" if str(row.status or "") == "aguardando_digitacao" else "",
+                "launch_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/launch/" if str(row.status or "") in ENVELOPE_OPEN_STATUSES else "",
                 "total_fmt": br_money(row.total_informed or 0),
             }
             for row in rows

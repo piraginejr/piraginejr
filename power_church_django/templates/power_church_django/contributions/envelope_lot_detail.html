@@ -6,7 +6,7 @@
       <div>
         <p class="badge">{{ lot.competencia }} · {{ lot.status_label }}</p>
         <h1>{{ lot.nome }}</h1>
-        <p>{{ lot.counts.total }} imagem(ns) · {{ lot.counts.pendentes }} pendente(s) · {{ lot.counts.lancados }} lancada(s) · total lancado {{ lot.total_lancado_fmt }}</p>
+        <p>{{ lot.counts.total }} imagem(ns) · {{ lot.counts.pendentes }} pendente(s) · {{ lot.counts.em_digitacao }} em digitacao · {{ lot.counts.lancados }} lancada(s) · total lancado {{ lot.total_lancado_fmt }}</p>
       </div>
       <div class="actions no-print">
         {% if lot.next_pending_url %}
@@ -20,6 +20,7 @@
       <div class="grid">
         <div class="card"><span class="label">Total de imagens</span><strong>{{ lot.counts.total }}</strong></div>
         <div class="card"><span class="label">Aguardando digitacao</span><strong>{{ lot.counts.pendentes }}</strong></div>
+        <div class="card"><span class="label">Em digitacao</span><strong>{{ lot.counts.em_digitacao }}</strong></div>
         <div class="card"><span class="label">Lancadas</span><strong>{{ lot.counts.lancados }}</strong></div>
         <div class="card"><span class="label">Ignoradas</span><strong>{{ lot.counts.ignorados }}</strong></div>
         <div class="card"><span class="label">Duplicadas</span><strong>{{ lot.counts.duplicados }}</strong></div>

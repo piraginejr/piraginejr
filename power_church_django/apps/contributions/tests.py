@@ -6,6 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from power_church_django.apps.contributions.models import NativeEnvelope, NativeEnvelopeLot
+from power_church_django.apps.people.models import PersonSnapshot
 from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
     ENVELOPE_IN_PROGRESS_TIMEOUT,
@@ -112,6 +113,40 @@ class EnvelopeDigitizationLockTests(TestCase):
 
 
 class EnvelopeLinePayloadTests(TestCase):
+    def setUp(self) -> None:
+        self.person_a = PersonSnapshot.objects.create(
+            legacy_id=101,
+            organization_id=1,
+            name="Pessoa A",
+            normalized_name="PESSOA A",
+            social_name="",
+            cpf="",
+            primary_email="",
+            normalized_email="",
+            primary_phone="",
+            primary_whatsapp="",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        self.person_b = PersonSnapshot.objects.create(
+            legacy_id=102,
+            organization_id=1,
+            name="Pessoa B",
+            normalized_name="PESSOA B",
+            social_name="",
+            cpf="",
+            primary_email="",
+            normalized_email="",
+            primary_phone="",
+            primary_whatsapp="",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+
     def test_single_main_contribution_does_not_require_blank_rateio_lines(self) -> None:
         payload = {
             "tipo_contribuicao_id_padrao": "7",
@@ -142,3 +177,70 @@ class EnvelopeLinePayloadTests(TestCase):
         self.assertEqual(rows[0]["type_id"], 7)
         self.assertEqual(rows[0]["value"], 100.0)
         self.assertEqual(rows[0]["contributor_name"], "Membro Teste")
+
+    def test_single_explicit_split_line_uses_main_identity_without_forcing_other_lines(self) -> None:
+        payload = {
+            "tipo_contribuicao_id_padrao": "7",
+            "campanha_id_padrao": "",
+            "line_count": "10",
+            "linha_valor_1": "100,00",
+            "linha_tipo_contribuicao_id_1": "",
+            "linha_campanha_id_1": "",
+            "linha_observacoes_1": "Dizimo integral",
+        }
+        main_identity = {
+            "person_legacy_id": self.person_a.legacy_id,
+            "contributor_legacy_id": 0,
+            "native_aux_contributor_id": 0,
+            "contributor_source": "person",
+            "contributor_name": self.person_a.name,
+            "contributor_document": "",
+            "contributor_type": "person",
+            "stored_name": self.person_a.name,
+        }
+
+        rows = _native_envelope_line_payloads(payload, 1, 100.0, main_identity)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["person_legacy_id"], self.person_a.legacy_id)
+        self.assertEqual(rows[0]["type_id"], 7)
+        self.assertEqual(rows[0]["value"], 100.0)
+        self.assertEqual(rows[0]["notes"], "Dizimo integral")
+
+    def test_two_split_lines_support_two_different_people(self) -> None:
+        payload = {
+            "tipo_contribuicao_id_padrao": "7",
+            "campanha_id_padrao": "",
+            "line_count": "10",
+            "linha_participante_ref_1": f"Pessoa #{self.person_a.legacy_id}",
+            "linha_valor_1": "60,00",
+            "linha_tipo_contribuicao_id_1": "",
+            "linha_campanha_id_1": "",
+            "linha_observacoes_1": "Dizimo Pessoa A",
+            "linha_participante_ref_2": f"Pessoa #{self.person_b.legacy_id}",
+            "linha_valor_2": "40,00",
+            "linha_tipo_contribuicao_id_2": "9",
+            "linha_campanha_id_2": "3",
+            "linha_observacoes_2": "Oferta Pessoa B",
+        }
+        main_identity = {
+            "person_legacy_id": self.person_a.legacy_id,
+            "contributor_legacy_id": 0,
+            "native_aux_contributor_id": 0,
+            "contributor_source": "person",
+            "contributor_name": self.person_a.name,
+            "contributor_document": "",
+            "contributor_type": "person",
+            "stored_name": self.person_a.name,
+        }
+
+        rows = _native_envelope_line_payloads(payload, 1, 100.0, main_identity)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["person_legacy_id"], self.person_a.legacy_id)
+        self.assertEqual(rows[0]["type_id"], 7)
+        self.assertEqual(rows[0]["value"], 60.0)
+        self.assertEqual(rows[1]["person_legacy_id"], self.person_b.legacy_id)
+        self.assertEqual(rows[1]["type_id"], 9)
+        self.assertEqual(rows[1]["campaign_id"], 3)
+        self.assertEqual(rows[1]["value"], 40.0)

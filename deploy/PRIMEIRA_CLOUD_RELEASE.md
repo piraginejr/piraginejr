@@ -18,16 +18,12 @@ Executar **uma unica atualizacao controlada** na nuvem, levando:
 - `89bd22b` `Add envelope in-progress locking`
 - `29a2dc3` `Fix single envelope launch without split`
 - `19cc163` `Add cloud-release deployment workflow`
+- `6b6cab6` `Add envelope split coverage tests`
 
-## Commit Deliberadamente Fora Desta Janela
+Observacao:
 
-- `c3504b8` `Add envelope split coverage tests`
-
-Motivo:
-
-- e cobertura adicional de teste;
-- nao precisa entrar na primeira janela operacional da nuvem;
-- nao muda comportamento do cliente por si so.
+- esse ultimo commit nao muda comportamento de producao por si so;
+- ele foi incluido para permitir validacao real do rateio no proprio ambiente da nuvem.
 
 ## O Que O Operador Da Nuvem Deve Validar
 

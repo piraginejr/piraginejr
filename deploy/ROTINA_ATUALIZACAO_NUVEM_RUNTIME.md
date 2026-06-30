@@ -38,21 +38,19 @@ Para a primeira atualizacao unificada, a branch `cloud-release` foi preparada co
 - `89bd22b` `Add envelope in-progress locking`
 - `29a2dc3` `Fix single envelope launch without split`
 - `19cc163` `Add cloud-release deployment workflow`
+- `6b6cab6` `Add envelope split coverage tests`
 
 Classificacao pratica:
 
 - `89bd22b`: **impacta runtime**. Altera comportamento de envelopes multioperador.
 - `29a2dc3`: **impacta runtime**. Corrige salvamento de envelope simples sem rateio.
 - `19cc163`: **impacta operacao de deploy**. Padroniza backup, deploy, rollback e checklist.
-
-Fora desta primeira atualizacao:
-
-- `c3504b8` `Add envelope split coverage tests`
+- `6b6cab6`: **nao muda comportamento de producao**, mas permite rodar a cobertura de rateio diretamente no ambiente da nuvem.
 
 Resumo:
 
 - esta primeira `cloud-release` leva o que o cliente e o operador precisam sentir na nuvem;
-- a cobertura adicional de testes ficou em `main`, fora da primeira janela operacional;
+- a cobertura de testes de rateio vai junto para validar o ambiente real;
 - alguns arquivos de teste podem acompanhar commits mistos de runtime, mas nao alteram o comportamento de producao.
 
 ## Tipos De Mudanca

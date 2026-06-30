@@ -66,6 +66,10 @@ Com isso, este pacote passa a cuidar principalmente de:
 - `env.example`: variaveis de ambiente padrao.
 - `../scripts/verificar_dependencias_servidor.py`: valida se o ambiente esta pronto.
 - `../scripts/verificar_pacote_instalacao.py`: valida se o pacote de instalacao continua completo.
+- `ROTINA_ATUALIZACAO_NUVEM_RUNTIME.md`: metodologia de atualizacao incremental via `cloud-release`.
+- `CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md`: checklist operacional para o administrador da nuvem.
+- `../scripts/deploy_cloud_release.sh`: rotina padrao de deploy controlado na nuvem.
+- `../scripts/rollback_cloud_release.sh`: rotina padrao de rollback controlado na nuvem.
 
 ## Entrega Minima Para A Infraestrutura Hospedada
 
@@ -189,3 +193,18 @@ python3 scripts/verificar_dependencias_servidor.py --profile server --report
 ```
 
 So depois disso faz sentido publicar em servidor externo.
+
+## Atualizacao De Ambiente Ja Rodando Na Nuvem
+
+Quando o cliente ja estiver no ar, o modelo recomendado deixa de ser pacote solto/manual e passa a ser:
+
+- desenvolvimento em `main`;
+- liberacao homologada em `cloud-release`;
+- servidor puxando apenas `cloud-release`.
+
+Documentos e scripts dessa rotina:
+
+- [ROTINA_ATUALIZACAO_NUVEM_RUNTIME.md](/Users/piraginejr/Documents/New project/Teste/Power Church/deploy/ROTINA_ATUALIZACAO_NUVEM_RUNTIME.md)
+- [CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md](/Users/piraginejr/Documents/New project/Teste/Power Church/deploy/CHECKLIST_ATUALIZACAO_CLOUD_RELEASE.md)
+- [deploy_cloud_release.sh](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/deploy_cloud_release.sh)
+- [rollback_cloud_release.sh](/Users/piraginejr/Documents/New project/Teste/Power Church/scripts/rollback_cloud_release.sh)

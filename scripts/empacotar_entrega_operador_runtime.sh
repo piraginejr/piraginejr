@@ -51,11 +51,14 @@ copy_file "$PROJECT_DIR/.dockerignore" "$PACKAGE_DIR/.dockerignore"
 copy_tree "$PROJECT_DIR/deploy" "$PACKAGE_DIR/deploy"
 copy_tree "$PROJECT_DIR/power_church_core" "$PACKAGE_DIR/power_church_core"
 copy_tree "$PROJECT_DIR/power_church_django" "$PACKAGE_DIR/power_church_django"
+copy_tree "$PROJECT_DIR/scripts" "$PACKAGE_DIR/scripts"
 
 cat > "$PACKAGE_DIR/README_OPERADOR_RUNTIME.md" <<'EOF'
 # Pacote Do Runtime Power Church
 
 Este pacote contem o codigo minimo para buildar e subir o container Django do runtime PostgreSQL.
+
+Ele tambem inclui `scripts/` porque parte do runtime Django ainda importa utilitarios desse diretorio, especialmente no fluxo de importacao de pessoas.
 
 ## O Que Ja Deve Existir No Ambiente Do Operador
 
@@ -94,6 +97,7 @@ docker compose --env-file "$POWER_CHURCH_RUNTIME_DIR/env/runtime.env" -f docker-
 ## Observacoes
 
 - o pacote nao inclui `data/`, `postgres/`, `.env` nem volumes operacionais;
+- o pacote inclui `scripts/` porque o container Django faz `COPY . /app` e algumas rotinas importam modulos desse diretorio;
 - o entrypoint roda `migrate` e `collectstatic` antes de subir o Gunicorn;
 - o Postgres precisa estar acessivel conforme o `runtime.env`.
 EOF

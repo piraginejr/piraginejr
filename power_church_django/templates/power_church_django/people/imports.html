@@ -98,13 +98,21 @@
           <tbody>
             {% for lot in dashboard.lots %}
               <tr>
-                <td><strong>{{ lot.type_label }}</strong><div class="muted small">Lote #{{ lot.id }} · {{ lot.arquivo_nome }}</div></td>
+                <td>
+                  <a href="{{ lot.detail_url }}"><strong>{{ lot.type_label }}</strong></a>
+                  <div class="muted small">Lote #{{ lot.id }} · {{ lot.arquivo_nome }}</div>
+                  <div class="small"><a href="{{ lot.detail_url }}">Abrir auditoria deste lote</a></div>
+                </td>
                 <td>{{ lot.criado_em }}</td>
                 <td class="num">{{ lot.total_linhas }}</td>
                 <td class="num">{{ lot.linhas_importadas }}</td>
                 <td class="num">{{ lot.linhas_ignoradas }}</td>
                 <td class="num">{{ lot.linhas_com_erro }}</td>
-                <td><span class="badge {% if lot.pendencias_abertas %}danger{% else %}ok{% endif %}">{{ lot.pendencias_abertas }}</span></td>
+                <td>
+                  <a href="{{ lot.detail_url }}">
+                    <span class="badge {% if lot.pendencias_abertas %}danger{% else %}ok{% endif %}">{{ lot.pendencias_abertas }}</span>
+                  </a>
+                </td>
                 <td><span class="badge {% if lot.pessoas_sem_nome %}danger{% else %}ok{% endif %}">{{ lot.pessoas_sem_nome }}</span></td>
                 <td><a class="button secondary" href="{{ lot.detail_url }}">Auditar lote</a></td>
               </tr>

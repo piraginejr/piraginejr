@@ -626,10 +626,68 @@ def people_import_dashboard_postgres(limit: int = 12) -> dict[str, Any]:
     }
 
 
-def get_people_import_lot_detail_postgres(lot_id: int, line_limit: int = 250) -> dict[str, Any] | None:
+def get_people_import_lot_detail_postgres(
+    lot_id: int,
+    line_limit: int = 250,
+    pending_issue: str = "",
+    pending_severity: str = "",
+    pending_status: str = "",
+) -> dict[str, Any] | None:
     lot = NativePeopleImportLot.objects.filter(legacy_id=int(lot_id or 0)).first()
     if lot is None:
         return None
+    pending_issue = normalize_query(pending_issue)
+    pending_severity = normalize_query(pending_severity)
+    pending_status = normalize_query(pending_status)
+    pending_qs = lot.pendings.order_by("resolved", "-severity", "line_number", "legacy_id")
+    all_pending_entries = list(pending_qs)
+    pending_issue_options = sorted({str(row.issue_type or "") for row in all_pending_entries if str(row.issue_type or "")})
+    pending_severity_options = sorted({str(row.severity or "") for row in all_pending_entries if str(row.severity or "")})
+    pending_summary_by_type = dict(
+        Counter(str(row.issue_type or "sem_tipo") for row in all_pending_entries)
+    )
+    if pending_issue:
+        pending_qs = pending_qs.filter(issue_type=pending_issue)
+    if pending_severity:
+        pending_qs = pending_qs.filter(severity=pending_severity)
+    if pending_status == "abertas":
+        pending_qs = pending_qs.filter(resolved=False)
+    elif pending_status == "resolvidas":
+        pending_qs = pending_qs.filter(resolved=True)
+    pending_entries = list(pending_qs[:200])
+    pending_line_numbers = [int(row.line_number or 0) for row in pending_entries if int(row.line_number or 0) > 0]
+    pending_lines = list(
+        lot.lines.filter(line_number__in=pending_line_numbers).order_by("line_number", "legacy_id")
+    )
+    pending_line_map = {int(row.line_number or 0): row for row in pending_lines}
+    pending_name_lists_by_type: dict[str, dict[str, Any]] = {}
+    for row in pending_entries:
+        line_row = pending_line_map.get(int(row.line_number or 0))
+        person_id = int(line_row.person_legacy_id or 0) if line_row else 0
+        person_name = (line_row.person_name if line_row else "") or row.person_name or (line_row.original_name if line_row else "") or "Sem ficha vinculada"
+        issue_type = str(row.issue_type or "sem_tipo")
+        bucket = pending_name_lists_by_type.setdefault(
+            issue_type,
+            {"tipo": issue_type, "nomes": [], "person_ids": set()},
+        )
+        if person_id:
+            if person_id in bucket["person_ids"]:
+                continue
+            bucket["person_ids"].add(person_id)
+        if person_name not in bucket["nomes"]:
+            bucket["nomes"].append(person_name)
+    pending_name_lists = []
+    for item in pending_name_lists_by_type.values():
+        names = list(item["nomes"])
+        pending_name_lists.append(
+            {
+                "tipo": item["tipo"],
+                "total": len(names),
+                "nomes": names,
+                "texto": "\n".join(names),
+            }
+        )
+    pending_name_lists.sort(key=lambda item: (0 if item["tipo"] == pending_issue else 1, item["tipo"]))
     line_rows = list(lot.lines.order_by("line_number", "legacy_id")[:line_limit])
     return {
         "lot": {
@@ -658,6 +716,16 @@ def get_people_import_lot_detail_postgres(lot_id: int, line_limit: int = 250) ->
         },
         "status_rows": list(lot.status_rows_json or []),
         "mapping_rows": list(lot.mapping_rows_json or []),
+        "pending_filters": {
+            "issue": pending_issue,
+            "severity": pending_severity,
+            "status": pending_status or "abertas",
+            "issue_options": pending_issue_options,
+            "severity_options": pending_severity_options,
+            "summary_by_type": pending_summary_by_type,
+            "shown": len(pending_entries),
+            "total": len(all_pending_entries),
+        },
         "pending_rows": [
             {
                 "id": int(row.legacy_id or 0),
@@ -669,9 +737,40 @@ def get_people_import_lot_detail_postgres(lot_id: int, line_limit: int = 250) ->
                 "resolvido": bool(row.resolved),
                 "status": "Resolvida" if row.resolved else "Aberta",
                 "pessoa_nome": row.person_name or "",
+                "person_id": (
+                    int(pending_line_map.get(int(row.line_number or 0)).person_legacy_id or 0)
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else ""
+                ),
+                "person_name": (
+                    pending_line_map.get(int(row.line_number or 0)).person_name or row.person_name or "Sem ficha vinculada"
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else (row.person_name or "Sem ficha vinculada")
+                ),
+                "person_cpf": (
+                    pending_line_map.get(int(row.line_number or 0)).person_cpf or ""
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else ""
+                ),
+                "person_status": (
+                    pending_line_map.get(int(row.line_number or 0)).person_status or ""
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else ""
+                ),
+                "person_active": bool(
+                    pending_line_map.get(int(row.line_number or 0)).person_active
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else False
+                ),
+                "original_name": (
+                    pending_line_map.get(int(row.line_number or 0)).original_name or ""
+                    if pending_line_map.get(int(row.line_number or 0))
+                    else ""
+                ),
             }
-            for row in lot.pendings.order_by("resolved", "-severity", "line_number", "legacy_id")[:100]
+            for row in pending_entries
         ],
+        "pending_name_lists": pending_name_lists,
         "line_rows": [
             {
                 "id": int(row.legacy_id or 0),

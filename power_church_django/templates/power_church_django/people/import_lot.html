@@ -68,25 +68,110 @@
     <section class="panel">
       <div class="section-head">
         <h2>Pendencias do lote</h2>
-        <span class="badge {% if detail.pending_rows %}danger{% else %}ok{% endif %}">{{ detail.pending_rows|length }}</span>
+        <span class="badge {% if detail.pending_rows %}danger{% else %}ok{% endif %}">{{ detail.pending_filters.shown }}/{{ detail.pending_filters.total }}</span>
       </div>
+      <form class="filters no-print" method="get" style="margin-bottom:1rem; display:grid; gap:.75rem; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); align-items:end;">
+        <label>
+          <span class="label">Tipo de pendencia</span>
+          <select name="tipo">
+            <option value="">Todos</option>
+            {% for issue in detail.pending_filters.issue_options %}
+              <option value="{{ issue }}" {% if detail.pending_filters.issue == issue %}selected{% endif %}>{{ issue }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span class="label">Severidade</span>
+          <select name="severidade">
+            <option value="">Todas</option>
+            {% for severity in detail.pending_filters.severity_options %}
+              <option value="{{ severity }}" {% if detail.pending_filters.severity == severity %}selected{% endif %}>{{ severity }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span class="label">Status</span>
+          <select name="pendencia_status">
+            <option value="abertas" {% if detail.pending_filters.status == "abertas" %}selected{% endif %}>Abertas</option>
+            <option value="resolvidas" {% if detail.pending_filters.status == "resolvidas" %}selected{% endif %}>Resolvidas</option>
+            <option value="todas" {% if detail.pending_filters.status == "todas" %}selected{% endif %}>Todas</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="submit" class="button">Filtrar</button>
+          <a class="button secondary" href="/people/imports/{{ detail.lot.id }}/">Limpar filtro</a>
+        </div>
+      </form>
+      {% if detail.pending_filters.summary_by_type %}
+        <div class="chips no-print" style="display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem;">
+          {% for issue_type, total in detail.pending_filters.summary_by_type.items %}
+            <a class="badge {% if detail.pending_filters.issue == issue_type %}warn{% endif %}" href="/people/imports/{{ detail.lot.id }}/?tipo={{ issue_type|urlencode }}">{{ issue_type }} · {{ total }}</a>
+          {% endfor %}
+        </div>
+      {% endif %}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Linha</th><th>Severidade</th><th>Tipo</th><th>Descricao</th><th>Status</th></tr></thead>
+          <thead><tr><th>Linha</th><th>Pessoa / ficha</th><th>Severidade</th><th>Tipo</th><th>Descricao</th><th>Status</th></tr></thead>
           <tbody>
             {% for row in detail.pending_rows %}
               <tr>
                 <td>{{ row.linha }}</td>
+                <td>
+                  {% if row.person_id and row.person_active %}
+                    <a href="/people/{{ row.person_id }}/"><strong>{{ row.person_name }}</strong></a>
+                    <div class="small"><a href="/people/{{ row.person_id }}/edit/">Abrir ficha para corrigir</a></div>
+                  {% elif row.person_id %}
+                    <a href="/people/{{ row.person_id }}/"><strong>{{ row.person_name }}</strong></a>
+                    <div class="small"><a href="/people/{{ row.person_id }}/edit/">Abrir ficha para corrigir</a></div>
+                  {% elif row.person_name %}
+                    <strong>{{ row.person_name }}</strong>
+                  {% elif row.original_name %}
+                    <strong>{{ row.original_name }}</strong>
+                  {% else %}
+                    <span class="muted">Sem ficha vinculada</span>
+                  {% endif %}
+                  {% if row.person_cpf or row.person_status %}
+                    <div class="muted small">CPF {{ row.person_cpf|default:"-" }} · {{ row.person_status|default:"sem status" }}</div>
+                  {% endif %}
+                </td>
                 <td><span class="badge {% if row.severidade == 'erro' %}danger{% elif row.severidade == 'aviso' %}warn{% else %}ok{% endif %}">{{ row.severidade }}</span></td>
                 <td>{{ row.tipo }}</td>
                 <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div></td>
                 <td><span class="badge {% if row.resolvido %}ok{% else %}danger{% endif %}">{{ row.status }}</span></td>
               </tr>
             {% empty %}
-              <tr><td colspan="5">Nenhuma pendencia registrada neste lote.</td></tr>
+              <tr><td colspan="6">Nenhuma pendencia registrada neste lote.</td></tr>
             {% endfor %}
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <section class="split">
+      <div class="panel">
+        <div class="section-head">
+          <h2>Listas por tipo de ajuste</h2>
+          <span class="badge">{{ detail.pending_name_lists|length }}</span>
+        </div>
+        {% for item in detail.pending_name_lists %}
+          <article style="margin-bottom:1rem;">
+            <div class="section-head">
+              <h3 style="margin:0;">{{ item.tipo }}</h3>
+              <span class="badge">{{ item.total }}</span>
+            </div>
+            <textarea readonly rows="{% if item.total > 12 %}12{% else %}{{ item.total|default:1 }}{% endif %}" style="width:100%; min-height:8rem;">{{ item.texto }}</textarea>
+          </article>
+        {% empty %}
+          <p class="muted">Nenhuma lista pronta para distribuicao.</p>
+        {% endfor %}
+      </div>
+      <div class="panel">
+        <div class="section-head">
+          <h2>Como distribuir</h2>
+        </div>
+        <p class="muted">Use o filtro por tipo para separar um bloco de revisao e copie a lista de nomes para cada operador trabalhar em paralelo.</p>
+        <p class="muted">As listas repetem apenas uma vez cada ficha vinculada, para evitar que dois operadores ajustem a mesma pessoa sem necessidade.</p>
+        <p class="muted">Quando a linha ainda nao tiver ficha vinculada, a lista usa o nome original vindo da planilha para facilitar a triagem.</p>
       </div>
     </section>
 

@@ -602,7 +602,12 @@ def imports(request: HttpRequest) -> HttpResponse:
 def import_lot(request: HttpRequest, lot_id: int) -> HttpResponse:
     context = {"title": "Auditoria da importacao de pessoas"}
     try:
-        context["detail"] = get_people_import_lot_detail_postgres(lot_id)
+        context["detail"] = get_people_import_lot_detail_postgres(
+            lot_id,
+            pending_issue=request.GET.get("tipo", ""),
+            pending_severity=request.GET.get("severidade", ""),
+            pending_status=request.GET.get("pendencia_status", "abertas"),
+        )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
     return render(request, "power_church_django/people/import_lot.html", context)

@@ -2,56 +2,56 @@
 
 ## Objetivo
 
-Padronizar a atualizacao do Power Church quando o runtime Docker/PostgreSQL **ja esta rodando na nuvem** e a implantacao depende de um terceiro.
+Padronizar a atualizacao do Power Church quando o runtime Docker/PostgreSQL **ja esta rodando na nuvem** e a implantacao depende de um terceiro ou de uma automacao do servidor.
 
 A meta desta rotina e:
 
 - evitar deploy por improviso;
 - deixar claro **o que mudou**;
 - garantir **backup antes da troca**;
-- aplicar a atualizacao com **rebuild controlado**;
 - validar o ambiente logo depois;
-- manter um **caminho de rollback** simples.
+- manter um **caminho de rollback** simples;
+- trabalhar no ritmo real do servidor, que agora acompanha `main`.
 
-## Regra Operacional
+## Regra Operacional Atual
 
-Nao usar `git pull` direto em horarios aleatorios nem deploy automatico de toda alteracao local.
+O metodo oficial mudou.
 
-O modelo recomendado passa a ser:
+Hoje, o servidor possui um mecanismo interno mais pratico, que:
 
-- `main` para desenvolvimento e integracao;
-- `cloud-release` para o que esta aprovado para a nuvem.
+- acompanha a branch `main`;
+- sincroniza o codigo em janela fixa de **30 em 30 minutos**;
+- reduz dependencia de acao manual a cada pequena correcao.
 
-O fluxo recomendado e:
+Por isso, o modelo operacional recomendado passa a ser:
 
-1. consolidar os commits localmente em `main`;
+1. desenvolver localmente;
 2. validar no runtime Docker local;
-3. promover para `cloud-release` apenas o que esta homologado;
-4. dar `push` de `cloud-release`;
-5. o administrador da nuvem roda a rotina padrao de backup, deploy e smoke test;
+3. dar `push` para `main`;
+4. aguardar a janela automatica do servidor;
+5. validar o ambiente depois da sincronizacao;
 6. registrar qual `commit SHA` ficou ativo na nuvem.
 
-## Estado Atual Da Primeira Cloud Release
+Regra pratica:
 
-Para a primeira atualizacao unificada, a branch `cloud-release` foi preparada com:
+- `main` virou a trilha oficial de desenvolvimento **e** entrega;
+- nada incompleto deve ser enviado para `main`;
+- `cloud-release` deixa de ser a trilha padrao e fica apenas como contingencia ou historico.
+
+## Historico Da Primeira Cloud Release
+
+Antes da adocao do sincronismo automatico por `main`, a primeira entrega unificada para a nuvem foi preparada em `cloud-release` com:
 
 - `89bd22b` `Add envelope in-progress locking`
 - `29a2dc3` `Fix single envelope launch without split`
 - `19cc163` `Add cloud-release deployment workflow`
 - `6b6cab6` `Add envelope split coverage tests`
 
-Classificacao pratica:
+Resumo historico:
 
-- `89bd22b`: **impacta runtime**. Altera comportamento de envelopes multioperador.
-- `29a2dc3`: **impacta runtime**. Corrige salvamento de envelope simples sem rateio.
-- `19cc163`: **impacta operacao de deploy**. Padroniza backup, deploy, rollback e checklist.
-- `6b6cab6`: **nao muda comportamento de producao**, mas permite rodar a cobertura de rateio diretamente no ambiente da nuvem.
-
-Resumo:
-
-- esta primeira `cloud-release` leva o que o cliente e o operador precisam sentir na nuvem;
-- a cobertura de testes de rateio vai junto para validar o ambiente real;
-- alguns arquivos de teste podem acompanhar commits mistos de runtime, mas nao alteram o comportamento de producao.
+- essa primeira `cloud-release` levou o que o cliente e o operador precisavam sentir na nuvem;
+- a cobertura de testes de rateio foi junto para validar o ambiente real;
+- alguns arquivos de teste acompanharam commits mistos de runtime, mas sem alterar comportamento de producao.
 
 ## Tipos De Mudanca
 
@@ -68,7 +68,8 @@ Exemplos:
 Efeito:
 
 - exige `rebuild` da imagem Django;
-- normalmente exige `docker compose up -d --build`.
+- normalmente exige `docker compose up -d --build` quando a sincronizacao manual for necessaria;
+- por isso, nada desse tipo deve subir para `main` sem validacao local.
 
 ### 2. Mudanca De Schema
 
@@ -85,7 +86,7 @@ Efeito:
 
 Observacao:
 
-- hoje o entrypoint do runtime ja roda `migrate` automaticamente.
+- hoje o entrypoint do runtime ja roda `migrate` automaticamente;
 - mesmo assim, em nuvem, a rotina deve tratar isso como atualizacao sensivel.
 
 ### 3. Mudanca So De Teste Ou Documentacao
@@ -98,7 +99,7 @@ Exemplos:
 Efeito:
 
 - nao muda comportamento de producao por si so;
-- pode ser implantada junto com outras mudancas;
+- pode acompanhar outras mudancas;
 - isoladamente nao precisa janela urgente.
 
 ### 4. Mudanca Em Scripts Operacionais
@@ -113,51 +114,34 @@ Efeito:
 
 - pode nao alterar a tela do usuario;
 - mas altera a rotina do administrador;
-- como o container faz `COPY . /app`, esses arquivos devem entrar no pacote da nuvem.
-
-Importante:
-
-- o app ainda importa `scripts/importar_membros_xlsx.py`;
-- portanto, o pacote de atualizacao precisa incluir `scripts/`.
+- deve ser documentada com cuidado porque afeta suporte, backup, restore e rollback.
 
 ## Metodologia Recomendada
 
 ### Estrategia De Liberacao
 
-Usar dois niveis de controle:
+Usar um nivel principal de liberacao:
 
-- `main`: integracao local/equipe
-- `cloud-release`: liberacao homologada para o ambiente do cliente
+- `main`: integracao, homologacao e entrega operacional continua
 
 A liberacao deve sempre sair com:
 
 - lista de commits;
 - SHA final esperado;
-- branch de liberacao atualizada;
 - checklist de execucao;
 - checklist de rollback.
 
-### Como Promover Para `cloud-release`
+### Quando Usar `cloud-release`
 
-Se a nuvem deve acompanhar apenas o que foi homologado, a equipe local nao deve apontar o servidor para `main`.
+Na fase atual, `cloud-release` nao e mais a trilha operacional padrao.
 
-O recomendado e:
+Ela so deve ser usada se houver um caso excepcional, por exemplo:
 
-```bash
-git checkout cloud-release
-git merge --ff-only main
-git push origin cloud-release
-```
+- necessidade de segurar um conjunto especial de commits fora da esteira normal;
+- operacao de contingencia com terceiro;
+- experimento de rollout separado da linha principal.
 
-Se a liberacao precisar ser parcial:
-
-```bash
-git checkout cloud-release
-git cherry-pick <sha1> <sha2> ...
-git push origin cloud-release
-```
-
-Depois disso, o servidor so precisa puxar `cloud-release`.
+Fora desses casos, a nuvem deve acompanhar `main`.
 
 ## Rotina Local Antes De Enviar Para A Nuvem
 
@@ -182,9 +166,22 @@ docker compose --env-file "$HOME/power_church_postgres_runtime/env/runtime.env" 
 
 Se a entrega tocar outras areas, rodar tambem os verificadores maiores do projeto.
 
-### 3. Gerar a entrega rastreavel
+### 3. Publicar em `main`
 
-Mesmo quando a nuvem for atualizar por `git pull`, ainda vale gerar um pacote de referencia com changelog e lista de arquivos:
+Depois da validacao local:
+
+```bash
+git push origin main
+```
+
+Em seguida:
+
+- aguardar a janela automatica de sincronizacao do servidor;
+- validar se o SHA da nuvem acompanhou a `main`.
+
+### 4. Gerar a entrega rastreavel
+
+Mesmo com atualizacao automatica, ainda vale gerar um pacote de referencia com changelog e lista de arquivos:
 
 ```bash
 ./scripts/preparar_entrega_atualizacao_nuvem.sh origin/main HEAD
@@ -200,7 +197,7 @@ Esse pacote serve para:
 
 ### 1. Registrar a versao atual
 
-Antes de atualizar, registrar:
+Antes de validar uma sincronizacao, registrar:
 
 - data e hora;
 - SHA atualmente em producao;
@@ -222,28 +219,22 @@ Se nao tiver, o administrador deve executar o equivalente operacional:
 
 ### 3. Atualizar o codigo no servidor
 
-Na nuvem, a rotina recomendada passa a ser um unico comando de deploy controlado:
+O fluxo normal agora e passivo:
+
+- o servidor acompanha `main`;
+- a atualizacao ocorre na janela interna de 30 minutos;
+- o operador so precisa monitorar e validar.
+
+Se houver necessidade de intervencao manual extraordinaria, a contingencia recomendada e:
 
 ```bash
-./scripts/deploy_cloud_release.sh
+git fetch origin main
+git checkout main
+git pull --rebase origin main
+docker compose --env-file "$POWER_CHURCH_RUNTIME_DIR/env/runtime.env" -f docker-compose.runtime.yml up -d --build
 ```
 
-Esse script:
-
-- valida pre-requisitos;
-- executa backup;
-- busca a branch `cloud-release`;
-- posiciona o codigo no SHA alvo;
-- rebuilda o container Django;
-- sobe o runtime;
-- espera login e healthcheck responderem;
-- grava um relatorio e um estado de deploy em `logs/cloud_release/`.
-
-Se o administrador precisar forcar uma ref especifica:
-
-```bash
-./scripts/deploy_cloud_release.sh --ref origin/cloud-release
-```
+Os scripts `deploy_cloud_release.sh` e `rollback_cloud_release.sh` continuam uteis como referencia de operacao controlada, mas nao sao mais o caminho padrao do servidor.
 
 ### 4. Verificacao tecnica minima
 
@@ -264,9 +255,9 @@ Minimo recomendado:
 - autenticar;
 - abrir dashboard;
 - abrir tela de envelopes;
-- testar o fluxo afetado pela release.
+- testar o fluxo afetado pela mudanca.
 
-Para a fila atual de commits, o smoke test funcional obrigatorio e:
+Para a fila atual de commits, o smoke test funcional obrigatorio continua sendo:
 
 - abrir lote com envelopes pendentes;
 - pedir proximo envelope em dois navegadores/operadores diferentes;
@@ -281,52 +272,44 @@ Guardar:
 - SHA implantado;
 - horario da implantacao;
 - backup relacionado;
-- resultado do smoke test.
+- resultado do smoke test;
+- se a entrada veio por janela automatica ou por contingencia manual.
 
 ## Rollback
 
 Se a atualizacao falhar:
 
-1. rodar o rollback do `cloud-release`;
-2. rebuildar e subir a versao anterior;
-3. se houve problema de dados, restaurar o backup correspondente;
-4. registrar que o rollback foi executado e em qual SHA.
+1. identificar o SHA ou commit problematico em `main`;
+2. decidir entre `git revert` do problema ou reposicionamento manual emergencial;
+3. rebuildar e subir a versao anterior, se necessario;
+4. se houve problema de dados, restaurar o backup correspondente;
+5. registrar que o rollback foi executado e em qual SHA.
 
-Comando padrao:
-
-```bash
-./scripts/rollback_cloud_release.sh
-```
-
-Se o administrador quiser voltar para um SHA especifico:
+Padrao preferencial:
 
 ```bash
-./scripts/rollback_cloud_release.sh --sha <sha_anterior>
+git revert <sha_problematico>
+git push origin main
 ```
 
-Esse script:
+Regra pratica:
 
-- executa backup antes do rollback;
-- reposiciona a branch `cloud-release` no SHA escolhido;
-- rebuilda o container Django;
-- sobe o runtime;
-- revalida login e healthcheck;
-- grava relatorio de rollback em `logs/cloud_release/`.
+- preferir `revert` em `main` quando houver tempo e rastreabilidade;
+- usar rollback manual de infraestrutura apenas quando a urgencia operacional exigir.
 
 ## Cadencia Recomendada
 
-Como a implantacao depende de terceiro, o melhor modelo nao e deploy a cada commit.
+Como o servidor agora sincroniza `main` automaticamente a cada 30 minutos, a cadencia deixa de ser manual.
 
-Cadencia sugerida:
+O cuidado passa a ser outro:
 
-- **janela fixa 1 vez por dia** em fase intensa; ou
-- **2 a 3 vezes por semana** em fase estavel.
-
-Sempre em lote homologado, nunca por impulso.
+- nao empurrar para `main` algo ainda incompleto;
+- tratar cada `push` para `main` como candidato real de entrada na nuvem;
+- usar verificacao local antes de cada envio.
 
 ## Criterio Para Mandar Atualizacao
 
-Mandar para a nuvem quando houver pelo menos um destes:
+Mandar para `main` quando houver pelo menos um destes:
 
 - correcao de bug que afeta operador;
 - mudanca de regra operacional;
@@ -334,22 +317,20 @@ Mandar para a nuvem quando houver pelo menos um destes:
 - mudanca de seguranca ou backup;
 - grupo coerente de pequenas melhorias ja testadas.
 
-Nao vale a pena acionar o administrador apenas para:
+Nao vale a pena mandar para `main`:
 
-- documentacao;
-- testes isolados;
-- refatoracao sem efeito real na nuvem.
+- experimento incompleto;
+- refatoracao nao validada;
+- trabalho ainda em aberto que o servidor nao deveria puxar.
 
 ## Resumo Da Metodologia
 
 O fluxo funcional fica:
 
 1. desenvolver e validar localmente;
-2. promover apenas o aprovado para `cloud-release`;
-3. dar `push` de `cloud-release`;
-4. opcionalmente gerar pacote de referencia com changelog;
-5. fazer backup na nuvem;
-6. rodar `./scripts/deploy_cloud_release.sh`;
-7. validar;
-8. registrar SHA ativo;
-9. manter rollback pronto com `./scripts/rollback_cloud_release.sh`.
+2. dar `push` para `main`;
+3. opcionalmente gerar pacote de referencia com changelog;
+4. aguardar a janela automatica do servidor;
+5. validar;
+6. registrar SHA ativo;
+7. manter rollback pronto, preferencialmente por `revert` em `main`.

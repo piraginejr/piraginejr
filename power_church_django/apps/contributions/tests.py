@@ -10,6 +10,7 @@ from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
     ENVELOPE_IN_PROGRESS_TIMEOUT,
     ENVELOPE_PENDING_STATUS,
+    _native_envelope_line_payloads,
     get_next_pending_envelope_id_postgres,
     ignore_pending_envelope_postgres,
     launch_pending_envelope_postgres,
@@ -108,3 +109,36 @@ class EnvelopeDigitizationLockTests(TestCase):
             is_active=True,
             updated_by=updated_by,
         )
+
+
+class EnvelopeLinePayloadTests(TestCase):
+    def test_single_main_contribution_does_not_require_blank_rateio_lines(self) -> None:
+        payload = {
+            "tipo_contribuicao_id_padrao": "7",
+            "campanha_id_padrao": "",
+            "line_count": "10",
+            "linha_participante_ref_1": "",
+            "linha_documento_1": "",
+            "linha_tipo_contribuicao_id_1": "",
+            "linha_campanha_id_1": "",
+            "linha_valor_1": "",
+            "linha_observacoes_1": "",
+        }
+        main_identity = {
+            "person_legacy_id": 0,
+            "contributor_legacy_id": 0,
+            "native_aux_contributor_id": 0,
+            "contributor_source": "",
+            "contributor_name": "Membro Teste",
+            "contributor_document": "",
+            "contributor_type": "",
+            "stored_name": "Membro Teste",
+        }
+
+        rows = _native_envelope_line_payloads(payload, 1, 100.0, main_identity)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["index"], 1)
+        self.assertEqual(rows[0]["type_id"], 7)
+        self.assertEqual(rows[0]["value"], 100.0)
+        self.assertEqual(rows[0]["contributor_name"], "Membro Teste")

@@ -55,6 +55,21 @@ Cada ADR deve conter:
 - consequencias;
 - impacto no projeto.
 
+### Constituicao do Projeto
+
+Todo projeto estruturado pelo AIEF deve possuir um documento de decisoes permanentes, chamado preferencialmente:
+
+```text
+CONSTITUICAO_DO_PROJETO.md
+```
+
+Esse documento registra regras aprovadas que nao devem ser rediscutidas a cada conversa.
+
+Ele e diferente dos ADRs:
+
+- ADR registra uma decisao especifica e seu contexto.
+- Constituicao registra regras permanentes de governanca do projeto.
+
 ### Backlog
 
 Ideias e funcionalidades devem ser organizadas por valor, nao apenas por ordem de chegada.
@@ -116,7 +131,73 @@ Toda entrega deve passar por revisao:
 
 Tudo que virar regra, decisao, padrao, taxonomia, estrutura ou metodologia precisa ser registrado no Git.
 
-## 4. Estrutura padrao de projeto
+## 4. Governanca de Decisoes
+
+Esta secao existe para evitar retrabalho, repeticao e reabertura indevida de decisoes ja aprovadas.
+
+### 4.1 Estados de decisao
+
+Toda decisao relevante deve ser tratada com um destes estados:
+
+- Em discussao: ainda esta sendo analisada.
+- Proposta: ha uma recomendacao, mas ainda falta aprovacao.
+- Aprovada: foi aceita pelo Product Owner e passa a orientar o projeto.
+- Revogada: deixou de valer por decisao explicita posterior.
+
+### 4.2 Regra de nao reabrir decisoes aprovadas
+
+Uma decisao marcada como Aprovada nao deve voltar para a fase de discussao, salvo quando o Product Owner pedir explicitamente revisao, revogacao ou substituicao.
+
+Resposta padrao diante de decisao ja aprovada:
+
+```text
+Esta decisao ja esta aprovada. Vou seguir para implementacao/evolucao sem reabrir a discussao.
+```
+
+### 4.3 Regra contra repeticao improdutiva
+
+O assistente nao deve reapresentar como nova proposta uma decisao ja validada.
+
+Quando uma ideia ja tiver sido aprovada, o comportamento correto e:
+
+1. reconhecer que ela ja esta aprovada;
+2. aplicar a decisao;
+3. implementar ou registrar a evolucao;
+4. propor apenas ajustes incrementais, claramente identificados como ajustes, nao como rediscussao da decisao original.
+
+### 4.4 Regra de revisao explicita
+
+Para revisar uma decisao aprovada, usar linguagem explicita, por exemplo:
+
+```text
+Revisar decisao aprovada: [nome da decisao]
+```
+
+ou
+
+```text
+Revogar/substituir a decisao: [nome da decisao]
+```
+
+Sem esse pedido, a decisao continua valendo.
+
+### 4.5 Obrigacao operacional do arquiteto
+
+Ao trabalhar em um projeto AIEF, o arquiteto deve consultar mentalmente os documentos de governanca antes de propor mudancas estruturais.
+
+Prioridade:
+
+1. Constituicao do Projeto.
+2. ADRs aprovados.
+3. Roadmap.
+4. Backlog.
+5. Ideias futuras.
+
+### 4.6 Principio de continuidade
+
+> Decisoes aprovadas sao trilhos de continuidade, nao temas recorrentes de debate.
+
+## 5. Estrutura padrao de projeto
 
 Todo projeto que adotar o AIEF deve conter, no minimo:
 
@@ -125,6 +206,7 @@ docs/
   00-VISAO.md
   01-ROADMAP.md
   02-ARQUITETURA.md
+  CONSTITUICAO_DO_PROJETO.md
   adr/
     ADR-000-TEMPLATE.md
   preview/
@@ -150,7 +232,7 @@ docs/
   scripts/
 ```
 
-## 5. Adaptacao por tipo de projeto
+## 6. Adaptacao por tipo de projeto
 
 ### Software
 
@@ -194,7 +276,7 @@ Usar:
 - restricoes;
 - versoes revisadas.
 
-## 6. Papeis padrao
+## 7. Papeis padrao
 
 ### Usuario / Product Owner
 
@@ -217,6 +299,13 @@ Define:
 - revisao;
 - documentacao.
 
+Tambem deve:
+
+- respeitar decisoes aprovadas;
+- evitar repeticao improdutiva;
+- nao reabrir decisoes sem pedido explicito;
+- transformar novas decisoes estruturais em registro permanente.
+
 ### Codex / Implementador
 
 Executa:
@@ -227,7 +316,7 @@ Executa:
 - commits;
 - validacoes tecnicas.
 
-## 7. Regra de replicacao
+## 8. Regra de replicacao
 
 Todo novo projeto deve iniciar com o processo de inicializacao do AIEF.
 
@@ -239,18 +328,20 @@ O objetivo e que cada projeto ja nasca com:
 - backlog;
 - ADRs;
 - preview;
-- revisao de sprint.
+- revisao de sprint;
+- constituicao do projeto.
 
-## 8. Regra de governanca
+## 9. Regra de governanca geral
 
 Quando uma nova decisao importante surgir, perguntar:
 
 1. Isso e regra geral do AIEF?
 2. Isso e regra apenas deste projeto?
 3. Isso deve virar ADR?
-4. Isso deve entrar no roadmap?
-5. Isso deve virar item de backlog?
+4. Isso deve entrar na Constituicao do Projeto?
+5. Isso deve entrar no roadmap?
+6. Isso deve virar item de backlog?
 
-## 9. Frase-guia
+## 10. Frase-guia
 
 > Projetos conduzidos por IA precisam de memoria permanente, arquitetura clara e validacao antes da execucao.

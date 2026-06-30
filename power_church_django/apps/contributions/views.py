@@ -117,7 +117,7 @@ def _envelope_hub() -> dict[str, object]:
     next_pending_item = next((item for item in items if item.get("launch_url")), None)
     latest_launched = next((item for item in items if item.get("edit_url")), None)
     recent_lot = lots[0] if lots else None
-    pending_total = sum(int(lot.get("pendentes") or 0) for lot in lots)
+    pending_total = sum(int(lot.get("pendentes") or 0) + int(lot.get("em_digitacao") or 0) for lot in lots)
     return {
         "total": int(envelopes.get("total") or 0),
         "total_value_fmt": str(envelopes.get("total_value_fmt") or ""),
@@ -585,9 +585,9 @@ def envelope_lot_detail(request: HttpRequest, lot_id: int) -> HttpResponse:
 
 
 def envelope_lot_next(request: HttpRequest, lot_id: int) -> HttpResponse:
-    envelope_id = get_next_pending_envelope_id_postgres(lot_id)
+    envelope_id = get_next_pending_envelope_id_postgres(lot_id, actor=_actor(request))
     if not envelope_id:
-        messages.info(request, "Nao ha envelopes pendentes neste lote.")
+        messages.info(request, "Nao ha envelopes disponiveis neste lote no momento.")
         return redirect(f"/contributions/envelopes/lots/{lot_id}/")
     return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
 
@@ -597,7 +597,7 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
         lot_id = int(request.POST.get("lote_id") or 0)
         try:
             result = launch_pending_envelope_postgres(envelope_id, request.POST, actor=_actor(request))
-            next_id = get_next_pending_envelope_id_postgres(int(result["lot_id"]))
+            next_id = get_next_pending_envelope_id_postgres(int(result["lot_id"]), actor=_actor(request))
             lot_id = int(result["lot_id"])
             messages.success(
                 request,
@@ -612,7 +612,11 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
             return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
 
     context = {"title": "Digitar envelope"}
-    context["form_data"] = pending_envelope_contribution_context_postgres(envelope_id)
+    try:
+        context["form_data"] = pending_envelope_contribution_context_postgres(envelope_id, actor=_actor(request))
+    except LegacyWriteError as exc:
+        messages.info(request, str(exc))
+        return redirect("/contributions/envelopes/")
     if not context.get("form_data") and not context.get("error"):
         raise Http404("Envelope pendente nao encontrado.")
     return render(request, "power_church_django/contributions/envelope_form.html", context)

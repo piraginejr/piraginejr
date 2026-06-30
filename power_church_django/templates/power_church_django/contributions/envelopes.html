@@ -55,7 +55,7 @@
             <span class="label">{{ lot.competencia }}</span>
             <h3>{{ lot.nome }}</h3>
             <p>{{ lot.total_envelopes }} envelope(s) · {{ lot.total_valor_fmt }}</p>
-            <p class="small muted">{{ lot.pendentes }} pendente(s) · {{ lot.lancados }} lancado(s) · {{ lot.ignorados }} ignorado(s) · {{ lot.duplicados }} duplicado(s)</p>
+            <p class="small muted">{{ lot.pendentes }} pendente(s) · {{ lot.em_digitacao }} em digitacao · {{ lot.lancados }} lancado(s) · {{ lot.ignorados }} ignorado(s) · {{ lot.duplicados }} duplicado(s)</p>
             {% if lot.caminho_pasta %}<p class="small muted">Pasta: {{ lot.caminho_pasta }}</p>{% endif %}
             <div class="actions">
               <a class="button secondary" href="{{ lot.detail_url }}">Abrir lote</a>

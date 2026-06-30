@@ -31,24 +31,29 @@ O fluxo recomendado e:
 5. o administrador da nuvem roda a rotina padrao de backup, deploy e smoke test;
 6. registrar qual `commit SHA` ficou ativo na nuvem.
 
-## Estado Atual Da Fila De Atualizacao
+## Estado Atual Da Primeira Cloud Release
 
-No momento, olhando de `origin/main` ate `HEAD`, os commits pendentes sao:
+Para a primeira atualizacao unificada, a branch `cloud-release` foi preparada com:
 
-- `7b4cca7` `Add envelope in-progress locking`
-- `b2bf2c3` `Fix single envelope launch without split`
-- `c3504b8` `Add envelope split coverage tests`
+- `89bd22b` `Add envelope in-progress locking`
+- `29a2dc3` `Fix single envelope launch without split`
+- `19cc163` `Add cloud-release deployment workflow`
 
 Classificacao pratica:
 
-- `7b4cca7`: **impacta runtime**. Altera comportamento de envelopes multioperador.
-- `b2bf2c3`: **impacta runtime**. Corrige salvamento de envelope simples sem rateio.
-- `c3504b8`: **nao altera comportamento de producao**. E cobertura de teste.
+- `89bd22b`: **impacta runtime**. Altera comportamento de envelopes multioperador.
+- `29a2dc3`: **impacta runtime**. Corrige salvamento de envelope simples sem rateio.
+- `19cc163`: **impacta operacao de deploy**. Padroniza backup, deploy, rollback e checklist.
+
+Fora desta primeira atualizacao:
+
+- `c3504b8` `Add envelope split coverage tests`
 
 Resumo:
 
-- para o cliente sentir a correcao, os commits `7b4cca7` e `b2bf2c3` precisam entrar na nuvem;
-- o commit `c3504b8` pode ir junto sem risco, mas sozinho nao justificaria deploy.
+- esta primeira `cloud-release` leva o que o cliente e o operador precisam sentir na nuvem;
+- a cobertura adicional de testes ficou em `main`, fora da primeira janela operacional;
+- alguns arquivos de teste podem acompanhar commits mistos de runtime, mas nao alteram o comportamento de producao.
 
 ## Tipos De Mudanca
 

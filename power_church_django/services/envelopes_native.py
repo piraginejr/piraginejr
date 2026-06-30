@@ -539,10 +539,12 @@ def _native_envelope_line_payloads(payload: Any, organization_id: int, expected_
         value_text = str(get(f"linha_valor_{index}", "") or "").strip()
         participant_ref = str(get(f"linha_participante_ref_{index}", "") or "").strip()
         document = str(get(f"linha_documento_{index}", "") or "").strip()
-        type_id = int(get(f"linha_tipo_contribuicao_id_{index}", 0) or 0) or default_type_id
-        campaign_id = int(get(f"linha_campanha_id_{index}", 0) or 0) or default_campaign_id
+        raw_type_id = int(get(f"linha_tipo_contribuicao_id_{index}", 0) or 0)
+        raw_campaign_id = int(get(f"linha_campanha_id_{index}", 0) or 0)
+        type_id = raw_type_id or default_type_id
+        campaign_id = raw_campaign_id or default_campaign_id
         notes = normalize_query(get(f"linha_observacoes_{index}", ""))
-        has_context = any([participant_ref, document, type_id, campaign_id, notes])
+        has_context = any([participant_ref, document, raw_type_id, raw_campaign_id, notes])
         if not value_text and not has_context:
             continue
         if not value_text:

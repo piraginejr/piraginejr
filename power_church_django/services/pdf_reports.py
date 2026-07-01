@@ -8,10 +8,12 @@ from power_church_core.formatting import br_date
 from power_church_core.normalization import normalize_query
 from power_church_django.services.branding import brand_logo_available, brand_logo_path
 
+PDF_TEXT_ENCODING = "cp1252"
+
 
 def _pdf_escape(value: object) -> str:
     text = str(value or "")
-    text = text.encode("latin-1", errors="replace").decode("latin-1")
+    text = text.encode(PDF_TEXT_ENCODING, errors="replace").decode(PDF_TEXT_ENCODING)
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
@@ -101,13 +103,13 @@ def _append_brand_logo(page_ops: list[str], x: int, y_top: int, max_width: int =
 
 
 def _build_pdf(pages: list[list[str]]) -> bytes:
-    page_payloads = ["\n".join(page_ops).encode("latin-1", errors="replace") for page_ops in pages]
+    page_payloads = ["\n".join(page_ops).encode(PDF_TEXT_ENCODING, errors="replace") for page_ops in pages]
     kids: list[str] = []
     objects: list[bytes] = [b""]
     objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
     objects.append(b"")
-    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
     brand_logo = _brand_logo_jpeg()
     brand_dimensions = _brand_logo_dimensions()
     brand_object_id: int | None = None

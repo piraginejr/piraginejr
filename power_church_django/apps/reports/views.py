@@ -38,7 +38,7 @@ def index(request: HttpRequest) -> HttpResponse:
         date_start=context["date_start"],
         date_end=context["date_end"],
     )
-    return render(request, "power_church_django/reports/index.html", context)
+    return render(request, "power_church_django/reports/index.html", context, content_type="text/html; charset=utf-8")
 
 
 def contribution_period_pdf_view(request: HttpRequest) -> HttpResponse:
@@ -80,7 +80,7 @@ def destinations(request: HttpRequest) -> HttpResponse:
         date_end=context["date_end"],
         destination=context["destination"],
     )
-    return render(request, "power_church_django/reports/destinations.html", context)
+    return render(request, "power_church_django/reports/destinations.html", context, content_type="text/html; charset=utf-8")
 
 
 def contribution_destinations_pdf_view(request: HttpRequest) -> HttpResponse:

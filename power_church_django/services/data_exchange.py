@@ -487,9 +487,17 @@ def dataset_download_response(dataset: Dataset, export_format: str, filename_pre
     format_class = EXPORT_FORMATS.get(export_format, EXPORT_FORMATS["xlsx"])
     exporter = format_class()
     payload = exporter.export_data(dataset)
+    content_type = exporter.get_content_type()
+    if export_format == "csv":
+        if isinstance(payload, bytes):
+            payload_text = payload.decode("utf-8", errors="replace")
+        else:
+            payload_text = str(payload)
+        payload = ("\ufeff" + payload_text).encode("utf-8")
+        content_type = "text/csv; charset=utf-8"
     extension = exporter.get_extension()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{filename_prefix}_{timestamp}.{extension}"
-    response = HttpResponse(payload, content_type=exporter.get_content_type())
+    response = HttpResponse(payload, content_type=content_type)
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response

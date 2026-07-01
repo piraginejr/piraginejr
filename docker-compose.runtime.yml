@@ -6,6 +6,10 @@ services:
     container_name: power-church-django-runtime
     env_file:
       - ${POWER_CHURCH_RUNTIME_DIR}/env/runtime.env
+    environment:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONIOENCODING: utf-8
     ports:
       - "8001:8000"
     depends_on:

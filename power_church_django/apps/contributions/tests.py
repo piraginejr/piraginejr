@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
 
 from power_church_django.apps.contributions.models import NativeEnvelope, NativeEnvelopeLot
-from power_church_django.apps.people.models import PersonSnapshot
+from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
+from power_church_django.services.contributions_native import person_statement_data_postgres
 from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
     ENVELOPE_IN_PROGRESS_TIMEOUT,
@@ -244,3 +246,48 @@ class EnvelopeLinePayloadTests(TestCase):
         self.assertEqual(rows[1]["type_id"], 9)
         self.assertEqual(rows[1]["campaign_id"], 3)
         self.assertEqual(rows[1]["value"], 40.0)
+
+
+class PersonStatementDataPostgresTests(TestCase):
+    def setUp(self) -> None:
+        self.person = PersonSnapshot.objects.create(
+            legacy_id=501,
+            organization_id=1,
+            name="Pessoa Extrato",
+            normalized_name="PESSOA EXTRATO",
+            social_name="",
+            cpf="12345678901",
+            primary_email="pessoa@example.com",
+            normalized_email="PESSOA@EXAMPLE.COM",
+            primary_phone="21999999999",
+            primary_whatsapp="21999999999",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        PersonContributionSnapshot.objects.create(
+            legacy_id=9001,
+            organization_id=1,
+            person=self.person,
+            contributor_legacy_id=0,
+            received_at=timezone.now().date(),
+            received_at_raw="2026-07-01",
+            competence="2026-07",
+            competence_order=202607,
+            amount=Decimal("123.45"),
+            operational_status="regular",
+            contribution_type_name="Dizimo",
+            receipt_method_name="Dinheiro",
+            source_name="manual",
+            is_active=True,
+        )
+
+    def test_statement_entries_fall_back_to_empty_observacoes_when_snapshot_has_no_notes(self) -> None:
+        statement = person_statement_data_postgres(self.person.legacy_id)
+
+        self.assertIsNotNone(statement)
+        entries = [entry for entry in statement["entries"] if entry["kind"] == "item"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["observacoes"], "")
+        self.assertEqual(entries[0]["tipo"], "Dizimo")

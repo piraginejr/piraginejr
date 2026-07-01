@@ -1400,7 +1400,7 @@ def person_statement_data_postgres(
                 "competencia": row_competence,
                 "tipo": row.contribution_type_name or "",
                 "forma": row.receipt_method_name or "",
-                "observacoes": row.notes or "",
+                "observacoes": getattr(row, "notes", "") or "",
                 "valor_fmt": br_money(value),
                 "detail_url": f"/contributions/{int(row.legacy_id or 0)}/",
             }

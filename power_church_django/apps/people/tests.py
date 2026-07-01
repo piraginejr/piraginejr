@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.contrib.auth.models import Group
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase, override_settings
 
@@ -7,6 +8,7 @@ from power_church_core.normalization import normalize_query
 from django.urls import reverse
 
 from power_church_django.apps.people.models import NativePeopleImportLot, NativePeopleImportPending, PersonSnapshot
+from power_church_django.services.access_control import ensure_access_control
 from power_church_django.services.legacy import list_people
 
 
@@ -63,7 +65,9 @@ class PeopleSnapshotEncodingTests(TestCase):
 @override_settings(ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"])
 class PeopleImportLotPrintTests(TestCase):
     def test_import_lot_print_mode_renders_only_filtered_pendencies(self) -> None:
+        ensure_access_control()
         user = get_user_model().objects.create_user(username="operador_teste", password="senha123")
+        user.groups.add(Group.objects.get(name="Consulta"))
         self.client.force_login(user)
         lot = NativePeopleImportLot.objects.create(
             legacy_id=1,

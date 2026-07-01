@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import render
 
+from power_church_django.services.access_control import module_permission_required
 from power_church_django.services.pdf_reports import (
     contribution_destination_pdf,
     contribution_destination_pdf_filename,
@@ -17,6 +18,7 @@ from power_church_django.services.reports_native import (
 )
 
 
+@module_permission_required("view_reports")
 def index(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Relatorios",
@@ -41,6 +43,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/reports/index.html", context, content_type="text/html; charset=utf-8")
 
 
+@module_permission_required("view_reports")
 def contribution_period_pdf_view(request: HttpRequest) -> HttpResponse:
     report = contribution_report_postgres(
         competencia=request.GET.get("competencia", ""),
@@ -56,6 +59,7 @@ def contribution_period_pdf_view(request: HttpRequest) -> HttpResponse:
     return response
 
 
+@module_permission_required("view_reports")
 def destinations(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Relatorios por destino",
@@ -83,6 +87,7 @@ def destinations(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/reports/destinations.html", context, content_type="text/html; charset=utf-8")
 
 
+@module_permission_required("view_reports")
 def contribution_destinations_pdf_view(request: HttpRequest) -> HttpResponse:
     report = contribution_destination_report_postgres(
         competencia=request.GET.get("competencia", ""),

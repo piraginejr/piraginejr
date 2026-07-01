@@ -3,17 +3,22 @@ from __future__ import annotations
 import codecs
 from unittest.mock import patch
 
-from django.test import RequestFactory, SimpleTestCase
+from django.contrib.auth.models import Group, User
+from django.test import RequestFactory, TestCase
 from tablib import Dataset
 
 from power_church_django.apps.reports import views
+from power_church_django.services.access_control import ensure_access_control
 from power_church_django.services.data_exchange import dataset_download_response
 from power_church_django.services.pdf_reports import contribution_period_pdf
 
 
-class ReportEncodingTests(SimpleTestCase):
+class ReportEncodingTests(TestCase):
     def setUp(self) -> None:
         self.factory = RequestFactory()
+        ensure_access_control()
+        self.user = User.objects.create_user(username="relatorios", password="teste12345", is_active=True)
+        self.user.groups.add(Group.objects.get(name="Consulta"))
 
     def test_csv_download_uses_utf8_bom(self) -> None:
         dataset = Dataset(title="Pessoas")
@@ -84,6 +89,7 @@ class ReportEncodingTests(SimpleTestCase):
         }
 
         request = self.factory.get("/reports/")
+        request.user = self.user
         response = views.index(request)
 
         self.assertEqual(response["Content-Type"], "text/html; charset=utf-8")

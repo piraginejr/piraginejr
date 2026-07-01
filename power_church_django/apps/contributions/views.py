@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 from power_church_django.apps.contributions.models import ReceiptDispatch
 from power_church_core.normalization import normalize_query
+from power_church_django.services.access_control import module_permission_required
 from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.contributions_native import (
@@ -463,6 +464,7 @@ def _statement_message_fields(payload: object) -> dict[str, str]:
     }
 
 
+@module_permission_required("view_contributions")
 def index(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Contribuicoes",
@@ -479,6 +481,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/list.html", context)
 
 
+@module_permission_required("manage_contributions")
 def new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         person_id = request.POST.get("pessoa_id", "")
@@ -495,6 +498,7 @@ def new(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/form.html", context)
 
 
+@module_permission_required("manage_contributions")
 def manual_batch(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -509,6 +513,7 @@ def manual_batch(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/manual_batch.html", context)
 
 
+@module_permission_required("view_contributions")
 def envelopes(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Envelopes de contribuicao",
@@ -523,6 +528,7 @@ def envelopes(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelopes.html", context)
 
 
+@module_permission_required("manage_contributions")
 def envelope_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -549,6 +555,7 @@ def envelope_new(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_form.html", context)
 
 
+@module_permission_required("manage_contributions")
 def envelope_lot_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -576,6 +583,7 @@ def envelope_lot_new(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_lot_form.html", context)
 
 
+@module_permission_required("view_contributions")
 def envelope_lot_detail(request: HttpRequest, lot_id: int) -> HttpResponse:
     context = {"title": "Lote de envelopes"}
     context["lot"] = get_envelope_lot_detail_postgres(lot_id)
@@ -584,6 +592,7 @@ def envelope_lot_detail(request: HttpRequest, lot_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_lot_detail.html", context)
 
 
+@module_permission_required("manage_contributions")
 def envelope_lot_next(request: HttpRequest, lot_id: int) -> HttpResponse:
     envelope_id = get_next_pending_envelope_id_postgres(lot_id, actor=_actor(request))
     if not envelope_id:
@@ -592,6 +601,7 @@ def envelope_lot_next(request: HttpRequest, lot_id: int) -> HttpResponse:
     return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
 
 
+@module_permission_required("manage_contributions")
 def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if request.method == "POST":
         lot_id = int(request.POST.get("lote_id") or 0)
@@ -622,6 +632,7 @@ def envelope_launch(request: HttpRequest, envelope_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_form.html", context)
 
 
+@module_permission_required("manage_contributions")
 def envelope_edit(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -643,6 +654,7 @@ def envelope_edit(request: HttpRequest, envelope_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_form.html", context)
 
 
+@module_permission_required("manage_contributions")
 def envelope_ignore(request: HttpRequest, envelope_id: int) -> HttpResponse:
     if request.method != "POST":
         return redirect(f"/contributions/envelopes/{envelope_id}/launch/")
@@ -658,6 +670,7 @@ def envelope_ignore(request: HttpRequest, envelope_id: int) -> HttpResponse:
     return redirect("/contributions/envelopes/")
 
 
+@module_permission_required("manage_contributions")
 def envelope_lookup(request: HttpRequest) -> JsonResponse:
     phone = request.GET.get("phone", "")
     address = request.GET.get("address", "")
@@ -668,6 +681,7 @@ def envelope_lookup(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"ok": True, **payload})
 
 
+@module_permission_required("manage_contributions")
 def envelope_profile_update_apply(request: HttpRequest, update_id: int) -> HttpResponse:
     if request.method != "POST":
         return redirect("/contributions/envelopes/")
@@ -683,6 +697,7 @@ def envelope_profile_update_apply(request: HttpRequest, update_id: int) -> HttpR
     return redirect("/contributions/envelopes/")
 
 
+@module_permission_required("manage_contributions")
 def envelope_profile_update_ignore(request: HttpRequest, update_id: int) -> HttpResponse:
     if request.method != "POST":
         return redirect("/contributions/envelopes/")
@@ -698,6 +713,7 @@ def envelope_profile_update_ignore(request: HttpRequest, update_id: int) -> Http
     return redirect("/contributions/envelopes/")
 
 
+@module_permission_required("manage_contributions")
 def envelope_profile_update_backfill(request: HttpRequest) -> HttpResponse:
     if request.method != "POST":
         return redirect("/contributions/envelopes/")
@@ -712,6 +728,7 @@ def envelope_profile_update_backfill(request: HttpRequest) -> HttpResponse:
     return redirect("/contributions/envelopes/")
 
 
+@module_permission_required("view_contributions")
 def envelope_detail(request: HttpRequest, envelope_id: int) -> HttpResponse:
     context = {"title": "Envelope"}
     context["detail"] = get_envelope_detail_postgres(envelope_id)
@@ -720,6 +737,7 @@ def envelope_detail(request: HttpRequest, envelope_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/envelope_detail.html", context)
 
 
+@module_permission_required("view_contributions")
 def envelope_image(request: HttpRequest, envelope_id: int) -> HttpResponse:
     detail = get_envelope_detail_postgres(envelope_id)
     if not detail or not detail.get("has_image"):
@@ -736,6 +754,7 @@ def envelope_image(request: HttpRequest, envelope_id: int) -> HttpResponse:
     return FileResponse(path.open("rb"), content_type=content_type)
 
 
+@module_permission_required("view_contributions", "manage_contributions")
 def detail(request: HttpRequest, contribution_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -749,6 +768,7 @@ def detail(request: HttpRequest, contribution_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/detail.html", context)
 
 
+@module_permission_required("manage_contributions")
 def split(request: HttpRequest, contribution_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -764,6 +784,7 @@ def split(request: HttpRequest, contribution_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/split.html", context)
 
 
+@module_permission_required("view_contributions", "manage_contributions")
 def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
     context = {
         "title": "Extrato de contribuicoes",
@@ -860,6 +881,7 @@ def person_statement(request: HttpRequest, person_id: int) -> HttpResponse:
     return render(request, "power_church_django/contributions/statement.html", context)
 
 
+@module_permission_required("view_contributions")
 def person_statement_pdf_view(request: HttpRequest, person_id: int) -> HttpResponse:
     statement = person_statement_data_postgres(
         person_id,
@@ -877,6 +899,7 @@ def person_statement_pdf_view(request: HttpRequest, person_id: int) -> HttpRespo
     return response
 
 
+@module_permission_required("view_contributions", "manage_contributions")
 def receipts(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         person_id = int(request.POST.get("pessoa_id") or 0)
@@ -1001,6 +1024,7 @@ def receipts(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/receipts/list.html", context)
 
 
+@module_permission_required("view_contributions", "manage_contributions")
 def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
     selected_campaign = normalize_query(request.GET.get("campaign", request.POST.get("campaign", "")))
     selected_status = normalize_query(request.GET.get("status", request.POST.get("status", "")))
@@ -1075,6 +1099,7 @@ def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/receipts/queue_monitor.html", context)
 
 
+@module_permission_required("manage_contributions")
 def receipt_new(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         person_id = request.POST.get("pessoa_id", "")
@@ -1097,6 +1122,7 @@ def receipt_new(request: HttpRequest) -> HttpResponse:
     return _receipt_hub_redirect(query)
 
 
+@module_permission_required("view_contributions", "manage_contributions")
 def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -1145,6 +1171,7 @@ def receipt_detail(request: HttpRequest, receipt_id: int) -> HttpResponse:
     return render(request, "power_church_django/receipts/detail.html", context)
 
 
+@module_permission_required("view_contributions")
 def receipt_pdf_view(request: HttpRequest, receipt_id: int) -> HttpResponse:
     detail = get_receipt_detail_cached(receipt_id)
     if detail is None:
@@ -1155,6 +1182,7 @@ def receipt_pdf_view(request: HttpRequest, receipt_id: int) -> HttpResponse:
     return response
 
 
+@module_permission_required("view_contributors")
 def contributors(request: HttpRequest) -> HttpResponse:
     selected_tags = [value for value in request.GET.getlist("tag") if value.strip()]
     context = {
@@ -1180,6 +1208,7 @@ def contributors(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/contributors/list.html", context)
 
 
+@module_permission_required("view_contributors", "manage_contributors")
 def contributor_detail(request: HttpRequest, contributor_id: int) -> HttpResponse:
     if request.method == "POST":
         action = request.POST.get("action", "")

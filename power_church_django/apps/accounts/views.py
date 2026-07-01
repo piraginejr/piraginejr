@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-from django.http import HttpRequest, HttpResponse
 from django.contrib import messages
 from django.contrib.auth import logout
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group, User
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
-from power_church_django.services.access_control import access_control_snapshot, create_or_update_admin, ensure_access_control
+from power_church_django.services.access_control import (
+    access_control_snapshot,
+    create_or_update_admin,
+    ensure_access_control,
+    module_permission_required,
+)
 
 
+@module_permission_required("manage_accounts")
 def index(request: HttpRequest) -> HttpResponse:
     ensure_access_control()
     if request.method == "POST":
@@ -21,6 +28,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/accounts/index.html", context)
 
 
+@login_required
 def relogin(request: HttpRequest) -> HttpResponse:
     if request.user.is_authenticated:
         logout(request)

@@ -45,7 +45,7 @@ from power_church_django.apps.people.models import (
     PersonSecureTrashSnapshot,
     PersonSnapshot,
 )
-from power_church_django.services.access_control import access_control_snapshot
+from power_church_django.services.access_control import access_control_snapshot, user_has_module_permission
 from power_church_django.services.mail_dispatch import MailAttachment, graph_config_snapshot, send_email_message
 from power_church_django.services.pdf_reports import contribution_period_pdf, receipt_pdf
 from power_church_django.services.photos import photo_dir
@@ -750,26 +750,54 @@ def _record_profile_checks(results: list[AuditResult], *, samples: EntitySamples
     users = list(snapshot.get("users") or [])
     sampled_users = users[:5]
     permission_paths = [
-        ("dashboard", "/"),
-        ("pessoas", "/people/"),
-        ("contribuicoes", "/contributions/"),
-        ("imports", "/imports/"),
-        ("relatorios", "/reports/"),
-        ("auditoria", "/audit/"),
+        ("dashboard", "/", "view_dashboard"),
+        ("pessoas", "/people/", "view_people"),
+        ("contribuicoes", "/contributions/", "view_contributions"),
+        ("imports", "/imports/", "view_imports"),
+        ("relatorios", "/reports/", "view_reports"),
+        ("auditoria", "/audit/", "view_audit"),
+        ("usuarios", "/accounts/", "manage_accounts"),
     ]
     for user in sampled_users:
         groups = ",".join(user.groups.order_by("name").values_list("name", flat=True)) or "-"
         client = Client(raise_request_exception=False)
         client.force_login(user)
-        for label, url in permission_paths:
+        for label, url, codename in permission_paths:
             request_data = _request_url(client, url, user_label=str(user.username))
-            _record_page_check(
-                results,
-                request_data,
-                item=f"Perfil - {user.username} acessa {label}",
-                area="Perfis / acesso",
-                expected_kind="route",
-            )
+            if user_has_module_permission(user, codename):
+                _record_page_check(
+                    results,
+                    request_data,
+                    item=f"Perfil - {user.username} acessa {label}",
+                    area="Perfis / acesso",
+                    expected_kind="route",
+                )
+            else:
+                status_code = int(request_data["status_code"] or 0)
+                ok = status_code == 403
+                results.append(
+                    AuditResult(
+                        item=f"Perfil - {user.username} bloqueado em {label}",
+                        result="OK" if ok else "FAIL",
+                        probable_area="Perfis / acesso",
+                        url=request_data["url"],
+                        user_label=request_data["user_label"],
+                        status_code=status_code,
+                        response_time_ms=int(request_data["elapsed_ms"] or 0),
+                        route_name=request_data["resolver_view_name"],
+                        namespace=request_data["resolver_namespaces"],
+                        app_name=request_data["resolver_app_names"] or "accounts",
+                        view_name=request_data["lookup_str"] or request_data["resolver_view_name"],
+                        template_names=request_data["templates"],
+                        details=f"HTTP {status_code} · esperado bloqueio em {codename}",
+                        error="" if ok else request_data["exception_detail"] or str(request_data["body"] or "")[:400],
+                        traceback_summary=request_data["exception_summary"],
+                        probable_postgres=bool(request_data["probable_postgres"]),
+                        probable_encoding=bool(request_data["probable_encoding"]),
+                        probable_missing_attr=bool(request_data["probable_missing_attr"]),
+                        target=request_data["url"],
+                    )
+                )
             if results:
                 results[-1].details = f"{results[-1].details} · grupos={groups} · staff={user.is_staff} · superuser={user.is_superuser}"
 

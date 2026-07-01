@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
+from power_church_django.services.access_control import module_permission_required
 from power_church_core.banking import STATEMENT_LAYOUT_LABELS
 from .services import (
     LegacyBankWriteError,
@@ -34,7 +34,7 @@ def _native_statement_backend(backend: str) -> bool:
     return str(backend or "").strip() == "postgres_nativo"
 
 
-@login_required
+@module_permission_required("view_dashboard")
 def dashboard(request: HttpRequest) -> HttpResponse:
     context = {"title": "Power Church Django", "layouts": STATEMENT_LAYOUT_LABELS}
     try:
@@ -44,6 +44,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/dashboard.html", context)
 
 
+@module_permission_required("view_imports", "manage_imports")
 def index(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         actor = _actor(request)
@@ -115,6 +116,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/imports/list.html", context)
 
 
+@module_permission_required("view_imports", "manage_imports")
 def cent_rules(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         try:
@@ -133,6 +135,7 @@ def cent_rules(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/imports/rules.html", context)
 
 
+@module_permission_required("view_imports", ("manage_imports", "operate_bank_review"))
 def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
     kind = "pix" if kind == "pix" else "statement"
     backend = str(request.POST.get("backend") or request.GET.get("backend") or "").strip()
@@ -207,6 +210,7 @@ def lot_detail(request: HttpRequest, kind: str, lot_id: int) -> HttpResponse:
     return render(request, "power_church_django/imports/lot_detail.html", context)
 
 
+@module_permission_required("view_imports", ("manage_imports", "operate_bank_review"))
 def movement_detail(request: HttpRequest, kind: str, movement_id: int) -> HttpResponse:
     kind = "pix" if kind == "pix" else "statement"
     backend = str(request.POST.get("backend") or request.GET.get("backend") or "").strip()

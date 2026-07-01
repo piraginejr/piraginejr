@@ -7,6 +7,7 @@ from django.db import OperationalError, ProgrammingError
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
+from power_church_django.services.access_control import module_permission_required
 from power_church_django.services.audit_native import (
     operational_audit_postgres,
     search_receipt_people_postgres,
@@ -53,6 +54,7 @@ def _search_person_by_id(person_id: int) -> dict[str, object] | None:
     return None
 
 
+@module_permission_required("view_audit")
 def index(request: HttpRequest) -> HttpResponse:
     mode = request.GET.get("modo", "cadastro")
     context = {
@@ -183,6 +185,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/audit/index.html", context)
 
 
+@module_permission_required("view_audit")
 def email_resend(request: HttpRequest) -> HttpResponse:
     if request.method != "POST":
         return redirect("/audit/?modo=emails")

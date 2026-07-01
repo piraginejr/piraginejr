@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from functools import wraps
+from typing import Any, Callable, Iterable
 
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest, HttpResponse
 
 
 ACCESS_APP_LABEL = "power_church"
@@ -75,6 +79,8 @@ DEFAULT_GROUPS = {
         "view_reports",
     ],
 }
+
+SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
 def access_content_type() -> ContentType:
@@ -160,3 +166,44 @@ def access_control_snapshot() -> dict[str, Any]:
         "group_count": Group.objects.count(),
         "permission_count": len(installed_permissions),
     }
+
+
+def _normalize_permission_codes(codes: str | Iterable[str] | None) -> tuple[str, ...]:
+    if codes is None:
+        return ()
+    if isinstance(codes, str):
+        clean = codes.strip()
+        return (clean,) if clean else ()
+    normalized = [str(code).strip() for code in codes if str(code).strip()]
+    return tuple(normalized)
+
+
+def user_has_module_permission(user: User, *permission_codes: str) -> bool:
+    normalized = _normalize_permission_codes(permission_codes)
+    if getattr(user, "is_superuser", False):
+        return True
+    if not getattr(user, "is_authenticated", False):
+        return False
+    return any(user.has_perm(f"power_church.{code}") for code in normalized)
+
+
+def module_permission_required(
+    view_permissions: str | Iterable[str],
+    unsafe_permissions: str | Iterable[str] | None = None,
+) -> Callable[[Callable[..., HttpResponse]], Callable[..., HttpResponse]]:
+    read_permissions = _normalize_permission_codes(view_permissions)
+    write_permissions = _normalize_permission_codes(unsafe_permissions) or read_permissions
+
+    def decorator(view_func: Callable[..., HttpResponse]) -> Callable[..., HttpResponse]:
+        @wraps(view_func)
+        def wrapped(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
+            ensure_access_control()
+            required_permissions = read_permissions if request.method in SAFE_HTTP_METHODS else write_permissions
+            if user_has_module_permission(request.user, *required_permissions):
+                return view_func(request, *args, **kwargs)
+            required_label = ", ".join(required_permissions) or "acesso_autenticado"
+            raise PermissionDenied(f"Usuario sem permissao para acessar este modulo ({required_label}).")
+
+        return login_required(wrapped)
+
+    return decorator

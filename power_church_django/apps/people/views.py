@@ -6,6 +6,7 @@ from django.contrib import messages
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 
+from power_church_django.services.access_control import module_permission_required, user_has_module_permission
 from power_church_django.services.data_exchange import (
     dataset_download_response,
     people_export_dataset,
@@ -61,6 +62,7 @@ from power_church_django.services.photos import (
 from power_church_django.services.runtime_errors import LegacyDatabaseError, LegacyWriteError
 
 
+@module_permission_required("view_people")
 def index(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Pessoas",
@@ -78,6 +80,7 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/people/list.html", context)
 
 
+@module_permission_required("view_people")
 def export(request: HttpRequest) -> HttpResponse:
     q = request.GET.get("q", "")
     status = request.GET.get("status", "")
@@ -121,6 +124,7 @@ def export(request: HttpRequest) -> HttpResponse:
     return dataset_download_response(export_data["dataset"], export_format, "pessoas")
 
 
+@module_permission_required("delete_people")
 def trash(request: HttpRequest) -> HttpResponse:
     if not _can_delete_people(request):
         messages.error(request, "Entre com um usuario autorizado para auditar exclusoes.")
@@ -133,6 +137,7 @@ def trash(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/people/trash.html", context)
 
 
+@module_permission_required("delete_people")
 def purge_trash(request: HttpRequest, trash_id: int) -> HttpResponse:
     if not _can_purge_people(request):
         messages.error(request, "Somente superusuario pode executar a purga final.")
@@ -174,6 +179,7 @@ def purge_trash(request: HttpRequest, trash_id: int) -> HttpResponse:
     )
 
 
+@module_permission_required("view_people")
 def validate_field(request: HttpRequest) -> JsonResponse:
     field = str(request.GET.get("field") or "").strip()
     value = request.GET.get("value") or ""
@@ -187,6 +193,7 @@ def validate_field(request: HttpRequest) -> JsonResponse:
     return JsonResponse(result)
 
 
+@module_permission_required("view_people")
 def search(request: HttpRequest) -> JsonResponse:
     q = request.GET.get("q") or ""
     person_id = int(request.GET.get("person_id") or 0)
@@ -197,6 +204,7 @@ def search(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"results": results})
 
 
+@module_permission_required("view_people", "manage_people")
 def families(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         section = request.POST.get("section", "audit")
@@ -332,6 +340,7 @@ def families(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/people/families.html", context)
 
 
+@module_permission_required("view_people")
 def photo(request: HttpRequest, person_id: int) -> HttpResponse:
     detail = get_person_detail(person_id)
     if not detail:
@@ -343,6 +352,7 @@ def photo(request: HttpRequest, person_id: int) -> HttpResponse:
     return FileResponse(path.open("rb"), content_type=photo_content_type(path))
 
 
+@module_permission_required("view_people", "manage_people")
 def detail(request: HttpRequest, person_id: int) -> HttpResponse:
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -404,6 +414,7 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
     return render(request, "power_church_django/people/detail.html", context)
 
 
+@module_permission_required("delete_people")
 def merge(request: HttpRequest, person_id: int) -> HttpResponse:
     if not _can_merge_people(request):
         messages.error(request, "Entre com um usuario autorizado para mesclar fichas.")
@@ -459,6 +470,7 @@ def merge(request: HttpRequest, person_id: int) -> HttpResponse:
     return render(request, "power_church_django/people/merge.html", context)
 
 
+@module_permission_required("delete_people")
 def delete(request: HttpRequest, person_id: int) -> HttpResponse:
     try:
         detail_data = get_person_detail(person_id)
@@ -499,6 +511,7 @@ def delete(request: HttpRequest, person_id: int) -> HttpResponse:
     )
 
 
+@module_permission_required("manage_people")
 def new(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Nova pessoa",
@@ -526,6 +539,7 @@ def new(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/people/form.html", context)
 
 
+@module_permission_required("manage_people")
 def edit(request: HttpRequest, person_id: int) -> HttpResponse:
     initial = get_person_form_initial_postgres(person_id)
     if initial is None:
@@ -569,6 +583,7 @@ def edit(request: HttpRequest, person_id: int) -> HttpResponse:
     return render(request, "power_church_django/people/form.html", context)
 
 
+@module_permission_required("view_people", "manage_people")
 def imports(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         upload = request.FILES.get("planilha_xlsx")
@@ -599,6 +614,7 @@ def imports(request: HttpRequest) -> HttpResponse:
     return render(request, "power_church_django/people/imports.html", context)
 
 
+@module_permission_required("view_people")
 def import_lot(request: HttpRequest, lot_id: int) -> HttpResponse:
     pending_issue = request.GET.get("tipo", "")
     pending_severity = request.GET.get("severidade", "")
@@ -637,9 +653,7 @@ def _actor_label(request: HttpRequest) -> str:
 
 
 def _local_or_has_permission(request: HttpRequest, codename: str) -> bool:
-    if not request.user.is_authenticated:
-        return True
-    return request.user.is_superuser or request.user.has_perm(f"power_church.{codename}")
+    return user_has_module_permission(request.user, codename)
 
 
 def _can_delete_people(request: HttpRequest) -> bool:

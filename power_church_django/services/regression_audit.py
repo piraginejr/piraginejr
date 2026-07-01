@@ -1,33 +1,54 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
+import os
 import re
+import sqlite3
 import time
 import traceback
 from typing import Any, Iterable
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import connection
-from django.db.models import CharField, Q, Value
+from django.core import mail
+from django.db import connection, transaction
+from django.db.models import CharField, Q, Sum, Value
 from django.db.models.functions import Cast, Coalesce, Lower
 from django.test import Client, override_settings
 from django.urls import URLPattern, URLResolver, get_resolver
 from django.utils import timezone
 
 from power_church_core.normalization import normalize_match_name
+from power_church_django.apps.audit.models import AuditEvent
 from power_church_django.apps.contributions.models import (
     NativeAuxContributor,
     NativeContribution,
     NativeEnvelope,
+    NativeEnvelopeItem,
     NativeEnvelopeLot,
     NativeEnvelopeProfileUpdate,
     ReceiptDispatch,
+    ReceiptEmailTemplate,
+    ReceiptItemSnapshot,
     ReceiptSnapshot,
 )
 from power_church_django.apps.imports.models import StatementImportPilotLot, StatementImportPilotMovement
-from power_church_django.apps.people.models import NativePeopleImportLot, PersonAddressSnapshot, PersonSnapshot
+from power_church_django.apps.people.models import (
+    NativePeopleImportLot,
+    NativePeopleImportPending,
+    PersonAddressSnapshot,
+    PersonContributionSnapshot,
+    PersonProfileSnapshot,
+    PersonSecurePurgeSnapshot,
+    PersonSecureTrashSnapshot,
+    PersonSnapshot,
+)
+from power_church_django.services.access_control import access_control_snapshot
+from power_church_django.services.mail_dispatch import MailAttachment, graph_config_snapshot, send_email_message
+from power_church_django.services.pdf_reports import contribution_period_pdf, receipt_pdf
+from power_church_django.services.photos import photo_dir
 
 
 ACCENTED_CHARS = "áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ"
@@ -117,6 +138,9 @@ def run_regression_audit(*, stdout: Any | None = None) -> tuple[Path, list[Audit
             authenticated_client.force_login(user)
 
         _record_runtime_checks(results, samples=samples)
+        _record_totals_and_consistency_checks(results, samples=samples)
+        _record_file_and_attachment_checks(results, samples=samples)
+        _record_email_checks(results, samples=samples)
         _record_operator_scenarios(
             results,
             anonymous_client=anonymous_client,
@@ -124,6 +148,8 @@ def run_regression_audit(*, stdout: Any | None = None) -> tuple[Path, list[Audit
             user_available=user is not None,
             samples=samples,
         )
+        _record_safe_post_checks(results, user_available=user is not None, samples=samples)
+        _record_profile_checks(results, samples=samples)
         _record_discovered_route_checks(
             results,
             user_available=user is not None,
@@ -131,6 +157,7 @@ def run_regression_audit(*, stdout: Any | None = None) -> tuple[Path, list[Audit
             routes=routes,
         )
         _record_query_checks(results, samples=samples)
+        _record_performance_findings(results)
 
     finished_at = timezone.localtime()
     report_path = report_dir / f"regression_audit_{started_at.strftime('%Y%m%d_%H%M%S')}.md"
@@ -309,6 +336,442 @@ def _record_runtime_checks(results: list[AuditResult], *, samples: EntitySamples
         )
     )
 
+
+def _record_totals_and_consistency_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    _record_count_result(
+        results,
+        item="Total operacional de pessoas",
+        area="Pessoas / totais",
+        count=PersonSnapshot.objects.filter(is_active=True).count(),
+        samples=samples,
+    )
+    _record_count_result(
+        results,
+        item="Total operacional de contribuicoes",
+        area="Contribuicoes / totais",
+        count=NativeContribution.objects.filter(is_active=True).count(),
+        samples=samples,
+    )
+    _record_count_result(
+        results,
+        item="Total operacional de recibos",
+        area="Recibos / totais",
+        count=ReceiptSnapshot.objects.count(),
+        samples=samples,
+    )
+    _record_count_result(
+        results,
+        item="Total operacional de lotes",
+        area="Imports / totais",
+        count=(
+            NativeEnvelopeLot.objects.count()
+            + NativePeopleImportLot.objects.count()
+            + StatementImportPilotLot.objects.count()
+        ),
+        samples=samples,
+    )
+    _record_count_result(
+        results,
+        item="Total operacional de auditorias",
+        area="Auditoria / totais",
+        count=(
+            AuditEvent.objects.count()
+            + NativePeopleImportPending.objects.filter(resolved=False).count()
+            + StatementImportPilotMovement.objects.filter(
+                Q(review_status__in=["pendente", "revisar_pessoa", "revisar_destinacao", "classificacao_pendente"])
+                | Q(review_status="revisar_duplicidade", imported_contribution_legacy_id__isnull=True)
+            ).count()
+        ),
+        samples=samples,
+    )
+
+    for date_start, date_end in samples.date_ranges[:2]:
+        contribution_total = _decimal_or_zero(
+            NativeContribution.objects.filter(
+                _date_range_q("received_at", date_start, date_end),
+                is_active=True,
+                person_legacy_id__isnull=False,
+            ).exclude(
+                person_legacy_id=0,
+            ).aggregate(total=Sum("amount"))["total"]
+        )
+        person_total = _decimal_or_zero(
+            PersonContributionSnapshot.objects.filter(
+                _date_range_q("received_at", date_start, date_end),
+                is_active=True,
+            ).aggregate(total=Sum("amount"))["total"]
+        )
+        receipts_total = _decimal_or_zero(
+            ReceiptSnapshot.objects.filter(
+                _date_range_q("emission_date", date_start, date_end)
+            ).aggregate(total=Sum("total_value"))["total"]
+        )
+        receipt_items_total = _decimal_or_zero(
+            ReceiptItemSnapshot.objects.filter(
+                _date_range_q("receipt__emission_date", date_start, date_end)
+            ).aggregate(total=Sum("amount"))["total"]
+        )
+        period_label = f"{date_start or '-'} a {date_end or '-'}"
+        results.append(
+            AuditResult(
+                item=f"Totais financeiros por periodo ({period_label})",
+                result="OK" if _same_money(contribution_total, person_total) else "FAIL",
+                probable_area="Contribuicoes / totais financeiros",
+                details=(
+                    f"contribuicoes_nativas_com_pessoa={contribution_total} · "
+                    f"espelho_pessoa={person_total} · "
+                    f"recibos={receipts_total} · itens_recibo={receipt_items_total}"
+                ),
+                probable_postgres=not _same_money(contribution_total, person_total),
+                user_label=samples.user_label,
+                app_name="contributions",
+                view_name="financial_totals",
+                target=period_label,
+            )
+        )
+        results.append(
+            AuditResult(
+                item=f"Paridade financeira de recibos ({period_label})",
+                result="OK" if _same_money(receipts_total, receipt_items_total) else "WARN",
+                probable_area="Recibos / totais financeiros",
+                details=f"recibos={receipts_total} · itens_recibo={receipt_items_total}",
+                user_label=samples.user_label,
+                app_name="receipts",
+                view_name="financial_totals",
+                target=period_label,
+            )
+        )
+
+    _record_legacy_parity_checks(results, samples=samples)
+
+    results.extend(
+        [
+            AuditResult(
+                item="Consistencia - contribuicoes com pessoa inexistente",
+                result="OK" if _missing_person_links_count() == 0 else "FAIL",
+                probable_area="PostgreSQL compatibility / consistencia",
+                details=f"{_missing_person_links_count()} contribuicao(oes) apontando para pessoa inexistente.",
+                probable_postgres=_missing_person_links_count() > 0,
+                user_label=samples.user_label,
+                app_name="contributions",
+                view_name="consistency",
+                target="NativeContribution.person_legacy_id",
+            ),
+            AuditResult(
+                item="Consistencia - recibos com pessoa inexistente",
+                result="OK" if _missing_receipt_people_count() == 0 else "FAIL",
+                probable_area="PostgreSQL compatibility / consistencia",
+                details=f"{_missing_receipt_people_count()} recibo(s) apontando para pessoa inexistente.",
+                probable_postgres=_missing_receipt_people_count() > 0,
+                user_label=samples.user_label,
+                app_name="receipts",
+                view_name="consistency",
+                target="ReceiptSnapshot.person_legacy_id",
+            ),
+            AuditResult(
+                item="Consistencia - envelopes sem lote valido",
+                result="OK" if _missing_envelope_lot_count() == 0 else "WARN",
+                probable_area="Contribuicoes / consistencia",
+                details=f"{_missing_envelope_lot_count()} envelope(s) com native_lot_legacy_id sem lote correspondente.",
+                user_label=samples.user_label,
+                app_name="contributions",
+                view_name="consistency",
+                target="NativeEnvelope.native_lot_legacy_id",
+            ),
+            AuditResult(
+                item="Consistencia - itens de envelope sem contribuicao valida",
+                result="OK" if _missing_envelope_item_contribution_count() == 0 else "WARN",
+                probable_area="Contribuicoes / consistencia",
+                details=f"{_missing_envelope_item_contribution_count()} item(ns) de envelope apontando para contribuicao inexistente.",
+                user_label=samples.user_label,
+                app_name="contributions",
+                view_name="consistency",
+                target="NativeEnvelopeItem.contribution_legacy_id",
+            ),
+            AuditResult(
+                item="Consistencia - movimentos importados com contribuicao inexistente",
+                result="OK" if _missing_statement_contribution_links_count() == 0 else "WARN",
+                probable_area="Imports / consistencia",
+                details=f"{_missing_statement_contribution_links_count()} movimento(s) com imported_contribution_legacy_id inexistente.",
+                user_label=samples.user_label,
+                app_name="imports",
+                view_name="consistency",
+                target="StatementImportPilotMovement.imported_contribution_legacy_id",
+            ),
+            AuditResult(
+                item="Consistencia - pessoas sem nome",
+                result="OK" if PersonSnapshot.objects.filter(Q(name="") | Q(normalized_name="")).count() == 0 else "FAIL",
+                probable_area="Pessoas / consistencia",
+                details=f"{PersonSnapshot.objects.filter(Q(name='') | Q(normalized_name='')).count()} pessoa(s) com nome ou nome normalizado vazio.",
+                user_label=samples.user_label,
+                app_name="people",
+                view_name="consistency",
+                target="PersonSnapshot.name",
+            ),
+            AuditResult(
+                item="Consistencia - perfis de familia sem cabeca",
+                result="OK" if PersonProfileSnapshot.objects.filter(profile="").count() == 0 else "WARN",
+                probable_area="Pessoas / consistencia",
+                details=f"{PersonProfileSnapshot.objects.filter(profile='').count()} perfil(is) com campo profile vazio.",
+                user_label=samples.user_label,
+                app_name="people",
+                view_name="consistency",
+                target="PersonProfileSnapshot.profile",
+            ),
+            AuditResult(
+                item="Consistencia - lixeira e purga seguras",
+                result="OK",
+                probable_area="Pessoas / consistencia",
+                details=(
+                    f"lixeira={PersonSecureTrashSnapshot.objects.count()} · "
+                    f"purgas={PersonSecurePurgeSnapshot.objects.count()}"
+                ),
+                user_label=samples.user_label,
+                app_name="people",
+                view_name="consistency",
+                target="secure_trash",
+            ),
+        ]
+    )
+
+
+def _record_file_and_attachment_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    repo_root = Path(getattr(settings, "REPO_ROOT", Path(settings.BASE_DIR).parent))
+    paths = [
+        ("Logo institucional", Path(getattr(settings, "POWER_CHURCH_BRAND_LOGO_PATH", "")), "Arquivos / branding", False, True),
+        ("Diretorio de fotos", photo_dir(), "Arquivos / fotos", True, True),
+        ("Uploads de envelopes", repo_root / "data" / "envelope_uploads", "Arquivos / uploads", True, True),
+        ("Uploads de pessoas", repo_root / "data" / "people_uploads", "Arquivos / uploads", True, True),
+        ("Uploads de extratos", repo_root / "data" / "statement_uploads", "Arquivos / uploads", True, True),
+        ("Relatorios gerados", repo_root / "reports", "Arquivos / relatorios", True, True),
+        ("Homologacao", repo_root / "data" / "homologacao", "Arquivos / documentos", True, True),
+        ("Static root", Path(getattr(settings, "STATIC_ROOT", repo_root / "staticfiles")), "Arquivos / staticfiles", True, False),
+    ]
+    for label, path, area, should_be_dir, writable in paths:
+        exists = path.exists()
+        is_expected_kind = path.is_dir() if should_be_dir else path.is_file()
+        writable_ok = os.access(path, os.W_OK) if exists and writable else exists
+        result = "OK" if exists and is_expected_kind and writable_ok else "WARN"
+        details = f"path={path} · existe={exists} · tipo_ok={is_expected_kind} · gravavel={writable_ok}"
+        results.append(
+            AuditResult(
+                item=f"Arquivos - {label}",
+                result=result,
+                probable_area=area,
+                details=details,
+                user_label=samples.user_label,
+                app_name="runtime",
+                view_name="filesystem",
+                target=str(path),
+            )
+        )
+
+    if samples.receipt_ids:
+        detail = ReceiptSnapshot.objects.filter(legacy_id=samples.receipt_ids[0]).first()
+        if detail is not None:
+            payload = receipt_pdf(
+                {
+                    "receipt": {
+                        "id": detail.legacy_id,
+                        "numero": detail.receipt_number,
+                        "nome_pessoa": detail.person_name,
+                        "email_pessoa": detail.person_email,
+                        "cpf_pessoa": detail.person_cpf,
+                        "codigo_pessoa": detail.person_code,
+                        "data_emissao": detail.emission_date_raw,
+                        "valor_total": detail.total_value,
+                        "observacoes": detail.notes,
+                    },
+                    "items": [],
+                }
+            )
+            results.append(
+                AuditResult(
+                    item="Arquivos - geracao interna de recibo PDF",
+                    result="OK" if payload.startswith(b"%PDF") and len(payload) > 100 else "FAIL",
+                    probable_area="Arquivos / documentos",
+                    details=f"payload_pdf={len(payload)} bytes",
+                    user_label=samples.user_label,
+                    app_name="receipts",
+                    view_name="pdf_attachment",
+                    target="receipt_pdf",
+                )
+            )
+    report_payload = contribution_period_pdf(
+        {
+            "period_label": "Homologacao",
+            "rows": [],
+            "totals": {"count": 0, "amount": Decimal("0.00")},
+        }
+    )
+    results.append(
+        AuditResult(
+            item="Arquivos - geracao interna de PDF de relatorio",
+            result="OK" if report_payload.startswith(b"%PDF") and len(report_payload) > 100 else "FAIL",
+            probable_area="Arquivos / documentos",
+            details=f"payload_pdf={len(report_payload)} bytes",
+            user_label=samples.user_label,
+            app_name="reports",
+            view_name="pdf_attachment",
+            target="contribution_period_pdf",
+        )
+    )
+
+
+def _record_email_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    snapshot = graph_config_snapshot()
+    provider = str(snapshot.get("provider") or getattr(settings, "POWER_CHURCH_EMAIL_PROVIDER", "smtp"))
+    results.append(
+        AuditResult(
+            item="E-mail - backend Django configurado",
+            result="OK" if str(getattr(settings, "EMAIL_BACKEND", "")).strip() else "FAIL",
+            probable_area="E-mails / configuracao",
+            details=f"backend={getattr(settings, 'EMAIL_BACKEND', '')} · provider={provider}",
+            user_label=samples.user_label,
+            app_name="runtime",
+            view_name="email_backend",
+            target=str(getattr(settings, "EMAIL_BACKEND", "")),
+        )
+    )
+    results.append(
+        AuditResult(
+            item="E-mail - templates de recibo",
+            result="OK" if ReceiptEmailTemplate.objects.filter(active=True).exists() else "WARN",
+            probable_area="E-mails / templates",
+            details=f"templates_ativos={ReceiptEmailTemplate.objects.filter(active=True).count()}",
+            user_label=samples.user_label,
+            app_name="receipts",
+            view_name="email_templates",
+            target="ReceiptEmailTemplate",
+        )
+    )
+    if provider == "microsoft_graph":
+        missing = [
+            key
+            for key, value in (
+                ("POWER_CHURCH_GRAPH_TENANT_ID", snapshot.get("tenant_id")),
+                ("POWER_CHURCH_GRAPH_CLIENT_ID", snapshot.get("client_id")),
+                ("POWER_CHURCH_GRAPH_CLIENT_SECRET", snapshot.get("has_client_secret")),
+                ("POWER_CHURCH_GRAPH_SENDER_USER", snapshot.get("sender_user")),
+            )
+            if not value
+        ]
+        results.append(
+            AuditResult(
+                item="E-mail - Microsoft Graph configurado",
+                result="OK" if not missing else "FAIL",
+                probable_area="E-mails / configuracao",
+                details=f"missing={missing or '-'} · sender={snapshot.get('sender_user') or '-'}",
+                user_label=samples.user_label,
+                app_name="runtime",
+                view_name="email_provider",
+                target="microsoft_graph",
+            )
+        )
+    dry_run = send_email_message(
+        subject="Homologacao Power Church",
+        body="Teste seco do regression_audit.",
+        from_email=str(getattr(settings, "DEFAULT_FROM_EMAIL", "") or "recebimento@localhost"),
+        to_emails=["homologacao@example.com"],
+        attachments=[MailAttachment(filename="teste.pdf", content=b"%PDF-1.4\n", content_type="application/pdf")],
+        dry_run=True,
+    )
+    results.append(
+        AuditResult(
+            item="E-mail - dry run com anexo",
+            result="OK" if bool(getattr(dry_run, "accepted", False)) else "FAIL",
+            probable_area="E-mails / homologacao",
+            details=f"provider={dry_run.provider} · metadata={dry_run.metadata}",
+            user_label=samples.user_label,
+            app_name="runtime",
+            view_name="email_dry_run",
+            target="mail_dispatch",
+        )
+    )
+    results.append(
+        AuditResult(
+            item="E-mail - outbox em modo auditoria",
+            result="OK",
+            probable_area="E-mails / homologacao",
+            details=f"outbox_local={len(getattr(mail, 'outbox', [])) if hasattr(mail, 'outbox') else 0}",
+            user_label=samples.user_label,
+            app_name="runtime",
+            view_name="email_outbox",
+            target="django.core.mail",
+        )
+    )
+
+
+def _record_safe_post_checks(results: list[AuditResult], *, user_available: bool, samples: EntitySamples) -> None:
+    if not user_available:
+        return
+    user = get_user_model().objects.filter(pk=samples.user_id).first() if samples.user_id else None
+    if user is None:
+        return
+    post_checks: list[tuple[str, str, str, dict[str, Any], bool]] = [
+        ("POST seguro - login invalido", "/accounts/login/", "Acesso / POST seguro", {"username": samples.user_label, "password": "senha_invalida"}, False),
+        ("POST seguro - importacao de pessoas sem arquivo", "/people/imports/", "Imports / POST seguro", {}, False),
+        ("POST seguro - importacao bancaria sem arquivo", "/imports/", "Imports / POST seguro", {}, False),
+    ]
+    profile_update = NativeEnvelopeProfileUpdate.objects.order_by("id").first()
+    if profile_update is not None:
+        post_checks.append(
+            (
+                "POST seguro - ignorar pendencia cadastral de envelope",
+                f"/contributions/envelopes/profile-updates/{profile_update.id}/ignore/",
+                "Contribuicoes / POST seguro",
+                {"envelope_id": str(profile_update.envelope_id)},
+                True,
+            )
+        )
+    for item, url, area, payload, rollback in post_checks:
+        request_data = _request_post_url(url, payload, user=user, user_label=samples.user_label, rollback=rollback)
+        _record_page_check(results, request_data, item=item, area=area, expected_kind="route")
+
+
+def _record_profile_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    snapshot = access_control_snapshot()
+    results.append(
+        AuditResult(
+            item="Perfis - grupos padrao instalados",
+            result="OK" if bool(snapshot.get("installed")) else "WARN",
+            probable_area="Perfis / acesso",
+            details=(
+                f"grupos={snapshot.get('group_count')} · "
+                f"permissoes={snapshot.get('permission_count')} · "
+                f"missing={snapshot.get('missing_permissions') or '-'}"
+            ),
+            user_label=samples.user_label,
+            app_name="accounts",
+            view_name="profiles",
+            target="access_control",
+        )
+    )
+    users = list(snapshot.get("users") or [])
+    sampled_users = users[:5]
+    permission_paths = [
+        ("dashboard", "/"),
+        ("pessoas", "/people/"),
+        ("contribuicoes", "/contributions/"),
+        ("imports", "/imports/"),
+        ("relatorios", "/reports/"),
+        ("auditoria", "/audit/"),
+    ]
+    for user in sampled_users:
+        groups = ",".join(user.groups.order_by("name").values_list("name", flat=True)) or "-"
+        client = Client(raise_request_exception=False)
+        client.force_login(user)
+        for label, url in permission_paths:
+            request_data = _request_url(client, url, user_label=str(user.username))
+            _record_page_check(
+                results,
+                request_data,
+                item=f"Perfil - {user.username} acessa {label}",
+                area="Perfis / acesso",
+                expected_kind="route",
+            )
+            if results:
+                results[-1].details = f"{results[-1].details} · grupos={groups} · staff={user.is_staff} · superuser={user.is_superuser}"
 
 def _record_operator_scenarios(
     results: list[AuditResult],
@@ -1157,6 +1620,55 @@ def _record_guard_check(results: list[AuditResult], request_data: dict[str, Any]
     )
 
 
+def _request_post_url(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    user: Any | None,
+    user_label: str,
+    rollback: bool,
+) -> dict[str, Any]:
+    client = Client(raise_request_exception=False)
+    if user is not None:
+        client.force_login(user)
+    started = time.perf_counter()
+    if rollback:
+        with transaction.atomic():
+            response = client.post(url, payload, HTTP_HOST="localhost", follow=False)
+            transaction.set_rollback(True)
+    else:
+        response = client.post(url, payload, HTTP_HOST="localhost", follow=False)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    resolver_match = getattr(getattr(response, "wsgi_request", None), "resolver_match", None)
+    content_type = response.headers.get("Content-Type", "")
+    payload_bytes = _response_bytes(response)
+    body = payload_bytes.decode("utf-8", errors="replace")
+    textual_body = "" if _is_binary_content_type(content_type) else body
+    exc_summary, exc_detail = _response_exception_details(response)
+    flags = _problem_flags(exc_detail or textual_body, textual_body)
+    return {
+        "response": response,
+        "url": url,
+        "user_label": user_label,
+        "elapsed_ms": elapsed_ms,
+        "status_code": int(response.status_code or 0),
+        "content_type": content_type,
+        "body": body,
+        "resolver_view_name": getattr(resolver_match, "view_name", "") if resolver_match else "",
+        "resolver_app_names": ",".join(getattr(resolver_match, "app_names", []) or []) if resolver_match else "",
+        "resolver_namespaces": ",".join(getattr(resolver_match, "namespaces", []) or []) if resolver_match else "",
+        "lookup_str": getattr(resolver_match, "_func_path", "") if resolver_match else "",
+        "templates": "",
+        "payload": payload_bytes,
+        "exception_summary": exc_summary,
+        "exception_detail": exc_detail,
+        "probable_postgres": flags["postgres"],
+        "probable_encoding": flags["encoding"],
+        "probable_missing_attr": flags["missing_attr"],
+        "route": None,
+    }
+
+
 def _response_exception_details(response: Any) -> tuple[str, str]:
     exc_info = getattr(response, "exc_info", None)
     if not exc_info:
@@ -1211,6 +1723,196 @@ def _response_bytes(response: Any) -> bytes:
         return b""
 
 
+def _record_count_result(
+    results: list[AuditResult],
+    *,
+    item: str,
+    area: str,
+    count: int,
+    samples: EntitySamples,
+) -> None:
+    results.append(
+        AuditResult(
+            item=item,
+            result="OK" if count > 0 else "WARN",
+            probable_area=area,
+            details=f"{count} registro(s).",
+            user_label=samples.user_label,
+            app_name=_infer_app_from_area(area),
+            view_name="totals",
+            target=item,
+        )
+    )
+
+
+def _date_range_q(field_name: str, date_start: str, date_end: str) -> Q:
+    query = Q()
+    if date_start:
+        query &= Q(**{f"{field_name}__gte": date_start})
+    if date_end:
+        query &= Q(**{f"{field_name}__lte": date_end})
+    return query
+
+
+def _decimal_or_zero(value: Any) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value or "0"))
+    except Exception:
+        return Decimal("0.00")
+
+
+def _same_money(left: Decimal, right: Decimal) -> bool:
+    return abs(_decimal_or_zero(left) - _decimal_or_zero(right)) <= Decimal("0.01")
+
+
+def _missing_person_links_count() -> int:
+    known_people = PersonSnapshot.objects.values_list("legacy_id", flat=True)
+    return NativeContribution.objects.exclude(person_legacy_id__isnull=True).exclude(person_legacy_id=0).exclude(person_legacy_id__in=known_people).count()
+
+
+def _missing_receipt_people_count() -> int:
+    known_people = PersonSnapshot.objects.values_list("legacy_id", flat=True)
+    return ReceiptSnapshot.objects.exclude(person_legacy_id__isnull=True).exclude(person_legacy_id=0).exclude(person_legacy_id__in=known_people).count()
+
+
+def _missing_envelope_lot_count() -> int:
+    known_lots = NativeEnvelopeLot.objects.values_list("legacy_id", flat=True)
+    return NativeEnvelope.objects.exclude(native_lot_legacy_id__isnull=True).exclude(native_lot_legacy_id=0).exclude(native_lot_legacy_id__in=known_lots).count()
+
+
+def _missing_envelope_item_contribution_count() -> int:
+    known_contributions = NativeContribution.objects.values_list("legacy_id", flat=True)
+    return NativeEnvelopeItem.objects.exclude(contribution_legacy_id__isnull=True).exclude(contribution_legacy_id=0).exclude(contribution_legacy_id__in=known_contributions).count()
+
+
+def _missing_statement_contribution_links_count() -> int:
+    known_contributions = NativeContribution.objects.values_list("legacy_id", flat=True)
+    return StatementImportPilotMovement.objects.exclude(imported_contribution_legacy_id__isnull=True).exclude(imported_contribution_legacy_id=0).exclude(imported_contribution_legacy_id__in=known_contributions).count()
+
+
+def _record_legacy_parity_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    legacy_path = Path(getattr(settings, "POWER_CHURCH_LEGACY_DB_PATH", ""))
+    if not legacy_path.exists():
+        results.append(
+            AuditResult(
+                item="Paridade com banco legado",
+                result="WARN",
+                probable_area="PostgreSQL compatibility / legado",
+                details=f"Banco legado nao encontrado em {legacy_path}.",
+                user_label=samples.user_label,
+                app_name="runtime",
+                view_name="legacy_parity",
+                target=str(legacy_path),
+            )
+        )
+        return
+    try:
+        with sqlite3.connect(str(legacy_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            legacy_people = int(conn.execute("SELECT COUNT(*) FROM pessoas WHERE ativo = 1").fetchone()[0] or 0)
+            legacy_contributions = int(conn.execute("SELECT COUNT(*) FROM contribuicoes WHERE ativo = 1").fetchone()[0] or 0)
+            legacy_receipts = int(conn.execute("SELECT COUNT(*) FROM recibos").fetchone()[0] or 0)
+            legacy_sum = _decimal_or_zero(conn.execute("SELECT COALESCE(SUM(valor), 0) FROM contribuicoes WHERE ativo = 1").fetchone()[0])
+    except Exception as exc:
+        results.append(
+            AuditResult(
+                item="Paridade com banco legado",
+                result="WARN",
+                probable_area="PostgreSQL compatibility / legado",
+                details=f"Leitura do legado falhou: {exc}",
+                user_label=samples.user_label,
+                app_name="runtime",
+                view_name="legacy_parity",
+                target=str(legacy_path),
+            )
+        )
+        return
+
+    comparisons = [
+        (
+            "Paridade legado x Postgres - pessoas",
+            legacy_people,
+            PersonSnapshot.objects.filter(is_active=True).count(),
+            "Pessoas / paridade legado",
+        ),
+        (
+            "Paridade legado x Postgres - contribuicoes",
+            legacy_contributions,
+            NativeContribution.objects.filter(is_active=True).count(),
+            "Contribuicoes / paridade legado",
+        ),
+        (
+            "Paridade legado x Postgres - recibos",
+            legacy_receipts,
+            ReceiptSnapshot.objects.count(),
+            "Recibos / paridade legado",
+        ),
+    ]
+    for item, legacy_total, current_total, area in comparisons:
+        results.append(
+            AuditResult(
+                item=item,
+                result="OK" if legacy_total == current_total else "WARN",
+                probable_area=area,
+                details=f"legado={legacy_total} · postgres={current_total}",
+                user_label=samples.user_label,
+                app_name=_infer_app_from_area(area),
+                view_name="legacy_parity",
+                target=item,
+            )
+        )
+    current_sum = _decimal_or_zero(NativeContribution.objects.filter(is_active=True).aggregate(total=Sum("amount"))["total"])
+    results.append(
+        AuditResult(
+            item="Paridade legado x Postgres - soma financeira de contribuicoes",
+            result="OK" if _same_money(legacy_sum, current_sum) else "WARN",
+            probable_area="Contribuicoes / paridade legado",
+            details=f"legado={legacy_sum} · postgres={current_sum}",
+            user_label=samples.user_label,
+            app_name="contributions",
+            view_name="legacy_parity",
+            target="contribution_sum",
+        )
+    )
+
+
+def _record_performance_findings(results: list[AuditResult]) -> None:
+    slow_candidates = [
+        item
+        for item in results
+        if item.result == "OK"
+        and item.method == "GET"
+        and item.url
+        and (
+            item.response_time_ms >= 2000
+            or ("pdf" in item.url and item.response_time_ms >= 700)
+            or ("export" in item.url and item.response_time_ms >= 700)
+        )
+    ]
+    for item in sorted(slow_candidates, key=lambda row: row.response_time_ms, reverse=True)[:8]:
+        results.append(
+            AuditResult(
+                item=f"Performance - endpoint lento: {item.item}",
+                result="WARN",
+                probable_area="Performance / possivel query pesada",
+                url=item.url,
+                user_label=item.user_label,
+                status_code=item.status_code,
+                response_time_ms=item.response_time_ms,
+                method=item.method,
+                route_name=item.route_name,
+                namespace=item.namespace,
+                app_name=item.app_name,
+                view_name=item.view_name,
+                template_names=item.template_names,
+                details=f"Resposta em {item.response_time_ms} ms. Revisar query pesada ou N+1.",
+                target=item.target or item.url,
+            )
+        )
+
+
 def _is_binary_content_type(content_type: str) -> bool:
     lowered = str(content_type or "").lower()
     return (
@@ -1247,6 +1949,11 @@ def _render_markdown_report(
     failures = [item for item in results if item.result == "FAIL"]
     grouped_failures = _group_failures(results)
     top_failures = _top_failures(failures)
+    slow_items = sorted(
+        [item for item in results if "Performance / possivel query pesada" in item.probable_area],
+        key=lambda row: row.response_time_ms,
+        reverse=True,
+    )
 
     lines = [
         "# Regression Audit",
@@ -1356,6 +2063,17 @@ def _render_markdown_report(
                 f"{item.traceback_summary or item.error or item.details or 'sem detalhe'}"
             )
         lines.append("")
+
+    lines.extend(["## Performance", ""])
+    if slow_items:
+        for item in slow_items[:10]:
+            lines.append(
+                f"- `{item.item}` · `{item.url or item.target or '-'}` · `{item.response_time_ms} ms` · "
+                f"{item.details or 'revisar query pesada'}"
+            )
+    else:
+        lines.append("- Nenhum endpoint excedeu o limiar de lentidao configurado nesta rodada.")
+    lines.append("")
 
     return "\n".join(lines) + "\n"
 

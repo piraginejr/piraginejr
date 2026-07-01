@@ -2,11 +2,22 @@ from __future__ import annotations
 
 from decimal import Decimal
 from datetime import timedelta
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 
-from power_church_django.apps.contributions.models import NativeEnvelope, NativeEnvelopeLot
+from power_church_django.apps.contributions.models import (
+    ContributionTypeSnapshot,
+    NativeAuxContributor,
+    NativeContribution,
+    NativeEnvelope,
+    NativeEnvelopeLot,
+    NativeEnvelopeProfileUpdate,
+)
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.contributions_native import person_statement_data_postgres
 from power_church_django.services.envelopes_native import (
@@ -14,10 +25,15 @@ from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_TIMEOUT,
     ENVELOPE_PENDING_STATUS,
     _native_envelope_line_payloads,
+    create_envelope_contribution_batch_postgres,
+    create_envelope_image_lot_postgres,
+    get_envelope_detail_postgres,
+    get_envelope_lot_detail_postgres,
     get_next_pending_envelope_id_postgres,
     ignore_pending_envelope_postgres,
     launch_pending_envelope_postgres,
     pending_envelope_contribution_context_postgres,
+    update_launched_envelope_postgres,
 )
 from power_church_django.services.runtime_errors import LegacyWriteError
 
@@ -246,6 +262,255 @@ class EnvelopeLinePayloadTests(TestCase):
         self.assertEqual(rows[1]["type_id"], 9)
         self.assertEqual(rows[1]["campaign_id"], 3)
         self.assertEqual(rows[1]["value"], 40.0)
+
+
+class EnvelopeOperationalFlowTests(TestCase):
+    def setUp(self) -> None:
+        self.person = PersonSnapshot.objects.create(
+            legacy_id=201,
+            organization_id=1,
+            name="Pessoa Envelope",
+            normalized_name="PESSOA ENVELOPE",
+            social_name="",
+            cpf="",
+            primary_email="",
+            normalized_email="",
+            primary_phone="2122222222",
+            primary_whatsapp="",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        self.type_snapshot = ContributionTypeSnapshot.objects.create(
+            legacy_id=7,
+            organization_id=1,
+            code="DIZIMO",
+            name="Dizimo",
+            is_active=True,
+        )
+
+    def test_create_envelope_lot_accepts_local_folder_path(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as runtime_dir:
+            source_path = Path(source_dir)
+            (source_path / "001.jpg").write_bytes(b"fake-image-a")
+            (source_path / "002.png").write_bytes(b"fake-image-b")
+
+            with patch.dict(os.environ, {"POWER_CHURCH_ENVELOPE_DIR": runtime_dir}, clear=False):
+                result = create_envelope_image_lot_postgres(
+                    {
+                        "nome_lote": "Lote local",
+                        "competencia_mes": "2026-07",
+                        "data_padrao_recebimento": "2026-07-01",
+                        "origem_operacional": "Scanner local",
+                        "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                        "pasta_origem": str(source_path),
+                    },
+                    actor="tester",
+                )
+
+        self.assertEqual(len(result["envelope_ids"]), 2)
+        self.assertEqual(NativeEnvelope.objects.filter(native_lot_legacy_id=result["lot_id"]).count(), 2)
+
+    def test_create_manual_envelope_accepts_local_file_path_and_updates_phone_immediately(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as runtime_dir:
+            source_file = Path(source_dir) / "manual.jpg"
+            source_file.write_bytes(b"fake-manual-envelope")
+
+            with patch.dict(os.environ, {"POWER_CHURCH_ENVELOPE_DIR": runtime_dir}, clear=False):
+                result = create_envelope_contribution_batch_postgres(
+                    {
+                        "data_recebimento": "2026-07-02",
+                        "competencia_mes": "2026-07",
+                        "nome_lote": "Envelope manual local",
+                        "valor_total": "150,00",
+                        "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                        "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                        "telefone_informado": "21999998888",
+                        "aplicar_telefone_na_ficha": "1",
+                        "justificativa": "Teste operacional de envelope.",
+                        "origem_operacional": "Fluxo local",
+                        "imagem_envelope_path": str(source_file),
+                    },
+                    None,
+                    actor="tester",
+                )
+
+        envelope = NativeEnvelope.objects.get(legacy_id=result["envelope_id"])
+        self.person.refresh_from_db()
+        self.assertEqual(envelope.status, "lancado")
+        self.assertEqual(self.person.primary_phone, "21999998888")
+        self.assertFalse(
+            NativeEnvelopeProfileUpdate.objects.filter(
+                envelope=envelope,
+                field_name="telefone",
+                status=NativeEnvelopeProfileUpdate.Status.PENDING,
+            ).exists()
+        )
+
+    def test_lot_detail_exposes_edit_url_for_launched_envelope(self) -> None:
+        lot = NativeEnvelopeLot.objects.create(
+            legacy_id=2,
+            organization_id=1,
+            name="Lote com lancado",
+            competence="jul/2026",
+            competence_order=202607,
+            status="digitado",
+            is_active=True,
+        )
+        NativeEnvelope.objects.create(
+            legacy_id=301,
+            organization_id=1,
+            native_lot_legacy_id=lot.legacy_id,
+            lot_name=lot.name,
+            competence=lot.competence,
+            competence_order=lot.competence_order,
+            status="lancado",
+            total_informed=Decimal("50.00"),
+            is_active=True,
+        )
+
+        detail = get_envelope_lot_detail_postgres(lot.legacy_id)
+
+        self.assertIsNotNone(detail)
+        item = detail["items"][0]
+        self.assertEqual(item["edit_url"], "/contributions/envelopes/301/edit/")
+        self.assertEqual(item["launch_url"], "")
+
+    def test_launch_pending_envelope_creates_contribution_and_closes_lot(self) -> None:
+        lot = NativeEnvelopeLot.objects.create(
+            legacy_id=3,
+            organization_id=1,
+            name="Lote pendente",
+            competence="jul/2026",
+            competence_order=202607,
+            status="aberto",
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=302,
+            organization_id=1,
+            native_lot_legacy_id=lot.legacy_id,
+            lot_name=lot.name,
+            competence=lot.competence,
+            competence_order=lot.competence_order,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+
+        result = launch_pending_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-03",
+                "valor_total": "80,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Lancamento operacional do envelope.",
+                "origem_operacional": "Teste de lote",
+            },
+            actor="tester",
+        )
+
+        envelope.refresh_from_db()
+        lot.refresh_from_db()
+        self.assertEqual(envelope.status, "lancado")
+        self.assertEqual(len(result["contribution_ids"]), 1)
+        self.assertEqual(lot.status, "digitado")
+        self.assertTrue(NativeContribution.objects.filter(legacy_id=result["contribution_ids"][0], is_active=True).exists())
+
+    def test_ignore_pending_envelope_updates_status_and_lot(self) -> None:
+        lot = NativeEnvelopeLot.objects.create(
+            legacy_id=4,
+            organization_id=1,
+            name="Lote para ignorar",
+            competence="jul/2026",
+            competence_order=202607,
+            status="aberto",
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=303,
+            organization_id=1,
+            native_lot_legacy_id=lot.legacy_id,
+            lot_name=lot.name,
+            competence=lot.competence,
+            competence_order=lot.competence_order,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+
+        ignore_pending_envelope_postgres(envelope.legacy_id, justification="Imagem em branco", actor="tester")
+
+        envelope.refresh_from_db()
+        lot.refresh_from_db()
+        self.assertEqual(envelope.status, "ignorado")
+        self.assertEqual(lot.status, "digitado")
+
+    def test_update_launched_envelope_recreates_active_contribution(self) -> None:
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=304,
+            organization_id=1,
+            lot_name="Envelope corrigido",
+            competence="jul/2026",
+            competence_order=202607,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+        launch_pending_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-04",
+                "valor_total": "90,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Primeiro lancamento operacional.",
+                "origem_operacional": "Teste",
+            },
+            actor="tester",
+        )
+        original_ids = list(envelope.items.filter(is_active=True).values_list("contribution_legacy_id", flat=True))
+
+        result = update_launched_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-04",
+                "valor_total": "120,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Correcao auditada do envelope.",
+                "origem_operacional": "Teste corrigido",
+            },
+            actor="tester",
+        )
+
+        envelope.refresh_from_db()
+        self.assertEqual(envelope.total_informed, Decimal("120.00"))
+        self.assertEqual(envelope.status, "lancado")
+        self.assertEqual(len(result["contribution_ids"]), 1)
+        self.assertFalse(NativeContribution.objects.filter(legacy_id__in=original_ids, is_active=True).exists())
+        self.assertTrue(NativeContribution.objects.filter(legacy_id=result["contribution_ids"][0], is_active=True).exists())
+
+    def test_envelope_detail_shows_aux_contributor_when_no_person(self) -> None:
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            name="Contribuinte Auxiliar",
+            normalized_name="CONTRIBUINTE AUXILIAR",
+            primary_document="12345678900",
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=401,
+            organization_id=1,
+            native_aux_contributor_id=aux.id,
+            status="lancado",
+            is_active=True,
+        )
+
+        detail = get_envelope_detail_postgres(envelope.legacy_id)
+
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["contribuinte_nome"], aux.name)
+        self.assertEqual(detail["documento_principal"], aux.primary_document)
 
 
 class PersonStatementDataPostgresTests(TestCase):

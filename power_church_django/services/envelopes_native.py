@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 import re
+import shlex
+import unicodedata
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -41,6 +45,7 @@ ENVELOPE_PENDING_STATUS = "aguardando_digitacao"
 ENVELOPE_IN_PROGRESS_STATUS = "em_digitacao"
 ENVELOPE_IN_PROGRESS_TIMEOUT = timedelta(minutes=30)
 ENVELOPE_OPEN_STATUSES = {ENVELOPE_PENDING_STATUS, ENVELOPE_IN_PROGRESS_STATUS}
+ENVELOPE_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf", ".webp", ".tif", ".tiff"}
 ENVELOPE_STATUS_LABELS = {
     ENVELOPE_PENDING_STATUS: "Aguardando digitacao",
     ENVELOPE_IN_PROGRESS_STATUS: "Em digitacao",
@@ -199,13 +204,125 @@ def _native_envelope_identity(
     }
 
 
-def _store_native_envelope_file(*, envelope_id: int, competence: str, upload: Any, lot_folder: str = "") -> dict[str, object]:
+def _local_path_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme == "file":
+        text = unquote(parsed.path)
+    else:
+        text = unquote(text)
+    try:
+        parts = shlex.split(text)
+        if len(parts) == 1:
+            text = parts[0]
+    except ValueError:
+        text = text.strip("\"'")
+    return text.strip().strip("\"'")
+
+
+def _local_path_candidates(value: object) -> list[Path]:
+    text = _local_path_text(value)
+    if not text:
+        return []
+    variants = [text]
+    unescaped = text.replace("\\ ", " ")
+    if unescaped not in variants:
+        variants.append(unescaped)
+    candidates: list[Path] = []
+    for variant in variants:
+        for normalized in {variant, unicodedata.normalize("NFC", variant), unicodedata.normalize("NFD", variant)}:
+            path = Path(normalized).expanduser()
+            if path not in candidates:
+                candidates.append(path)
+    return candidates
+
+
+def _resolve_local_path(value: object) -> Path:
+    candidates = _local_path_candidates(value)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    if candidates:
+        return candidates[0]
+    return Path("")
+
+
+def _file_payload_from_bytes(filename: str, content_type: str, payload: bytes) -> dict[str, object]:
+    normalized_filename = normalize_query(filename) or "envelope"
+    suffix = Path(normalized_filename).suffix.lower()
+    if suffix not in ENVELOPE_ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(ENVELOPE_ALLOWED_EXTENSIONS))
+        raise LegacyWriteError(f"Formato de arquivo de envelope nao suportado. Use um destes: {allowed}.")
+    if not payload:
+        raise LegacyWriteError("O arquivo do envelope esta vazio.")
+    if len(payload) > 20 * 1024 * 1024:
+        raise LegacyWriteError("O arquivo do envelope excede 20 MB.")
+    return {
+        "filename": normalized_filename,
+        "suffix": suffix,
+        "content_type": normalize_query(content_type) or mimetypes.guess_type(normalized_filename)[0] or "",
+        "payload": payload,
+        "size": len(payload),
+        "hash": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def _file_payload_from_path(path_value: object) -> dict[str, object]:
+    source_path = _resolve_local_path(path_value)
+    if not source_path.exists() or not source_path.is_file():
+        raise LegacyWriteError(f"O caminho local informado para o envelope nao foi encontrado: {source_path}")
+    return _file_payload_from_bytes(
+        source_path.name,
+        mimetypes.guess_type(source_path.name)[0] or "",
+        source_path.read_bytes(),
+    )
+
+
+def _file_payload_from_upload(upload: Any) -> dict[str, object]:
+    filename = normalize_query(getattr(upload, "name", "") or "envelope")
+    chunks = getattr(upload, "chunks", None)
+    payload = b"".join(chunks()) if callable(chunks) else bytes(upload.read())
+    return _file_payload_from_bytes(filename, normalize_query(getattr(upload, "content_type", "")), payload)
+
+
+def _uploaded_file_payload(upload: Any, local_path: object = "") -> dict[str, object]:
+    path_text = normalize_query(local_path)
+    if upload is None and path_text:
+        return _file_payload_from_path(path_text)
     if upload is None:
+        raise LegacyWriteError("Anexe a imagem ou PDF do envelope para preservar a auditoria.")
+    return _file_payload_from_upload(upload)
+
+
+def _local_envelope_files(folder_value: object) -> list[Path]:
+    if not _local_path_text(folder_value):
+        return []
+    folder = _resolve_local_path(folder_value)
+    if not folder.exists() or not folder.is_dir():
+        raise LegacyWriteError(f"A pasta local informada para envelopes nao foi encontrada: {folder}")
+    files = [
+        path
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() in ENVELOPE_ALLOWED_EXTENSIONS and not path.name.startswith(".")
+    ]
+    return sorted(files, key=lambda path: path.name.lower())
+
+
+def _store_native_envelope_file(
+    *,
+    envelope_id: int,
+    competence: str,
+    file_payload: dict[str, object] | None,
+    lot_folder: str = "",
+) -> dict[str, object]:
+    if not file_payload:
         return {"filename": "", "hash": "", "content_type": "", "size": 0, "path": ""}
-    content = upload.read()
-    file_hash = hashlib.sha256(content).hexdigest()
-    original_name = getattr(upload, "name", "") or f"envelope_{envelope_id}"
-    suffix = Path(original_name).suffix or ".bin"
+    content = bytes(file_payload.get("payload") or b"")
+    file_hash = str(file_payload.get("hash") or hashlib.sha256(content).hexdigest())
+    original_name = str(file_payload.get("filename") or "") or f"envelope_{envelope_id}"
+    suffix = str(file_payload.get("suffix") or Path(original_name).suffix or ".bin")
     folder = Path(envelope_upload_root()) / "native" / (competence or "sem_competencia")
     if lot_folder:
         folder = folder / lot_folder
@@ -216,8 +333,8 @@ def _store_native_envelope_file(*, envelope_id: int, competence: str, upload: An
     return {
         "filename": original_name,
         "hash": file_hash,
-        "content_type": getattr(upload, "content_type", "") or "",
-        "size": len(content),
+        "content_type": str(file_payload.get("content_type") or ""),
+        "size": int(file_payload.get("size") or len(content)),
         "path": str(path),
     }
 
@@ -360,30 +477,7 @@ def apply_envelope_profile_update_postgres(update_id: int, actor: str = "") -> d
     if not phone_value:
         raise LegacyWriteError("O telefone sugerido pelo envelope esta vazio.")
     with transaction.atomic():
-        person.primary_phone = phone_value
-        person.save(update_fields=["primary_phone", "synced_at"])
-        contact = (
-            PersonContactSnapshot.objects.filter(person=person, contact_type="telefone", is_primary=True)
-            .order_by("legacy_id")
-            .first()
-        )
-        normalized_value = normalize_query(phone_value)
-        if contact is None:
-            next_legacy_id = int(PersonContactSnapshot.objects.aggregate(value=models.Max("legacy_id")).get("value") or 0) + 1
-            PersonContactSnapshot.objects.create(
-                legacy_id=next_legacy_id,
-                organization_id=int(person.organization_id or update.organization_id or 0),
-                person=person,
-                contact_type="telefone",
-                value=phone_value,
-                normalized_value=normalized_value,
-                is_primary=True,
-            )
-        else:
-            contact.value = phone_value
-            contact.normalized_value = normalized_value
-            contact.is_primary = True
-            contact.save(update_fields=["value", "normalized_value", "is_primary", "synced_at"])
+        _apply_phone_to_person_snapshot(person, phone_value, organization_id=int(update.organization_id or 0))
         update.current_value = phone_value
         update.status = NativeEnvelopeProfileUpdate.Status.APPLIED
         update.notes = "Aplicado automaticamente na ficha a partir do envelope, com auditoria preservada."
@@ -434,6 +528,33 @@ def backfill_envelope_profile_updates_postgres(actor: str = "") -> dict[str, int
         scanned += 1
         created += int(refresh_envelope_profile_updates_postgres(envelope, actor=actor).get("created") or 0)
     return {"scanned": scanned, "created": created}
+
+
+def _apply_phone_to_person_snapshot(person: PersonSnapshot, phone_value: str, *, organization_id: int = 0) -> None:
+    person.primary_phone = phone_value
+    person.save(update_fields=["primary_phone", "synced_at"])
+    contact = (
+        PersonContactSnapshot.objects.filter(person=person, contact_type="telefone", is_primary=True)
+        .order_by("legacy_id")
+        .first()
+    )
+    normalized_value = normalize_query(phone_value)
+    if contact is None:
+        next_legacy_id = int(PersonContactSnapshot.objects.aggregate(value=models.Max("legacy_id")).get("value") or 0) + 1
+        PersonContactSnapshot.objects.create(
+            legacy_id=next_legacy_id,
+            organization_id=int(person.organization_id or organization_id or 0),
+            person=person,
+            contact_type="telefone",
+            value=phone_value,
+            normalized_value=normalized_value,
+            is_primary=True,
+        )
+        return
+    contact.value = phone_value
+    contact.normalized_value = normalized_value
+    contact.is_primary = True
+    contact.save(update_fields=["value", "normalized_value", "is_primary", "synced_at"])
 
 
 def _participant_options_native(
@@ -660,6 +781,7 @@ def _materialize_native_envelope(
     envelope.traceability_status = _clean_optional_text(get("rastreio_status_conciliacao", "")) or "pendente"
     envelope.traceability_notes = _clean_optional_text(get("rastreio_observacoes", ""))
     envelope.updated_by = actor
+    apply_phone_immediately = normalize_query(get("aplicar_telefone_na_ficha", "")).lower() in {"1", "on", "true", "sim"}
     update_fields = [
         "lot_name",
         "competence",
@@ -700,6 +822,12 @@ def _materialize_native_envelope(
         update_fields.append("created_by")
     with transaction.atomic():
         envelope.save(update_fields=update_fields)
+        if apply_phone_immediately and int(envelope.person_legacy_id or 0) and envelope.informed_phone:
+            person = PersonSnapshot.objects.filter(legacy_id=int(envelope.person_legacy_id or 0), is_active=True).first()
+            if person is not None:
+                _, current_phone_values = _current_phone_values(int(envelope.person_legacy_id or 0))
+                if _digits_only(envelope.informed_phone) not in current_phone_values:
+                    _apply_phone_to_person_snapshot(person, envelope.informed_phone, organization_id=organization_id)
         previous_items = list(envelope.items.filter(is_active=True))
         previous_contribution_ids = [int(item.contribution_legacy_id or 0) for item in previous_items if int(item.contribution_legacy_id or 0)]
         envelope.items.filter(is_active=True).update(is_active=False)
@@ -789,16 +917,17 @@ def create_envelope_contribution_batch_postgres(payload: Any, upload: Any, actor
     envelope_legacy_id = _next_native_envelope_legacy_id()
     received_on = normalize_query(getattr(payload, "get", lambda *_args, **_kwargs: "")("data_recebimento", ""))
     competence = competencia_from_date(received_on)[0] if received_on else "sem_competencia"
-    file_payload = _store_native_envelope_file(envelope_id=envelope_legacy_id, competence=competence, upload=upload)
+    file_payload = _uploaded_file_payload(upload, getattr(payload, "get", lambda *_args, **_kwargs: "")("imagem_envelope_path", ""))
+    stored_file = _store_native_envelope_file(envelope_id=envelope_legacy_id, competence=competence, file_payload=file_payload)
     envelope = NativeEnvelope.objects.create(
         legacy_id=envelope_legacy_id,
         organization_id=_default_organization_id(),
         status=ENVELOPE_PENDING_STATUS,
-        image_original_name=str(file_payload.get("filename") or ""),
-        image_hash=str(file_payload.get("hash") or ""),
-        image_content_type=str(file_payload.get("content_type") or ""),
-        image_size=int(file_payload.get("size") or 0),
-        image_path=str(file_payload.get("path") or ""),
+        image_original_name=str(stored_file.get("filename") or ""),
+        image_hash=str(stored_file.get("hash") or ""),
+        image_content_type=str(stored_file.get("content_type") or ""),
+        image_size=int(stored_file.get("size") or 0),
+        image_path=str(stored_file.get("path") or ""),
         is_active=True,
         created_by=actor,
         updated_by=actor,
@@ -821,9 +950,11 @@ def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[
     lot_name = normalize_query(get("nome_lote", ""))
     if not lot_name:
         raise LegacyWriteError("Informe o nome do lote.")
-    uploads = list(uploads or [])
-    if not uploads:
-        raise LegacyWriteError("Selecione ao menos uma imagem/PDF para o lote.")
+    upload_payloads = [_file_payload_from_upload(upload) for upload in list(uploads or [])]
+    upload_payloads.extend(_file_payload_from_path(path) for path in _local_envelope_files(get("pasta_origem", "")))
+    upload_payloads = sorted(upload_payloads, key=lambda item: str(item.get("filename") or "").casefold())
+    if not upload_payloads:
+        raise LegacyWriteError("Selecione arquivos ou informe uma pasta local com imagens/PDFs de envelopes.")
     lot_legacy_id = _next_native_envelope_lot_legacy_id()
     lot_folder = _slug_folder(lot_name)
     with transaction.atomic():
@@ -848,12 +979,13 @@ def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[
         )
         envelope_ids: list[int] = []
         duplicates: list[int] = []
-        for order, upload in enumerate(sorted(uploads, key=lambda item: str(getattr(item, "name", "")).casefold()), start=1):
-            envelope_legacy_id = _next_native_envelope_legacy_id() + (order - 1)
+        next_envelope_legacy_id = _next_native_envelope_legacy_id()
+        for order, upload_payload in enumerate(upload_payloads, start=1):
+            envelope_legacy_id = next_envelope_legacy_id + (order - 1)
             file_payload = _store_native_envelope_file(
                 envelope_id=envelope_legacy_id,
                 competence=competence,
-                upload=upload,
+                file_payload=upload_payload,
                 lot_folder=lot_folder,
             )
             duplicate = NativeEnvelope.objects.filter(image_hash=str(file_payload.get("hash") or ""), is_active=True).exists()
@@ -971,6 +1103,7 @@ def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
                 "observacoes": row.notes or "",
                 "detail_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/",
                 "launch_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/launch/" if row.status in ENVELOPE_OPEN_STATUSES else "",
+                "edit_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/edit/" if row.status == "lancado" else "",
                 "image_url": f"/contributions/envelopes/{int(row.legacy_id or 0)}/image/" if row.image_path else "",
             }
         )
@@ -1269,6 +1402,11 @@ def get_envelope_detail_postgres(envelope_id: int) -> dict[str, Any] | None:
     if envelope is None:
         return None
     person = PersonSnapshot.objects.filter(legacy_id=int(envelope.person_legacy_id or 0)).first() if int(envelope.person_legacy_id or 0) else None
+    aux_contributor = (
+        NativeAuxContributor.objects.filter(pk=int(envelope.native_aux_contributor_id or 0), is_active=True).first()
+        if int(envelope.native_aux_contributor_id or 0)
+        else None
+    )
     profile_updates = []
     for update in envelope.profile_updates.order_by("status", "field_name", "id"):
         update_person = (
@@ -1310,9 +1448,9 @@ def get_envelope_detail_postgres(envelope_id: int) -> dict[str, Any] | None:
         "pessoa_nome": person.name if person else "",
         "pessoa_url": f"/people/{int(person.legacy_id or 0)}/" if person else "",
         "pessoa_cpf": person.cpf if person else "",
-        "contribuinte_nome": "",
+        "contribuinte_nome": aux_contributor.name if aux_contributor else "",
         "contribuinte_url": "",
-        "documento_principal": "",
+        "documento_principal": aux_contributor.primary_document if aux_contributor else "",
         "forma": envelope.receipt_method_name or "Nao informada",
         "origem_operacional": envelope.source or "",
         "traceability": {

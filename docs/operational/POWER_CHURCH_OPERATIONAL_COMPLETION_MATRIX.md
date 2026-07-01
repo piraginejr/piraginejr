@@ -2,7 +2,7 @@
 
 - Data: 2026-07-01
 - Objetivo: medir se o operador consegue executar, no runtime Django + PostgreSQL + Docker, tudo o que fazia no sistema anterior.
-- Escopo: mapeamento e classificacao operacional. Nenhuma correcao de codigo foi aplicada nesta etapa.
+- Escopo: mapeamento e classificacao operacional do estado atual do runtime, considerando as correcoes ja incorporadas ate esta data.
 
 ## Fontes usadas
 
@@ -11,7 +11,7 @@
   - `power_church_django/apps/*/urls.py`
 - Views, services e templates dos modulos ativos.
 - Relatorios gerados:
-  - `reports/regression_audit_20260701_183556.md`
+  - `reports/regression_audit_20260701_193036.md`
   - `reports/regression_warns_triage_20260701_175638.md`
 - Menus visiveis em `power_church_django/templates/power_church_django/base.html`
 - Modelos ativos em `power_church_django/apps/*/models.py`
@@ -45,7 +45,7 @@ Os percentuais abaixo sao estimativas operacionais, nao metricas matematicas exa
 
 Hoje, o operador **consegue executar uma fatia ainda maior do nucleo operacional**, e a principal lacuna estrutural anterior, **o enforcement de permissoes por modulo**, foi fechada com evidencia tecnica no runtime atual.
 
-O sistema agora esta **estimado em 84% de operacionalidade geral**.
+O sistema agora esta **estimado em 85% de operacionalidade geral**.
 
 O miolo de:
 
@@ -70,7 +70,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 
 | Indicador | Antes | Depois | Evolucao |
 | --- | ---: | ---: | ---: |
-| Operacionalidade geral estimada | `77%` | `84%` | `+7 p.p.` |
+| Operacionalidade geral estimada | `77%` | `85%` | `+8 p.p.` |
 | FAILs na `regression_audit` | `0` | `0` | estavel |
 | WARNs na `regression_audit` | `19` | `19` | estavel |
 | Enforcement de permissao por view | `Quebrada` | `Operacional` | ganho estrutural |
@@ -78,7 +78,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 
 ### Percentual geral atualizado
 
-- **Operacionalidade geral estimada:** `84%`
+- **Operacionalidade geral estimada:** `85%`
 
 ### Percentual por area e evolucao
 
@@ -87,7 +87,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 | Pessoas / Secretaria | `80%` | `83%` | Base forte: lista, ficha, edicao, familia, merge e importacao visiveis. Ganha robustez porque agora a leitura/escrita sensivel esta protegida por perfil. |
 | Contribuicoes | `78%` | `81%` | Lista, detalhe, extrato e contribuintes auxiliares existem. Fluxos continuam fortes e agora protegidos por modulo; faltam homologacoes humanas de escrita. |
 | Recibos | `82%` | `84%` | Hub, geracao, detalhe, PDF e monitor existem. Falta validar disparo real e fila em campanha viva na nuvem. |
-| Envelopes | `76%` | `79%` | Nucleo existe, trava de concorrencia foi tratada e o acesso esta protegido. Ainda faltam cenarios humanos por estado real do envelope. |
+| Envelopes | `76%` | `88%` | Fluxo fim a fim foi reforcado com suporte real a arquivo/pasta local, edicao visivel no lote, lancamento/ignorar/correcao cobertos em teste e auditoria sem FAILs da area. Restam amostras humanas de envelope lancado e sugestao cadastral viva. |
 | Importacoes | `72%` | `75%` | Importacao de pessoas e auditoria de extrato existem; com permissoes corrigidas, falta aprofundar reprocesso, preparo e encerramento. |
 | Auditoria | `88%` | `90%` | Auditoria operacional, tecnica, Django e de e-mails formam um modulo consistente e agora protegido por perfil. |
 | Relatorios | `92%` | `93%` | HTML, PDF e filtros principais estao funcionando bem. |
@@ -125,7 +125,6 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
    - Impacto: dependencia maior de operador tecnico.
 
 3. **Restante dos WARNs ainda aponta lacunas reais de maturidade**
-   - Envelopes em estados amostrados com `404` em `launch/edit`.
    - Fotos ausentes em amostras reais.
    - Exportacoes e `/people/families/` com lentidao perceptivel.
    - 6 movimentos de extrato com referencia orfa em lote piloto.
@@ -201,11 +200,11 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 | Envelopes | Abrir imagem/PDF anexado | Operacional | `/contributions/envelopes/<id>/image/` com `200` | `apps/contributions/views.py:envelope_image` | Baixo | Alta | Manter cobertura |
 | Envelopes | Abrir proximo pendente do lote | Operacional | `/contributions/envelopes/lots/<id>/next/` redirecionando corretamente; testes de lock por operador presentes | `apps/contributions/views.py:envelope_lot_next`, `apps/contributions/tests.py` | Baixo | Alta | Manter sentinela |
 | Envelopes | Controle de concorrencia (`em_digitacao`) | Operacional | Testes unitarios cobrindo skip, reclaim e bloqueio entre operadores | `apps/contributions/tests.py` | Baixo | Alta | Incluir no verificador mestre sempre |
-| Envelopes | Lancar envelope pendente | Exige validacao manual | GET e contexto ativos; POST precisa prova humana mais ampla por estado e rateio | `apps/contributions/views.py:envelope_launch` | Medio | Alta | Homologar cenarios de 1 e varias linhas |
-| Envelopes | Corrigir envelope lancado | Exige validacao manual | Fluxo existe, mas a auditoria mostrou que a acao depende do status certo; precisa rodada manual real | `apps/contributions/views.py:envelope_edit`, `services/envelopes_native.py` | Medio | Alta | Homologar em envelope realmente `lancado` |
-| Envelopes | Ignorar envelope pendente | Exige validacao manual | UI e service existem; auditoria automatica cobriu GET/redirect, nao operacao humana fim a fim | `apps/contributions/views.py:envelope_ignore` | Medio | Media | Validar com rollback controlado |
-| Envelopes | Criar lote manual / subir envelope | Exige validacao manual | Rotas existem; ainda sem prova automatica forte recente | `apps/contributions/urls.py`, `/contributions/envelopes/new/`, `/lots/new/` | Medio | Media | Homologar com massa operacional |
-| Envelopes | Aplicar/ignorar sugestoes cadastrais por envelope | Exige validacao manual | Rotas existem, mas sem cobertura recente na regressao | `apps/contributions/urls.py`, `profile-updates/*` | Medio | Media | Adicionar ao roteiro humano |
+| Envelopes | Lancar envelope pendente | Operacional | `regression_audit` validou `launch` com `200`; testes automatizados cobrem lancamento, criacao de contribuicao e fechamento do lote | `apps/contributions/views.py:envelope_launch`, `apps/contributions/tests.py` | Medio | Alta | Homologar cenarios humanos de rateio multiplo |
+| Envelopes | Corrigir envelope lancado | Parcialmente operacional | Service de correcao coberto em teste, detalhe do lote agora expone `Editar`, mas o banco real atual nao trouxe amostra `lancado` recente para a rota | `apps/contributions/views.py:envelope_edit`, `services/envelopes_native.py`, `templates/.../envelope_lot_detail.html` | Medio | Alta | Validar com envelope realmente `lancado` no runtime vivo |
+| Envelopes | Ignorar envelope pendente | Operacional | Service coberto em teste e lotes atualizam status corretamente; GET/redirect validado na auditoria | `apps/contributions/views.py:envelope_ignore`, `apps/contributions/tests.py` | Baixo | Media | Manter cobertura e homologar uma rodada humana simples |
+| Envelopes | Criar lote manual / subir envelope | Operacional | Criacao de lote e registro manual aceitam upload e caminho/pasta local; testes automatizados cobrem os dois fluxos | `apps/contributions/views.py:envelope_new`, `envelope_lot_new`, `services/envelopes_native.py`, `apps/contributions/tests.py` | Medio | Alta | Homologar com massa operacional do scanner |
+| Envelopes | Aplicar/ignorar sugestoes cadastrais por envelope | Parcialmente operacional | Services e rotas existem; sem amostra viva recente de `profile_update` na regressao para exercitar o ciclo completo na UI | `apps/contributions/urls.py`, `services/envelopes_native.py`, `profile-updates/*` | Medio | Media | Validar com envelope que gere telefone/endereco divergente |
 
 ### 5. Importacoes
 

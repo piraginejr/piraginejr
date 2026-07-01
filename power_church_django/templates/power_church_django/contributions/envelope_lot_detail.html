@@ -71,6 +71,8 @@
                 <td>
                   {% if item.launch_url %}
                     <a class="button" href="{{ item.launch_url }}">Digitar</a>
+                  {% elif item.edit_url %}
+                    <a class="button secondary" href="{{ item.edit_url }}">Editar</a>
                   {% else %}
                     <a class="button secondary" href="{{ item.detail_url }}">Abrir</a>
                   {% endif %}

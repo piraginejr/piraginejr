@@ -77,6 +77,8 @@ class EntitySamples:
     envelope_ids: list[int] = field(default_factory=list)
     envelope_image_ids: list[int] = field(default_factory=list)
     envelope_lot_ids: list[int] = field(default_factory=list)
+    envelope_launch_ids: list[int] = field(default_factory=list)
+    envelope_edit_ids: list[int] = field(default_factory=list)
     envelope_profile_update_ids: list[int] = field(default_factory=list)
     contributor_ids: list[int] = field(default_factory=list)
     people_import_lot_ids: list[int] = field(default_factory=list)
@@ -242,6 +244,16 @@ def _collect_samples() -> EntitySamples:
         int(row.legacy_id or 0)
         for row in envelopes
         if int(row.legacy_id or 0) and str(row.image_path or "").strip()
+    ][:5]
+    sample.envelope_launch_ids = [
+        int(row.legacy_id or 0)
+        for row in envelopes
+        if int(row.legacy_id or 0) and str(row.status or "") in {"aguardando_digitacao", "em_digitacao"}
+    ][:5]
+    sample.envelope_edit_ids = [
+        int(row.legacy_id or 0)
+        for row in envelopes
+        if int(row.legacy_id or 0) and str(row.status or "") == "lancado"
     ][:5]
     envelope_lots = list(NativeEnvelopeLot.objects.order_by("-competence_order", "-legacy_id")[:8])
     sample.envelope_lot_ids = [int(row.legacy_id or 0) for row in envelope_lots[:5] if int(row.legacy_id or 0)]
@@ -999,6 +1011,18 @@ def _record_operator_scenarios(
             area="Contribuicoes",
             expected_kind="html",
         )
+
+    if not samples.envelope_launch_ids:
+        results.append(
+            AuditResult(
+                item="Envelope - lancamento",
+                result="SKIP",
+                probable_area="Contribuicoes",
+                details="Sem amostra real de envelope pendente/em_digitacao para validar a tela de lancamento.",
+                user_label=samples.user_label,
+            )
+        )
+    for envelope_id in samples.envelope_launch_ids[:2]:
         _record_page_check(
             results,
             _request_url(authenticated_client, f"/contributions/envelopes/{envelope_id}/launch/", user_label=samples.user_label),
@@ -1006,6 +1030,18 @@ def _record_operator_scenarios(
             area="Contribuicoes",
             expected_kind="route",
         )
+
+    if not samples.envelope_edit_ids:
+        results.append(
+            AuditResult(
+                item="Envelope - edicao",
+                result="SKIP",
+                probable_area="Contribuicoes",
+                details="Sem amostra real de envelope lancado para validar a tela de edicao.",
+                user_label=samples.user_label,
+            )
+        )
+    for envelope_id in samples.envelope_edit_ids[:2]:
         _record_page_check(
             results,
             _request_url(authenticated_client, f"/contributions/envelopes/{envelope_id}/edit/", user_label=samples.user_label),
@@ -1452,6 +1488,10 @@ def _values_for_placeholder(*, name: str, route: RouteInfo, samples: EntitySampl
     if name == "contributor_id":
         return [str(value) for value in samples.contributor_ids]
     if name == "envelope_id":
+        if "/contributions/envelopes/" in path and "/edit/" in path:
+            return [str(value) for value in samples.envelope_edit_ids]
+        if "/contributions/envelopes/" in path and ("/launch/" in path or "/ignore/" in path):
+            return [str(value) for value in samples.envelope_launch_ids]
         return [str(value) for value in samples.envelope_ids]
     if name == "update_id":
         return [str(value) for value in samples.envelope_profile_update_ids]

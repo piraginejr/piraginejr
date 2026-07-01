@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+MOJIBAKE_MARKERS = ("Ã", "Â", "�", "├", "┬", "╟", "╢", "╣", "║", "╗", "╝", "╚", "╔", "╩", "╦", "╠", "═", "╬")
+
 
 def moneyless_int(value: object) -> int:
     try:
@@ -11,8 +13,30 @@ def moneyless_int(value: object) -> int:
         return 0
 
 
+def repair_mojibake_text(value: object) -> str:
+    text = " ".join(str(value or "").strip().split())
+    if not text or not any(marker in text for marker in MOJIBAKE_MARKERS):
+        return text
+    candidates = [text]
+    for encoding in ("cp437", "latin-1", "cp1252"):
+        try:
+            candidate = text.encode(encoding).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        candidates.append(candidate)
+
+    def score(candidate: str) -> tuple[int, int, int, int]:
+        suspicious = sum(candidate.count(marker) for marker in MOJIBAKE_MARKERS)
+        replacement = candidate.count("\ufffd")
+        alpha_penalty = -sum(ch.isalpha() for ch in candidate)
+        return (suspicious, replacement, alpha_penalty, len(candidate))
+
+    best = min(candidates, key=score)
+    return best if score(best) < score(text) else text
+
+
 def normalize_query(value: object) -> str:
-    return " ".join(str(value or "").strip().split())
+    return repair_mojibake_text(value)
 
 
 def normalize_match_name(value: object) -> str:

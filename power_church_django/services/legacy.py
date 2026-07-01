@@ -288,15 +288,15 @@ def _list_people_from_snapshots(q: str = "", status: str = "", city: str = "", l
     items = [
         {
             "id": row.legacy_id,
-            "codigo": row.internal_code or "",
-            "nome": row.name or "",
-            "cpf": row.cpf or "",
+            "codigo": normalize_query(row.internal_code),
+            "nome": normalize_query(row.name),
+            "cpf": normalize_query(row.cpf),
             "status": format_status(row.status),
             "status_raw": row.status or "",
             "sigla": status_sigla(row.status, True),
             "ativo": "Sim" if row.is_active else "Nao",
-            "email": row.primary_email or "",
-            "telefone": row.primary_phone or "",
+            "email": normalize_query(row.primary_email),
+            "telefone": normalize_query(row.primary_phone),
         }
         for row in rows
     ]
@@ -338,18 +338,18 @@ def _search_people_for_relationship_from_snapshots(person_id: int, q: str = "", 
     return [
         {
             "id": moneyless_int(row.legacy_id),
-            "nome": row.name or "",
-            "codigo": row.internal_code or "",
+            "nome": normalize_query(row.name),
+            "codigo": normalize_query(row.internal_code),
             "cpf": format_cpf(row.cpf),
             "status": format_status(row.status),
             "sigla": status_sigla(row.status, True),
             "label": " · ".join(
                 part
                 for part in [
-                    row.name or "",
+                    normalize_query(row.name),
                     status_sigla(row.status, True),
                     f"CPF {format_cpf(row.cpf)}" if row.cpf else "CPF -",
-                    f"Cod. {row.internal_code}" if row.internal_code else "",
+                    f"Cod. {normalize_query(row.internal_code)}" if row.internal_code else "",
                 ]
                 if part
             ),
@@ -377,14 +377,14 @@ def _family_relationships_from_snapshots(person_snapshot, relationship_model) ->
             {
                 "id": moneyless_int(row.legacy_id),
                 "related_id": moneyless_int(related.legacy_id),
-                "related_nome": related.name or "",
-                "codigo": related.internal_code or "",
+                "related_nome": normalize_query(related.name),
+                "codigo": normalize_query(related.internal_code),
                 "cpf": format_cpf(related.cpf),
                 "status": format_status(related.status),
                 "sigla": status_sigla(related.status, True),
-                "tipo": row.relationship_type or "",
+                "tipo": normalize_query(row.relationship_type),
                 "tipo_label": FAMILY_RELATIONSHIP_LABELS.get(row.relationship_type or "", row.relationship_type or ""),
-                "observacoes": row.notes or "",
+                "observacoes": normalize_query(row.notes),
                 "automatico_endereco": "AUTOMATICAMENTE POR ENDERECO" in normalize_match_name(row.notes or ""),
                 "criado_em": br_datetime(row.created_at_legacy),
             }
@@ -482,8 +482,8 @@ def _family_suggestions_from_snapshots(person_snapshot, address_model, relations
         suggestions.append(
             {
                 "related_id": related_legacy_id,
-                "related_nome": address.person.name or "",
-                "codigo": address.person.internal_code or "",
+                "related_nome": normalize_query(address.person.name),
+                "codigo": normalize_query(address.person.internal_code),
                 "cpf": format_cpf(address.person.cpf),
                 "status": format_status(address.person.status),
                 "sigla": status_sigla(address.person.status, True),
@@ -850,54 +850,58 @@ def get_person_detail(person_id: int) -> dict[str, Any] | None:
             return {
                 "person": {
                     "id": person_snapshot.legacy_id,
-                    "codigo": person_snapshot.internal_code or "",
-                    "nome": person_snapshot.name or "",
-                    "nome_social": person_snapshot.social_name or "",
-                    "cpf": person_snapshot.cpf or "",
-                    "rg": person_snapshot.rg or "",
+                    "codigo": normalize_query(person_snapshot.internal_code),
+                    "nome": normalize_query(person_snapshot.name),
+                    "nome_social": normalize_query(person_snapshot.social_name),
+                    "cpf": normalize_query(person_snapshot.cpf),
+                    "rg": normalize_query(person_snapshot.rg),
                     "data_nascimento": br_date(person_snapshot.birth_date_raw),
-                    "sexo": person_snapshot.sex or "",
-                    "estado_civil": person_snapshot.marital_status or "",
-                    "email": person_snapshot.primary_email or "",
-                    "telefone": person_snapshot.primary_phone or "",
-                    "whatsapp": person_snapshot.primary_whatsapp or "",
+                    "sexo": normalize_query(person_snapshot.sex),
+                    "estado_civil": normalize_query(person_snapshot.marital_status),
+                    "email": normalize_query(person_snapshot.primary_email),
+                    "telefone": normalize_query(person_snapshot.primary_phone),
+                    "whatsapp": normalize_query(person_snapshot.primary_whatsapp),
                     "status": format_status(person_snapshot.status),
                     "status_raw": person_snapshot.status or "",
                     "sigla": status_sigla(person_snapshot.status, True),
                     "ativo": "Sim" if person_snapshot.is_active else "Nao",
-                    "observacoes": person_snapshot.notes or "",
+                    "observacoes": normalize_query(person_snapshot.notes),
                     "criado_em": br_datetime(person_snapshot.created_at_legacy),
                     "atualizado_em": br_datetime(person_snapshot.updated_at_legacy),
-                    "photo_url": member_photo_url(person_snapshot.legacy_id, person_snapshot.cpf, person_snapshot.name),
+                    "photo_url": member_photo_url(
+                        person_snapshot.legacy_id,
+                        normalize_query(person_snapshot.cpf),
+                        normalize_query(person_snapshot.name),
+                    ),
                 },
                 "profiles": [
                     {
-                        "perfil": row.profile or "",
+                        "perfil": normalize_query(row.profile),
                         "data_inicio": row.start_date_raw or "",
                         "data_fim": row.end_date_raw or "",
-                        "observacoes": row.notes or "",
+                        "observacoes": normalize_query(row.notes),
                     }
                     for row in profiles
                 ],
                 "contacts": [
                     {
-                        "tipo": row.contact_type,
-                        "valor": row.value,
+                        "tipo": normalize_query(row.contact_type),
+                        "valor": normalize_query(row.value),
                         "principal": row.is_primary,
-                        "observacoes": row.notes,
+                        "observacoes": normalize_query(row.notes),
                     }
                     for row in contacts
                 ],
                 "addresses": [
                     {
-                        "tipo": row.address_type,
-                        "cep": row.cep,
-                        "logradouro": row.street,
-                        "numero": row.number,
-                        "complemento": row.complement,
-                        "bairro": row.neighborhood,
-                        "cidade": row.city,
-                        "uf": row.state,
+                        "tipo": normalize_query(row.address_type),
+                        "cep": normalize_query(row.cep),
+                        "logradouro": normalize_query(row.street),
+                        "numero": normalize_query(row.number),
+                        "complemento": normalize_query(row.complement),
+                        "bairro": normalize_query(row.neighborhood),
+                        "cidade": normalize_query(row.city),
+                        "uf": normalize_query(row.state),
                         "principal": row.is_primary,
                     }
                     for row in addresses
@@ -908,12 +912,12 @@ def get_person_detail(person_id: int) -> dict[str, Any] | None:
                 "family_relationship_type_options": FAMILY_RELATIONSHIP_OPTIONS,
                 "history": [
                     {
-                        "tipo_evento": row.event_type or "",
+                        "tipo_evento": normalize_query(row.event_type),
                         "data_evento": br_date(row.event_date_raw),
-                        "titulo": row.title or "",
-                        "descricao": row.description or "",
-                        "origem": row.origin or "",
-                        "destino": row.destination or "",
+                        "titulo": normalize_query(row.title),
+                        "descricao": normalize_query(row.description),
+                        "origem": normalize_query(row.origin),
+                        "destino": normalize_query(row.destination),
                         "criado_em": br_datetime(row.created_at_legacy),
                     }
                     for row in history
@@ -921,22 +925,22 @@ def get_person_detail(person_id: int) -> dict[str, Any] | None:
                 "contributors": [
                     {
                         "id": moneyless_int(row.legacy_id),
-                        "nome": row.name or "",
-                        "tipo": row.contributor_type or "",
-                        "documento_principal": row.primary_document or "",
-                        "documento_tipo": row.document_type or "",
-                        "origem": row.origin or "",
-                        "qualidade": row.quality or "",
-                        "status": row.status or "",
+                        "nome": normalize_query(row.name),
+                        "tipo": normalize_query(row.contributor_type),
+                        "documento_principal": normalize_query(row.primary_document),
+                        "documento_tipo": normalize_query(row.document_type),
+                        "origem": normalize_query(row.origin),
+                        "qualidade": normalize_query(row.quality),
+                        "status": normalize_query(row.status),
                     }
                     for row in contributors
                 ],
                 "identifiers": [
                     {
-                        "tipo": row.identifier_type or "",
-                        "valor": row.value or "",
+                        "tipo": normalize_query(row.identifier_type),
+                        "valor": normalize_query(row.value),
                         "principal": row.is_primary,
-                        "observacoes": row.notes or "",
+                        "observacoes": normalize_query(row.notes),
                     }
                     for row in identifiers
                 ],

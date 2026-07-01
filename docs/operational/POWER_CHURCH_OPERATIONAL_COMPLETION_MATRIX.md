@@ -11,7 +11,7 @@
   - `power_church_django/apps/*/urls.py`
 - Views, services e templates dos modulos ativos.
 - Relatorios gerados:
-  - `reports/regression_audit_20260701_174754.md`
+  - `reports/regression_audit_20260701_183556.md`
   - `reports/regression_warns_triage_20260701_175638.md`
 - Menus visiveis em `power_church_django/templates/power_church_django/base.html`
 - Modelos ativos em `power_church_django/apps/*/models.py`
@@ -43,9 +43,9 @@ Os percentuais abaixo sao estimativas operacionais, nao metricas matematicas exa
 
 ### Resposta curta
 
-Hoje, o operador **consegue executar grande parte do nucleo operacional**, mas **ainda nao consegue fazer "tudo o que fazia antes" com seguranca e maturidade operacional completas**.
+Hoje, o operador **consegue executar uma fatia ainda maior do nucleo operacional**, e a principal lacuna estrutural anterior, **o enforcement de permissoes por modulo**, foi fechada com evidencia tecnica no runtime atual.
 
-O sistema esta **estimado em 77% de operacionalidade geral**.
+O sistema agora esta **estimado em 84% de operacionalidade geral**.
 
 O miolo de:
 
@@ -57,54 +57,78 @@ O miolo de:
 - relatorios,
 - PDFs,
 
-ja existe e roda em Django/PostgreSQL.
+ja existe e roda em Django/PostgreSQL com evidencias tecnicas fortes e, agora, com **bloqueio real de acesso por perfil** nas views sensiveis.
 
 O que ainda segura o selo de "100% operacional" nao e mais uma dependencia central do legado, e sim:
 
-- enforcement de perfis/permissoes;
 - validacao manual de fluxos de escrita mais sensiveis;
 - rotinas operacionais de nuvem/restore/rollback ainda muito concentradas em script e operador tecnico;
 - configuracoes operacionais ainda espalhadas, sem painel unico;
 - alguns fluxos automatizados de e-mail e campanha ainda sem prova operacional completa em nuvem.
 
-### Percentual geral estimado
+### Comparativo Antes / Depois
 
-- **Operacionalidade geral estimada:** `77%`
+| Indicador | Antes | Depois | Evolucao |
+| --- | ---: | ---: | ---: |
+| Operacionalidade geral estimada | `77%` | `84%` | `+7 p.p.` |
+| FAILs na `regression_audit` | `0` | `0` | estavel |
+| WARNs na `regression_audit` | `19` | `19` | estavel |
+| Enforcement de permissao por view | `Quebrada` | `Operacional` | ganho estrutural |
+| Usuarios sem grupo acessando modulos sensiveis | `HTTP 200` | `HTTP 403` | corrigido |
 
-### Percentual por area
+### Percentual geral atualizado
 
-| Area | Percentual estimado | Leitura resumida |
-| --- | ---: | --- |
-| Pessoas / Secretaria | `80%` | Base forte: lista, ficha, edicao, familia, merge e importacao visiveis. Ainda faltam validacoes humanas e maturidade de foto/alguns fluxos de escrita. |
-| Contribuicoes | `78%` | Lista, detalhe, extrato e contribuintes auxiliares existem. Fluxos de escrita mais sensiveis ainda pedem rodada humana controlada. |
-| Recibos | `82%` | Hub, geracao, detalhe, PDF e monitor existem. Falta validar melhor disparo real e fila em campanha viva. |
-| Envelopes | `76%` | Nucleo existe e trava de concorrencia foi tratada, mas lancamento/edicao/ignorar ainda precisam cobertura humana forte por estado. |
-| Importacoes | `72%` | Importacao de pessoas e auditoria de extrato existem, mas a trilha de lotes, reprocesso e encerramento ainda precisa homologacao mais profunda. |
-| Auditoria | `88%` | Auditoria operacional, tecnica, Django e de e-mails ja formam um modulo consistente. |
-| Relatorios | `92%` | HTML e filtros principais estao funcionando bem. |
-| Exports | `90%` | CSV e XLSX, inclusive dinamicos, estao respondendo corretamente. |
-| Impressoes / PDFs | `89%` | PDFs principais estao respondendo; impressao de tela ainda depende de validacao humana de navegador/impressora. |
-| Usuarios e permissoes | `52%` | Painel existe, grupos existem, mas a evidencia atual aponta falha grave de enforcement por perfil nas views. |
-| Configuracoes operacionais | `56%` | Regras de centavos e templates de e-mail existem, mas faltam painel unico e controles operacionais consolidados. |
-| Backup / operacoes | `74%` | Scripts e documentacao existem, mas boa parte ainda e tecnica, nao operacional simples para qualquer operador. |
-| E-mails / notificacoes | `73%` | Provider, templates, fila e auditoria existem; ainda falta prova operacional mais forte do envio automatico em campanha real na nuvem. |
+- **Operacionalidade geral estimada:** `84%`
+
+### Percentual por area e evolucao
+
+| Area | Antes | Depois | Leitura resumida |
+| --- | ---: | ---: | --- |
+| Pessoas / Secretaria | `80%` | `83%` | Base forte: lista, ficha, edicao, familia, merge e importacao visiveis. Ganha robustez porque agora a leitura/escrita sensivel esta protegida por perfil. |
+| Contribuicoes | `78%` | `81%` | Lista, detalhe, extrato e contribuintes auxiliares existem. Fluxos continuam fortes e agora protegidos por modulo; faltam homologacoes humanas de escrita. |
+| Recibos | `82%` | `84%` | Hub, geracao, detalhe, PDF e monitor existem. Falta validar disparo real e fila em campanha viva na nuvem. |
+| Envelopes | `76%` | `79%` | Nucleo existe, trava de concorrencia foi tratada e o acesso esta protegido. Ainda faltam cenarios humanos por estado real do envelope. |
+| Importacoes | `72%` | `75%` | Importacao de pessoas e auditoria de extrato existem; com permissoes corrigidas, falta aprofundar reprocesso, preparo e encerramento. |
+| Auditoria | `88%` | `90%` | Auditoria operacional, tecnica, Django e de e-mails formam um modulo consistente e agora protegido por perfil. |
+| Relatorios | `92%` | `93%` | HTML, PDF e filtros principais estao funcionando bem. |
+| Exports | `90%` | `90%` | CSV e XLSX, inclusive dinamicos, respondem corretamente; o que resta e performance. |
+| Impressoes / PDFs | `89%` | `90%` | PDFs principais estao respondendo; impressao de tela ainda depende de validacao humana de navegador/impressora. |
+| Usuarios e permissoes | `52%` | `90%` | Painel, grupos e permissoes padrao existem e o enforcement por view/modulo agora foi comprovado pela `regression_audit`. |
+| Configuracoes operacionais | `56%` | `56%` | Regras de centavos e templates de e-mail existem, mas faltam painel unico e controles operacionais consolidados. |
+| Backup / operacoes | `74%` | `74%` | Scripts e documentacao existem, mas boa parte ainda e tecnica, nao operacional simples para qualquer operador. |
+| E-mails / notificacoes | `73%` | `74%` | Provider, templates, fila e auditoria existem; ainda falta prova operacional forte do envio automatico em campanha real na nuvem. |
+
+### Evolucao por modulo
+
+| Modulo | Antes | Depois | Leitura da evolucao |
+| --- | --- | --- | --- |
+| Dashboard | Parcialmente confiavel | Operacional com controle de acesso | Continua funcional e agora bloqueia usuarios sem permissao. |
+| People | Operacional com risco de seguranca | Operacional protegido | O modulo segue forte; o ganho principal foi governanca de acesso. |
+| Contributors | Operacional com risco de seguranca | Operacional protegido | Lista e detalhe seguem estaveis, agora sob `view_contributors` / `manage_contributors`. |
+| Contributions | Operacional com risco de seguranca | Operacional protegido | Lista, detalhe, split, extrato e recibos continuam fortes com gate por perfil. |
+| Imports | Parcialmente operacional | Parcialmente operacional protegido | Permissoes fecharam, mas ainda faltam homologacoes de preparo/reprocesso/encerramento. |
+| Reports | Operacional com risco baixo | Operacional protegido | HTML/PDF seguem estaveis e agora respeitam perfil. |
+| Audit | Operacional com risco de exposicao | Operacional protegido | Ganhou fechamento claro do acesso ao modulo. |
+| Accounts | Parcialmente operacional | Parcialmente operacional protegido | Painel segue tecnico, mas agora so perfis corretos entram. |
 
 ## Bloqueadores imediatos
 
 Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 
-1. **Permissoes nao comprovadas por view e provavelmente nao aplicadas de fato**
-   - Evidencia: a `regression_audit` registrou `operador_shell` e `power_church_anonimo` acessando `dashboard`, `pessoas`, `contribuicoes`, `imports`, `relatorios` e `auditoria` com `HTTP 200`, mesmo sem grupos.
-   - Impacto: risco operacional e de seguranca.
-
-2. **Fluxos de escrita critica ainda sem homologacao manual completa no runtime atual**
+1. **Fluxos de escrita critica ainda sem homologacao manual completa no runtime atual**
    - Envelopes: lancar, corrigir, ignorar, reabrir por estados diferentes.
    - Importacoes: preparar, reprocessar e encerrar lote nativo.
    - Recibos: campanha automatica real e reprocessamento de fila com dados vivos.
 
-3. **Configuracao operacional espalhada**
+2. **Configuracao operacional espalhada**
    - Parte da operacao fica em tela, parte em script, parte em `.env`, parte em documentos.
    - Impacto: dependencia maior de operador tecnico.
+
+3. **Restante dos WARNs ainda aponta lacunas reais de maturidade**
+   - Envelopes em estados amostrados com `404` em `launch/edit`.
+   - Fotos ausentes em amostras reais.
+   - Exportacoes e `/people/families/` com lentidao perceptivel.
+   - 6 movimentos de extrato com referencia orfa em lote piloto.
 
 ## Pendencias importantes
 
@@ -113,7 +137,7 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 - otimizacao de `/people/families/` e exports;
 - prova de restore real do runtime;
 - validacao em nuvem de envio automatico via Microsoft Graph;
-- fechamento da matriz de permissao por perfil.
+- consolidacao do que deve permanecer CLI/tecnico e do que precisa virar trilha UI do operador.
 
 ## Melhorias futuras
 
@@ -223,7 +247,7 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 | Exports | Exportacao CSV dinamica | Operacional | Colunas selecionadas preservadas | `apps/people/views.py:export` | Baixo | Alta | Manter como sentinela |
 | Exports | Exportacao XLSX por preset | Operacional | `200` com content type correto | `apps/people/views.py:export` | Baixo | Alta | Manter como sentinela |
 | Exports | Exportacao XLSX dinamica | Operacional | `200` com arquivo valido | `apps/people/views.py:export` | Baixo | Alta | Manter como sentinela |
-| Exports | Performance dos exports | Melhoria futura | CSV/XLSX entre ~963 ms e ~1158 ms | `reports/regression_audit_20260701_174754.md` | Medio | Media | Otimizar dataset/query depois da estabilizacao |
+| Exports | Performance dos exports | Melhoria futura | CSV/XLSX entre ~994 ms e ~1170 ms | `reports/regression_audit_20260701_183556.md` | Medio | Media | Otimizar dataset/query depois da estabilizacao |
 
 ### 9. Impressoes / PDFs
 
@@ -244,7 +268,7 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 | Usuarios e permissoes | Relogin / troca de sessao | Operacional | `/accounts/relogin/` ativo | `apps/accounts/views.py:relogin` | Baixo | Media | Manter |
 | Usuarios e permissoes | Criar e atualizar usuarios | Operacional | Painel `/accounts/` permite criar primeiro admin e usuarios; formulario funcional | `apps/accounts/views.py:index`, `templates/accounts/index.html` | Medio | Alta | Homologar uma rodada simples no runtime |
 | Usuarios e permissoes | Grupos e permissoes padrao | Operacional | `regression_audit`: `grupos=5`, `permissoes=14`, `missing=-` | `services/access_control.py` | Baixo | Alta | Manter |
-| Usuarios e permissoes | Enforcement por perfil nas views | Quebrada | `regression_audit`: usuarios sem grupos acessando modulos sensiveis com `HTTP 200` | `reports/regression_audit_20260701_174754.md` | Alto | Critica | Mapear e aplicar gate por permissao em cada modulo |
+| Usuarios e permissoes | Enforcement por perfil nas views | Operacional | `regression_audit`: `operador_shell` e `power_church_anonimo` bloqueados com `HTTP 403` em dashboard, people, contributions, imports, reports, audit e accounts | `reports/regression_audit_20260701_183556.md`, `services/access_control.py` | Baixo | Alta | Manter como sentinela fixa da auditoria |
 | Usuarios e permissoes | Administracao via Django admin | Exige validacao manual | Link existe; nao ha prova recente de fluxo administrativo real | `templates/accounts/index.html`, `/admin/` | Medio | Media | Homologar com superusuario |
 
 ### 11. Configuracoes Operacionais
@@ -273,41 +297,31 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 | Area | Capacidade | Status | Evidencia | Arquivo / rota relacionada | Risco operacional | Prioridade | Proxima acao sugerida |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | E-mails / notificacoes | Provider Microsoft Graph configurado | Operacional | `regression_audit`: configuracao `OK`, sender presente | `services/mail_dispatch.py`, envs runtime | Medio | Alta | Manter e validar em nuvem apos cada release |
-| E-mails / notificacoes | Dry-run de envio com anexo | Operacional | `regression_audit` registrou `dry_run` bem-sucedido | `reports/regression_audit_20260701_174754.md` | Baixo | Media | Manter como smoke tecnico |
+| E-mails / notificacoes | Dry-run de envio com anexo | Operacional | `regression_audit` registrou `dry_run` bem-sucedido | `reports/regression_audit_20260701_183556.md` | Baixo | Media | Manter como smoke tecnico |
 | E-mails / notificacoes | Envio manual de extrato por e-mail | Exige validacao manual | View e trilha de auditoria existem; falta rodada humana recente completa | `apps/contributions/views.py:person_statement` | Medio | Alta | Homologar no runtime e depois na nuvem |
 | E-mails / notificacoes | Envio manual/automatico de recibo | Exige validacao manual | Views, templates, fila e services existem; falta prova operacional completa em campanha real | `apps/contributions/views.py`, `services/receipt_delivery.py` | Alto | Alta | Validar com campanha pequena real |
 | E-mails / notificacoes | Monitor e reprocesso da fila | Operacional | Tela rica, filtros, reprocesso e sincronizacao por item/filtro | `templates/receipts/queue_monitor.html` | Medio | Alta | Exercitar com itens reais na nuvem |
 | E-mails / notificacoes | Campanha consolidada automatica | Implementada mas inacessivel | Existe por `manage.py`, nao por trilha UI do operador | `apps/contributions/management/commands/run_consolidated_receipt_campaign.py` | Medio | Media | Decidir se segue tecnica ou vira acao de painel |
 | E-mails / notificacoes | Auditoria e reenvio de e-mails | Operacional | Tela de auditoria de e-mails e botao de reenviar ativos | `apps/audit/views.py`, `/audit/?modo=emails` | Medio | Alta | Homologar com caso de falha real |
 
-## Top 20 itens para chegar a 100% operacional
+## Top 10 prioridades restantes para chegar a 100%
 
-1. Aplicar e comprovar enforcement real de permissao por view/modulo.
-2. Homologar lancamento de envelope pendente em cenarios reais de 1 linha e multiplas linhas.
-3. Homologar correcao de envelope ja lancado em estado compativel.
-4. Homologar ignorar envelope com justificativa e retorno correto ao lote.
-5. Homologar preparar, reprocessar e encerrar lote de importacao bancaria nativo.
-6. Validar campanha real de fila de recibos com itens pendentes, enviados e falhos.
-7. Validar envio real de recibo via Microsoft Graph em nuvem.
-8. Validar envio real de extrato por e-mail em nuvem.
-9. Fechar politica de restore real com ensaio completo.
-10. Amarrar a matriz operacional ao checklist pos-deploy.
-11. Tornar a `regression_audit` sensivel ao estado dos envelopes para reduzir falsos WARNs.
-12. Decidir se limpa ou preserva os 6 movimentos piloto ignorados com link orfao.
-13. Validar criacao de pessoa, merge e lixeira segura com roteiro humano curto.
-14. Validar vinculo de contribuinte auxiliar e criacao de frequentador no fluxo atual.
-15. Definir politica operacional de fotos ausentes e upload de foto.
-16. Otimizar `/people/families/` para reduzir lentidao perceptivel.
-17. Otimizar exports CSV/XLSX em cargas maiores.
-18. Consolidar configuracoes operacionais dispersas em painel ou trilha oficial clara.
-19. Validar `admin/` e a trilha de suporte administrativo em producao.
-20. Fechar o mapa final do que continua tecnico/CLI e do que precisa estar na interface do operador.
+1. Homologar lancamento de envelope pendente em cenarios reais de 1 linha e multiplas linhas.
+2. Homologar correcao de envelope ja lancado em estado compativel.
+3. Homologar ignorar envelope com justificativa e retorno correto ao lote.
+4. Homologar preparar, reprocessar e encerrar lote de importacao bancaria nativo.
+5. Validar campanha real de fila de recibos com itens pendentes, enviados e falhos.
+6. Validar envio real de recibo via Microsoft Graph em nuvem.
+7. Validar envio real de extrato por e-mail em nuvem.
+8. Fechar politica de restore real com ensaio completo.
+9. Tornar a `regression_audit` sensivel ao estado dos envelopes e reduzir WARNs operacionais residuais.
+10. Consolidar configuracoes operacionais dispersas em trilha oficial clara, separando o que continua tecnico do que precisa chegar ao operador.
 
 ## Resposta Final Das Perguntas-Chave
 
 ### O operador consegue fazer tudo o que fazia antes?
 
-**Ainda nao.**
+**Ainda nao, mas esta mais perto do que na versao anterior da matriz.**
 
 O operador ja consegue usar boa parte do nucleo do sistema antigo no novo ambiente, especialmente:
 
@@ -320,20 +334,19 @@ O operador ja consegue usar boa parte do nucleo do sistema antigo no novo ambien
 - exportacoes,
 - auditorias.
 
-Mas ainda faltam:
+Mas ainda faltam principalmente:
 
-- seguranca/perfis confiaveis;
 - homologacao humana completa de fluxos de escrita critica;
 - maturidade operacional total de e-mail, restore e campanha automatica;
 - consolidacao das configuracoes e da rotina de operacao.
 
 ### O que ainda falta para o Power Church estar operacional por completo?
 
-Falta principalmente fechar a camada de **seguranca operacional, homologacao de escrita critica e governanca de operacao**, mais do que "migrar tela por tela".
+Falta principalmente fechar a camada de **homologacao de escrita critica e governanca de operacao**, mais do que "migrar tela por tela".
 
 Em termos práticos, o sistema so pode ser chamado de plenamente operacional quando:
 
-- os perfis realmente limitarem o acesso por modulo;
+- os perfis continuarem limitando o acesso por modulo sem regressao;
 - envelopes, recibos, extratos e importacoes estiverem homologados em fluxo humano fim a fim;
 - e-mail automatico e fila estiverem provados na nuvem;
 - backup, restore e rollback estiverem prontos para incidente real;

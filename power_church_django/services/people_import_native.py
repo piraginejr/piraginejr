@@ -629,6 +629,7 @@ def people_import_dashboard_postgres(limit: int = 12) -> dict[str, Any]:
 def get_people_import_lot_detail_postgres(
     lot_id: int,
     line_limit: int = 250,
+    pending_limit: int = 200,
     pending_issue: str = "",
     pending_severity: str = "",
     pending_status: str = "",
@@ -654,7 +655,7 @@ def get_people_import_lot_detail_postgres(
         pending_qs = pending_qs.filter(resolved=False)
     elif pending_status == "resolvidas":
         pending_qs = pending_qs.filter(resolved=True)
-    pending_entries = list(pending_qs[:200])
+    pending_entries = list(pending_qs if int(pending_limit or 0) <= 0 else pending_qs[: int(pending_limit or 0)])
     pending_line_numbers = [int(row.line_number or 0) for row in pending_entries if int(row.line_number or 0) > 0]
     pending_lines = list(
         lot.lines.filter(line_number__in=pending_line_numbers).order_by("line_number", "legacy_id")
@@ -688,7 +689,7 @@ def get_people_import_lot_detail_postgres(
             }
         )
     pending_name_lists.sort(key=lambda item: (0 if item["tipo"] == pending_issue else 1, item["tipo"]))
-    line_rows = list(lot.lines.order_by("line_number", "legacy_id")[:line_limit])
+    line_rows = list(lot.lines.order_by("line_number", "legacy_id")[:line_limit]) if int(line_limit or 0) > 0 else []
     return {
         "lot": {
             "id": int(lot.legacy_id or 0),
@@ -725,6 +726,7 @@ def get_people_import_lot_detail_postgres(
             "summary_by_type": pending_summary_by_type,
             "shown": len(pending_entries),
             "total": len(all_pending_entries),
+            "truncated": bool(int(pending_limit or 0) > 0 and len(all_pending_entries) > len(pending_entries)),
         },
         "pending_rows": [
             {

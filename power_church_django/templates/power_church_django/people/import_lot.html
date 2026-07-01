@@ -5,15 +5,60 @@
     <section class="hero">
       <div>
         <p class="badge">{{ detail.lot.type_label }}</p>
-        <h1>Lote de pessoas #{{ detail.lot.id }}</h1>
+        <h1>{% if print_mode %}Relatorio filtrado do lote de pessoas #{{ detail.lot.id }}{% else %}Lote de pessoas #{{ detail.lot.id }}{% endif %}</h1>
         <p>{{ detail.lot.arquivo_nome }} · {{ detail.lot.criado_em }}</p>
       </div>
       <div class="actions no-print">
-        <a class="button secondary" href="/people/imports/">Voltar para importacao</a>
-        <a class="button secondary" href="/audit/">Auditoria geral</a>
+        {% if print_mode %}
+          <a class="button secondary" href="/people/imports/{{ detail.lot.id }}/{% if filter_query_string %}?{{ filter_query_string }}{% endif %}">Voltar ao lote filtrado</a>
+          <button type="button" onclick="window.print()">Imprimir este relatorio</button>
+        {% else %}
+          <a class="button secondary" href="/people/imports/">Voltar para importacao</a>
+          <a class="button secondary" href="/audit/">Auditoria geral</a>
+        {% endif %}
       </div>
     </section>
 
+    {% if print_mode %}
+      <section class="panel">
+        <div class="section-head">
+          <h2>Pendencias do filtro atual</h2>
+          <span class="badge {% if detail.pending_rows %}danger{% else %}ok{% endif %}">{{ detail.pending_filters.shown }}/{{ detail.pending_filters.total }}</span>
+        </div>
+        <p class="muted">
+          Tipo: <strong>{{ detail.pending_filters.issue|default:"Todos" }}</strong> ·
+          Severidade: <strong>{{ detail.pending_filters.severity|default:"Todas" }}</strong> ·
+          Status: <strong>{{ detail.pending_filters.status|default:"abertas" }}</strong>
+        </p>
+        {% if detail.pending_filters.truncated %}
+          <p class="alert">A lista impressa foi limitada. Abra o filtro novamente sem corte operacional se precisar de mais registros.</p>
+        {% endif %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Linha</th><th>Pessoa / ficha</th><th>Severidade</th><th>Tipo</th><th>Descricao</th><th>Status</th></tr></thead>
+            <tbody>
+              {% for row in detail.pending_rows %}
+                <tr>
+                  <td>{{ row.linha }}</td>
+                  <td>
+                    <strong>{{ row.person_name|default:row.original_name|default:"Sem ficha vinculada" }}</strong>
+                    {% if row.person_cpf or row.person_status %}
+                      <div class="muted small">CPF {{ row.person_cpf|default:"-" }} · {{ row.person_status|default:"sem status" }}</div>
+                    {% endif %}
+                  </td>
+                  <td>{{ row.severidade }}</td>
+                  <td>{{ row.tipo }}</td>
+                  <td>{{ row.descricao }}<div class="muted small">{{ row.acao_sugerida }}</div></td>
+                  <td>{{ row.status }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="6">Nenhuma pendencia registrada neste filtro.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% else %}
     <section class="grid">
       <div class="card"><span class="label">Linhas do arquivo</span><strong>{{ detail.cards.total_lines }}</strong></div>
       <div class="card"><span class="label">Pessoas ativas do lote</span><strong>{{ detail.cards.active_people }}</strong></div>
@@ -99,6 +144,7 @@
         </label>
         <div class="actions">
           <button type="submit" class="button">Filtrar</button>
+          <a class="button secondary" href="/people/imports/{{ detail.lot.id }}/?{{ print_query_string }}" target="_blank" rel="noopener">Imprimir este filtro</a>
           <a class="button secondary" href="/people/imports/{{ detail.lot.id }}/">Limpar filtro</a>
         </div>
       </form>
@@ -174,38 +220,41 @@
         <p class="muted">Quando a linha ainda nao tiver ficha vinculada, a lista usa o nome original vindo da planilha para facilitar a triagem.</p>
       </div>
     </section>
+    {% endif %}
 
-    <section class="panel">
-      <div class="section-head">
-        <h2>Linhas importadas</h2>
-        <span class="badge">{{ detail.line_rows|length }} exibidas</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Linha</th><th>Nome no arquivo</th><th>Ficha gerada/atualizada</th><th>Status linha</th><th>Acao</th></tr></thead>
-          <tbody>
-            {% for row in detail.line_rows %}
-              <tr>
-                <td>{{ row.linha }}</td>
-                <td>{{ row.original_name }}</td>
-                <td>
-                  {% if row.person_id and row.person_active %}
-                    <a href="/people/{{ row.person_id }}/">{{ row.person_name }}</a>
-                  {% else %}
-                    {{ row.person_name }}
-                  {% endif %}
-                  <div class="muted small">CPF {{ row.person_cpf|default:"-" }} · {{ row.person_status }}</div>
-                </td>
-                <td><span class="badge {% if row.status == 'importado' or row.status == 'atualizado' %}ok{% else %}warn{% endif %}">{{ row.status }}</span></td>
-                <td>{{ row.normalized_action }}</td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="5">Nenhuma linha encontrada.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    {% if not print_mode %}
+      <section class="panel">
+        <div class="section-head">
+          <h2>Linhas importadas</h2>
+          <span class="badge">{{ detail.line_rows|length }} exibidas</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Linha</th><th>Nome no arquivo</th><th>Ficha gerada/atualizada</th><th>Status linha</th><th>Acao</th></tr></thead>
+            <tbody>
+              {% for row in detail.line_rows %}
+                <tr>
+                  <td>{{ row.linha }}</td>
+                  <td>{{ row.original_name }}</td>
+                  <td>
+                    {% if row.person_id and row.person_active %}
+                      <a href="/people/{{ row.person_id }}/">{{ row.person_name }}</a>
+                    {% else %}
+                      {{ row.person_name }}
+                    {% endif %}
+                    <div class="muted small">CPF {{ row.person_cpf|default:"-" }} · {{ row.person_status }}</div>
+                  </td>
+                  <td><span class="badge {% if row.status == 'importado' or row.status == 'atualizado' %}ok{% else %}warn{% endif %}">{{ row.status }}</span></td>
+                  <td>{{ row.normalized_action }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="5">Nenhuma linha encontrada.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
   {% else %}
     <section class="panel"><h1>Lote de pessoas nao encontrado</h1></section>
   {% endif %}

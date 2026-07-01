@@ -600,17 +600,34 @@ def imports(request: HttpRequest) -> HttpResponse:
 
 
 def import_lot(request: HttpRequest, lot_id: int) -> HttpResponse:
-    context = {"title": "Auditoria da importacao de pessoas"}
+    pending_issue = request.GET.get("tipo", "")
+    pending_severity = request.GET.get("severidade", "")
+    pending_status = request.GET.get("pendencia_status", "abertas")
+    print_mode = request.GET.get("print") == "1"
+    filter_params = {
+        "tipo": pending_issue,
+        "severidade": pending_severity,
+        "pendencia_status": pending_status,
+    }
+    clean_filter_params = {key: value for key, value in filter_params.items() if value}
+    context = {
+        "title": "Relatorio filtrado da importacao de pessoas" if print_mode else "Auditoria da importacao de pessoas",
+        "print_mode": print_mode,
+        "filter_query_string": urlencode(clean_filter_params),
+        "print_query_string": urlencode({**clean_filter_params, "print": "1"}),
+    }
     try:
         context["detail"] = get_people_import_lot_detail_postgres(
             lot_id,
-            pending_issue=request.GET.get("tipo", ""),
-            pending_severity=request.GET.get("severidade", ""),
-            pending_status=request.GET.get("pendencia_status", "abertas"),
+            line_limit=0 if print_mode else 250,
+            pending_limit=0 if print_mode else 200,
+            pending_issue=pending_issue,
+            pending_severity=pending_severity,
+            pending_status=pending_status,
         )
     except LegacyDatabaseError as exc:
         context["error"] = str(exc)
-    return render(request, "power_church_django/people/import_lot.html", context)
+    return render(request, "power_church_django/people/import_lot.html", context, content_type="text/html; charset=utf-8")
 
 
 def _actor_label(request: HttpRequest) -> str:

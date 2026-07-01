@@ -18,7 +18,7 @@ def repair_mojibake_text(value: object) -> str:
     if not text or not any(marker in text for marker in MOJIBAKE_MARKERS):
         return text
     candidates = [text]
-    for encoding in ("cp437", "latin-1", "cp1252"):
+    for encoding in ("cp437", "cp850", "latin-1", "cp1252"):
         try:
             candidate = text.encode(encoding).decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):

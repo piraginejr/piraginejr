@@ -13,7 +13,17 @@ from power_church_django.services.legacy import list_people
 class NormalizationEncodingTests(SimpleTestCase):
     def test_normalize_query_repairs_cp437_utf8_mojibake(self) -> None:
         self.assertEqual(normalize_query("Gouv├¬a"), "Gouvêa")
+        self.assertEqual(normalize_query("Ad├®lia Lass├® da Cruz Ara├║jo"), "Adélia Lassé da Cruz Araújo")
+        self.assertEqual(normalize_query("Andr├®a Santiago da Silva"), "Andréa Santiago da Silva")
+        self.assertEqual(normalize_query("Andr├® Asevedo Nepomuceno"), "André Asevedo Nepomuceno")
+        self.assertEqual(normalize_query("Andr├®a Souza"), "Andréa Souza")
+        self.assertEqual(normalize_query("Andr├® Lima"), "André Lima")
+        self.assertEqual(normalize_query("Andr├® Luis Carvalho Alves"), "André Luis Carvalho Alves")
+        self.assertEqual(normalize_query("Andr├® Marx Vieira Costa"), "André Marx Vieira Costa")
+        self.assertEqual(normalize_query("Andr├® Ricardo Lisb├┤a Herdy"), "André Ricardo Lisbôa Herdy")
+        self.assertEqual(normalize_query("Andr├® Rios dos Passos"), "André Rios dos Passos")
         self.assertEqual(normalize_query("Jo├úo"), "João")
+        self.assertEqual(normalize_query("Jos├®"), "José")
         self.assertEqual(normalize_query("Concei├º├úo"), "Conceição")
         self.assertEqual(normalize_query("S├úo Gon├ºalo"), "São Gonçalo")
         self.assertEqual(normalize_query("Niter├│i"), "Niterói")

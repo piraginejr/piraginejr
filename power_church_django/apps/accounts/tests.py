@@ -99,3 +99,150 @@ class ModulePermissionEnforcementTests(TestCase):
             with self.subTest(url=url):
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, 403)
+
+
+class ReceiptOperationalButtonsTests(TestCase):
+    def setUp(self) -> None:
+        ensure_access_control()
+        patchers = [
+            patch(
+                "power_church_django.apps.contributions.views.list_receipts_postgres",
+                return_value={
+                    "items": [],
+                    "summary": {"quantidade": 0, "total_fmt": "R$ 0,00", "pessoas": 0, "ultima_data": ""},
+                },
+            ),
+            patch(
+                "power_church_django.apps.contributions.views._receipt_queue_snapshot",
+                return_value={
+                    "campaign_key": "",
+                    "status": "",
+                    "counts": {"pendente": 0, "enviado": 0, "falhou": 0, "cancelado": 0},
+                    "total": 0,
+                    "progress_percent": 0,
+                    "latest_attempt": "",
+                    "latest_sent": "",
+                    "items": [],
+                    "campaigns": [],
+                },
+            ),
+            patch(
+                "power_church_django.apps.contributions.views.email_runtime_snapshot",
+                return_value={"provider": "microsoft_graph"},
+            ),
+            patch("power_church_django.apps.contributions.views.search_receipt_people_postgres", return_value=[]),
+            patch(
+                "power_church_django.apps.audit.views.list_system_email_events",
+                return_value={
+                    "total": 0,
+                    "page": 1,
+                    "total_pages": 1,
+                    "shown": 0,
+                    "kinds": [],
+                    "statuses": [],
+                    "items": [],
+                    "smart_summary": [],
+                    "page_size": 120,
+                    "has_previous": False,
+                    "has_next": False,
+                    "previous_page": 1,
+                    "next_page": 1,
+                },
+            ),
+            patch("power_church_django.apps.audit.views.search_receipt_people_postgres", return_value=[]),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_receipts_page_shows_operational_buttons_for_operator(self) -> None:
+        user = User.objects.create_user(username="operador", password="teste12345", is_active=True)
+        user.groups.add(Group.objects.get(name="Operador de Recebimentos"))
+        self.client.force_login(user)
+
+        response = self.client.get("/receipts/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Reenfileirar recibos pendentes")
+        self.assertContains(response, "Processar fila de recibos")
+
+    def test_audit_email_view_hides_receipt_buttons_without_manage_permission(self) -> None:
+        user = User.objects.create_user(username="auditor", password="teste12345", is_active=True)
+        user.groups.add(Group.objects.get(name="Auditor"))
+        self.client.force_login(user)
+
+        response = self.client.get("/audit/?modo=emails")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Reenfileirar recibos pendentes")
+        self.assertNotContains(response, "Processar fila de recibos")
+
+    def test_audit_email_view_shows_receipt_buttons_for_superuser(self) -> None:
+        user = User.objects.create_superuser(
+            username="admin_receipts",
+            email="admin@example.com",
+            password="teste12345",
+        )
+        self.client.force_login(user)
+
+        response = self.client.get("/audit/?modo=emails")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Reenfileirar recibos pendentes")
+        self.assertContains(response, "Processar fila de recibos")
+
+    def test_queue_monitor_backfill_action_redirects_to_receipts(self) -> None:
+        user = User.objects.create_user(username="operador_backfill", password="teste12345", is_active=True)
+        user.groups.add(Group.objects.get(name="Operador de Recebimentos"))
+        self.client.force_login(user)
+
+        with patch(
+            "power_church_django.apps.contributions.views.backfill_native_event_receipts",
+            return_value={"created": 2, "queued": 2, "without_email": 1, "failed": 0},
+        ) as mocked:
+            response = self.client.post(
+                "/receipts/queue/",
+                {
+                    "action": "backfill_automatic_pending",
+                    "return_to": "receipts",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/receipts/")
+        mocked.assert_called_once()
+
+    def test_queue_monitor_drain_action_redirects_back_to_audit(self) -> None:
+        user = User.objects.create_superuser(
+            username="admin_drain",
+            email="admin_drain@example.com",
+            password="teste12345",
+        )
+        self.client.force_login(user)
+
+        with patch(
+            "power_church_django.apps.contributions.views.drain_receipt_dispatch_queue",
+            return_value={"sent": 3, "failed": 1, "selected": 4},
+        ) as mocked:
+            response = self.client.post(
+                "/receipts/queue/",
+                {
+                    "action": "drain_pending_queue",
+                    "return_to": "audit",
+                    "return_email_kind": "",
+                    "return_email_status": "",
+                    "return_q": "",
+                    "return_selected_person_id": "0",
+                    "return_person_lookup": "",
+                    "return_page": "1",
+                    "return_page_size": "120",
+                    "batch_limit": "40",
+                    "sleep_seconds": "3",
+                    "pause_every": "40",
+                    "pause_seconds": "60",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/audit/?modo=emails")
+        mocked.assert_called_once()

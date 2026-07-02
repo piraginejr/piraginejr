@@ -7,7 +7,7 @@ from django.db import OperationalError, ProgrammingError
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
-from power_church_django.services.access_control import module_permission_required
+from power_church_django.services.access_control import module_permission_required, user_has_module_permission
 from power_church_django.services.audit_native import (
     operational_audit_postgres,
     search_receipt_people_postgres,
@@ -74,6 +74,7 @@ def index(request: HttpRequest) -> HttpResponse:
         "merge_duplicate_id": _int_param(request, "merge_duplicate_id", 0),
         "selected_person_id": _int_param(request, "selected_person_id", 0),
         "person_lookup": request.GET.get("person_lookup", ""),
+        "can_manage_receipts": user_has_module_permission(request.user, "manage_contributions"),
     }
     try:
         if mode == "emails":

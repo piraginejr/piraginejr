@@ -74,6 +74,31 @@
       <span class="muted small">O reprocessamento em lote trata ate 100 registros do filtro atual e sincroniza primeiro o e-mail com a ficha.</span>
       <span class="muted small">Em cada linha, use <strong>Sincronizar e-mail</strong> antes de <strong>Reprocessar</strong> quando o cadastro tiver sido corrigido.</span>
     </div>
+    {% if can_manage_receipts %}
+      <div class="actions" style="margin-top:12px; align-items:flex-end;">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="backfill_automatic_pending">
+          <input type="hidden" name="campaign" value="{{ monitor.campaign_key }}">
+          <input type="hidden" name="status" value="{{ monitor.status }}">
+          {% if auto_refresh %}<input type="hidden" name="auto" value="1">{% endif %}
+          <button type="submit">Reenfileirar recibos pendentes</button>
+        </form>
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="drain_pending_queue">
+          <input type="hidden" name="campaign" value="{{ monitor.campaign_key }}">
+          <input type="hidden" name="status" value="{{ monitor.status }}">
+          {% if auto_refresh %}<input type="hidden" name="auto" value="1">{% endif %}
+          <input type="hidden" name="batch_limit" value="40">
+          <input type="hidden" name="sleep_seconds" value="3">
+          <input type="hidden" name="pause_every" value="40">
+          <input type="hidden" name="pause_seconds" value="60">
+          <button type="submit" class="button secondary">Processar fila pendente</button>
+        </form>
+        <span class="muted small">Use primeiro a recuperacao retroativa para os recibos que nao foram emitidos e depois processe a fila em lotes controlados.</span>
+      </div>
+    {% endif %}
   </section>
 
   <section class="grid">

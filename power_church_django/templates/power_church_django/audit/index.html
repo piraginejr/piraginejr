@@ -27,6 +27,41 @@
         <h2>Relatorio de e-mails enviados</h2>
         <p class="muted">Consolida recibos e extratos enviados pelo sistema, com origem, data, destinatario, assunto e conteudo da mensagem para auditoria operacional.</p>
         <p class="muted small">Quando um envio precisar ser repetido, use a acao <strong>Reenviar</strong> na propria linha auditada.</p>
+        {% if can_manage_receipts %}
+          <div class="actions" style="margin-top:12px; align-items:flex-end;">
+            <form method="post" action="/receipts/queue/">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="backfill_automatic_pending">
+              <input type="hidden" name="return_to" value="audit">
+              <input type="hidden" name="return_email_kind" value="{{ email_kind }}">
+              <input type="hidden" name="return_email_status" value="{{ email_status }}">
+              <input type="hidden" name="return_q" value="{{ q }}">
+              <input type="hidden" name="return_selected_person_id" value="{{ selected_person_id }}">
+              <input type="hidden" name="return_person_lookup" value="{{ person_lookup }}">
+              <input type="hidden" name="return_page" value="{{ email_audit.page }}">
+              <input type="hidden" name="return_page_size" value="{{ email_audit.page_size }}">
+              <button type="submit">Reenfileirar recibos pendentes</button>
+            </form>
+            <form method="post" action="/receipts/queue/">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="drain_pending_queue">
+              <input type="hidden" name="return_to" value="audit">
+              <input type="hidden" name="return_email_kind" value="{{ email_kind }}">
+              <input type="hidden" name="return_email_status" value="{{ email_status }}">
+              <input type="hidden" name="return_q" value="{{ q }}">
+              <input type="hidden" name="return_selected_person_id" value="{{ selected_person_id }}">
+              <input type="hidden" name="return_person_lookup" value="{{ person_lookup }}">
+              <input type="hidden" name="return_page" value="{{ email_audit.page }}">
+              <input type="hidden" name="return_page_size" value="{{ email_audit.page_size }}">
+              <input type="hidden" name="batch_limit" value="40">
+              <input type="hidden" name="sleep_seconds" value="3">
+              <input type="hidden" name="pause_every" value="40">
+              <input type="hidden" name="pause_seconds" value="60">
+              <button type="submit" class="button secondary">Processar fila de recibos</button>
+            </form>
+            <span class="muted small">Atalho operacional para recuperar recibos automaticos que ficaram para tras e enviar a fila em lotes controlados.</span>
+          </div>
+        {% endif %}
         <form class="toolbar" method="get">
           <input type="hidden" name="modo" value="emails">
           <label class="wide">

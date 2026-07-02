@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from power_church_django.apps.contributions.models import ReceiptDispatch
 from power_church_core.normalization import normalize_query
-from power_church_django.services.access_control import module_permission_required
+from power_church_django.services.access_control import module_permission_required, user_has_module_permission
 from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.contributions_native import (
@@ -58,6 +58,8 @@ from power_church_django.services.runtime_errors import LegacyDatabaseError, Leg
 from power_church_django.services.pdf_reports import receipt_pdf, receipt_pdf_filename
 from power_church_django.services.pdf_reports import person_statement_pdf, person_statement_pdf_filename
 from power_church_django.services.receipt_delivery import (
+    backfill_native_event_receipts,
+    drain_receipt_dispatch_queue,
     email_runtime_snapshot,
     enrich_receipt_form,
     create_receipt,
@@ -462,6 +464,45 @@ def _statement_message_fields(payload: object) -> dict[str, str]:
         "update_person_email": str(getter("update_person_email", "") or "").strip(),
         "email_update_reason": str(getter("email_update_reason", "") or "").strip(),
     }
+
+
+def _receipt_queue_return_response(request: HttpRequest, *, campaign: str = "", status: str = "", auto_refresh: bool = False) -> HttpResponse:
+    return_to = normalize_query(request.POST.get("return_to", ""))
+    if return_to == "audit":
+        params: list[tuple[str, str]] = [("modo", "emails")]
+        email_kind = str(request.POST.get("return_email_kind", "") or "").strip()
+        email_status = str(request.POST.get("return_email_status", "") or "").strip()
+        q = str(request.POST.get("return_q", "") or "").strip()
+        selected_person_id = int(request.POST.get("return_selected_person_id") or 0)
+        person_lookup = str(request.POST.get("return_person_lookup", "") or "").strip()
+        page = int(request.POST.get("return_page") or 1)
+        page_size = int(request.POST.get("return_page_size") or 120)
+        if email_kind:
+            params.append(("email_kind", email_kind))
+        if email_status:
+            params.append(("email_status", email_status))
+        if q:
+            params.append(("q", q))
+        if selected_person_id:
+            params.append(("selected_person_id", str(selected_person_id)))
+        if person_lookup:
+            params.append(("person_lookup", person_lookup))
+        if page > 1:
+            params.append(("page", str(page)))
+        if page_size != 120:
+            params.append(("page_size", str(page_size)))
+        query = urlencode(params)
+        return redirect(f"/audit/?{query}" if query else "/audit/?modo=emails")
+    if return_to == "receipts":
+        return redirect("/receipts/")
+    query = urlencode(
+        {
+            "campaign": campaign,
+            "status": status,
+            "auto": "1" if auto_refresh else "",
+        }
+    )
+    return redirect(f"/receipts/queue/?{query}" if query else "/receipts/queue/")
 
 
 @module_permission_required("view_contributions")
@@ -991,6 +1032,7 @@ def receipts(request: HttpRequest) -> HttpResponse:
         "form_date_start": request.GET.get("form_date_start", ""),
         "form_date_end": request.GET.get("form_date_end", ""),
         "generated_receipt_ids": [int(value) for value in request.GET.getlist("generated_receipt_id") if str(value).isdigit()],
+        "can_manage_receipts": user_has_module_permission(request.user, "manage_contributions"),
     }
     try:
         context["receipts"] = list_receipts_postgres(
@@ -1072,14 +1114,43 @@ def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
                     else:
                         failed += 1
                 messages.success(request, f"Reprocessamento do filtro concluido: {sent} enviado(s), {failed} ainda com falha.")
+            elif action == "backfill_automatic_pending":
+                summary = backfill_native_event_receipts(actor=actor)
+                messages.success(
+                    request,
+                    "Recibos automaticos pendentes reenfileirados: "
+                    f"{int(summary.get('created', 0) or 0)} criado(s), "
+                    f"{int(summary.get('queued', 0) or 0)} em fila, "
+                    f"{int(summary.get('without_email', 0) or 0)} sem e-mail, "
+                    f"{int(summary.get('failed', 0) or 0)} falha(s).",
+                )
+            elif action == "drain_pending_queue":
+                result = drain_receipt_dispatch_queue(
+                    actor=actor,
+                    campaign_key=selected_campaign,
+                    limit=int(request.POST.get("batch_limit") or 40),
+                    pending_only=False,
+                    sleep_seconds=float(request.POST.get("sleep_seconds") or 3),
+                    pause_every=int(request.POST.get("pause_every") or 40),
+                    pause_seconds=float(request.POST.get("pause_seconds") or 60),
+                    drain=False,
+                )
+                messages.success(
+                    request,
+                    "Processamento da fila concluido: "
+                    f"{int(result.get('sent', 0) or 0)} enviado(s), "
+                    f"{int(result.get('failed', 0) or 0)} com falha, "
+                    f"{int(result.get('selected', 0) or 0)} item(ns) tratado(s).",
+                )
             else:
                 raise LegacyWriteError("Acao de monitoramento invalida.")
         except LegacyWriteError as exc:
             messages.error(request, str(exc))
-        return redirect(
-            f"/receipts/queue/?campaign={selected_campaign}"
-            f"{'&status=' + selected_status if selected_status else ''}"
-            f"{'&auto=1' if str(request.POST.get('auto', '') or '') in {'1', 'on', 'true', 'sim'} else ''}"
+        return _receipt_queue_return_response(
+            request,
+            campaign=selected_campaign,
+            status=selected_status,
+            auto_refresh=str(request.POST.get("auto", "") or "") in {"1", "on", "true", "sim"},
         )
     campaigns = _receipt_queue_campaigns()
     if not selected_campaign and campaigns:
@@ -1095,6 +1166,7 @@ def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
         "monitor": snapshot,
         "auto_refresh": auto_refresh,
         "email_runtime": email_runtime_snapshot(),
+        "can_manage_receipts": user_has_module_permission(request.user, "manage_contributions"),
     }
     return render(request, "power_church_django/receipts/queue_monitor.html", context)
 

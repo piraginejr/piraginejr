@@ -1348,6 +1348,91 @@ def process_pending_receipt_dispatches(*, limit: int = 20, actor: str = "") -> l
     return [send_receipt_dispatch(item, actor=actor) for item in items]
 
 
+def drain_receipt_dispatch_queue(
+    *,
+    limit: int = 10,
+    actor: str = "",
+    campaign_key: str = "",
+    pending_only: bool = False,
+    sleep_seconds: float = 3.0,
+    pause_every: int = 40,
+    pause_seconds: float = 60.0,
+    drain: bool = False,
+) -> dict[str, Any]:
+    statuses = [ReceiptDispatch.Status.PENDING]
+    if not pending_only:
+        statuses.append(ReceiptDispatch.Status.FAILED)
+    clean_campaign_key = normalize_query(campaign_key)
+    if clean_campaign_key:
+        dedupe_campaign_receipt_dispatches(campaign_key=clean_campaign_key, actor=actor)
+
+    sent = 0
+    failed = 0
+    processed: list[dict[str, object]] = []
+    rounds = 0
+    batch_limit = max(1, int(limit or 10))
+
+    while True:
+        queryset = ReceiptDispatch.objects.filter(status__in=statuses).exclude(Q(email_to="") & Q(person_email=""))
+        if clean_campaign_key:
+            queryset = queryset.filter(metadata__campaign_key=clean_campaign_key)
+        items = list(queryset.order_by("created_at", "id")[:batch_limit])
+        if not items:
+            break
+        rounds += 1
+        if clean_campaign_key:
+            batch = process_campaign_receipt_dispatches(
+                campaign_key=clean_campaign_key,
+                limit=batch_limit,
+                actor=actor,
+                pending_only=bool(pending_only),
+                sleep_seconds=float(sleep_seconds or 0),
+                pause_every=int(pause_every or 0),
+                pause_seconds=float(pause_seconds or 0),
+            )
+        else:
+            batch = []
+            for index, item in enumerate(items, start=1):
+                result = send_receipt_dispatch(item, actor=actor)
+                batch.append(result)
+                if index >= len(items):
+                    continue
+                if int(pause_every or 0) > 0 and index % int(pause_every or 0) == 0 and float(pause_seconds or 0) > 0:
+                    time.sleep(float(pause_seconds or 0))
+                    continue
+                if float(sleep_seconds or 0) > 0:
+                    time.sleep(float(sleep_seconds or 0))
+        for result in batch:
+            processed.append(
+                {
+                    "dispatch_id": int(result.pk or 0),
+                    "receipt_id": int(result.legacy_receipt_id or 0),
+                    "receipt_number": result.legacy_receipt_number,
+                    "email_to": result.email_to or result.person_email,
+                    "status": result.status,
+                    "error": result.last_error,
+                }
+            )
+            if result.status == ReceiptDispatch.Status.SENT:
+                sent += 1
+            else:
+                failed += 1
+        if not drain:
+            break
+
+    return {
+        "campaign_key": clean_campaign_key,
+        "rounds": rounds,
+        "selected": len(processed),
+        "sent": sent,
+        "failed": failed,
+        "sleep_seconds": float(sleep_seconds or 0),
+        "pause_every": int(pause_every or 0),
+        "pause_seconds": float(pause_seconds or 0),
+        "processed": processed,
+    }
+
+
 def process_campaign_receipt_dispatches(
     *,
     campaign_key: str,

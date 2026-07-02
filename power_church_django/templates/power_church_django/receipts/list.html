@@ -60,6 +60,27 @@
         <a class="button secondary" href="/audit/?modo=emails">Auditoria de e-mails</a>
         <span class="muted small">Provedor atual: {{ email_runtime.provider|default:"-" }}</span>
       </div>
+      {% if can_manage_receipts %}
+        <div class="actions" style="margin-top:12px; align-items:flex-end;">
+          <form method="post" action="/receipts/queue/">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="backfill_automatic_pending">
+            <input type="hidden" name="return_to" value="receipts">
+            <button type="submit">Reenfileirar recibos pendentes</button>
+          </form>
+          <form method="post" action="/receipts/queue/">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="drain_pending_queue">
+            <input type="hidden" name="return_to" value="receipts">
+            <input type="hidden" name="batch_limit" value="40">
+            <input type="hidden" name="sleep_seconds" value="3">
+            <input type="hidden" name="pause_every" value="40">
+            <input type="hidden" name="pause_seconds" value="60">
+            <button type="submit" class="button secondary">Processar fila de recibos</button>
+          </form>
+          <span class="muted small">A recuperacao reenfileira apenas quem esta sem recibo ativo e tem e-mail. O processamento trata ate 40 itens por clique.</span>
+        </div>
+      {% endif %}
     </section>
   {% endif %}
 

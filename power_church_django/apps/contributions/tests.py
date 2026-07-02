@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from power_church_django.apps.contributions.models import (
@@ -17,6 +17,8 @@ from power_church_django.apps.contributions.models import (
     NativeEnvelope,
     NativeEnvelopeLot,
     NativeEnvelopeProfileUpdate,
+    ReceiptDispatch,
+    ReceiptSnapshot,
 )
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.contributions_native import person_statement_data_postgres
@@ -35,6 +37,7 @@ from power_church_django.services.envelopes_native import (
     pending_envelope_contribution_context_postgres,
     update_launched_envelope_postgres,
 )
+from power_church_django.services.receipt_delivery import backfill_native_event_receipts
 from power_church_django.services.runtime_errors import LegacyWriteError
 
 
@@ -556,3 +559,110 @@ class PersonStatementDataPostgresTests(TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["observacoes"], "")
         self.assertEqual(entries[0]["tipo"], "Dizimo")
+
+
+@override_settings(
+    POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED=True,
+    POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED=False,
+)
+class EnvelopeAutomaticReceiptTests(TestCase):
+    def setUp(self) -> None:
+        self.person = PersonSnapshot.objects.create(
+            legacy_id=601,
+            organization_id=1,
+            name="Pessoa Recibo Envelope",
+            normalized_name="PESSOA RECIBO ENVELOPE",
+            social_name="",
+            cpf="12345678901",
+            primary_email="pessoa.recibo@example.com",
+            normalized_email="PESSOA.RECIBO@EXAMPLE.COM",
+            primary_phone="21999999999",
+            primary_whatsapp="21999999999",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        self.type_snapshot = ContributionTypeSnapshot.objects.create(
+            legacy_id=17,
+            organization_id=1,
+            code="DIZIMO",
+            name="Dizimo",
+            is_active=True,
+        )
+
+    def test_launch_pending_envelope_creates_receipt_dispatch_for_person_with_email(self) -> None:
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=701,
+            organization_id=1,
+            lot_name="Lote recibo envelope",
+            competence="jul/2026",
+            competence_order=202607,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+
+        result = launch_pending_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-05",
+                "valor_total": "90,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Envelope com recibo automatico.",
+                "origem_operacional": "Teste de recibo",
+            },
+            actor="tester",
+        )
+
+        contribution_id = result["contribution_ids"][0]
+        receipt = ReceiptSnapshot.objects.get(is_cancelled=False)
+        dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
+
+        self.assertEqual(receipt.person_legacy_id, self.person.legacy_id)
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.SENT)
+        self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.AUTOMATIC)
+        self.assertEqual(result["auto_receipt"]["created"], 1)
+        self.assertEqual(result["auto_receipt"]["sent"], 1)
+        self.assertTrue(NativeContribution.objects.filter(legacy_id=contribution_id, is_active=True).exists())
+
+    @override_settings(
+        POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED=False,
+        POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED=False,
+    )
+    def test_backfill_native_event_receipts_queues_missing_envelope_receipts(self) -> None:
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=702,
+            organization_id=1,
+            lot_name="Lote retroativo",
+            competence="jul/2026",
+            competence_order=202607,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+        launch_pending_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-06",
+                "valor_total": "75,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Envelope sem disparo inicial.",
+                "origem_operacional": "Teste retroativo",
+            },
+            actor="tester",
+        )
+
+        self.assertFalse(ReceiptDispatch.objects.exists())
+
+        with self.settings(
+            POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED=True,
+            POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED=False,
+        ):
+            summary = backfill_native_event_receipts(actor="tester")
+
+        dispatch = ReceiptDispatch.objects.get()
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
+        self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.RETROACTIVE)
+        self.assertEqual(summary["created"], 1)
+        self.assertEqual(summary["queued"], 1)

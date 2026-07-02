@@ -47,6 +47,10 @@ from power_church_django.services.contributions_native import (
     _sync_person_contribution_snapshot,
 )
 from power_church_django.services.legacy import broad_family_candidates_summary, organized_family_nuclei_summary
+from power_church_django.services.receipt_delivery import (
+    schedule_automatic_receipts_for_events,
+    summarize_automatic_receipt_outcomes,
+)
 
 from .models import CentRuleSnapshot, StatementImportPilotLot, StatementImportPilotMovement
 
@@ -1315,6 +1319,67 @@ def _ensure_statement_financial_entries_postgres_native(
     return {"created": created, "synced": synced}
 
 
+def _statement_receipt_eligible_native_contribution_ids(
+    *,
+    lot: StatementImportPilotLot | None = None,
+    contribution_ids: list[int] | None = None,
+) -> list[int]:
+    clean_ids = [int(value or 0) for value in (contribution_ids or []) if int(value or 0)]
+    if lot is not None:
+        clean_ids.extend(
+            int(value or 0)
+            for value in lot.movements.exclude(imported_contribution_legacy_id__isnull=True).values_list(
+                "imported_contribution_legacy_id", flat=True
+            )
+            if int(value or 0)
+        )
+    unique_ids = sorted({value for value in clean_ids if value})
+    if not unique_ids:
+        return []
+    return list(
+        NativeContribution.objects.filter(
+            legacy_id__in=unique_ids,
+            is_active=True,
+            operational_status="regular",
+        )
+        .exclude(person_legacy_id__isnull=True)
+        .exclude(person_legacy_id=0)
+        .order_by("legacy_id")
+        .values_list("legacy_id", flat=True)
+    )
+
+
+def _statement_auto_receipt_result(
+    contribution_ids: list[int],
+    *,
+    actor: str = "",
+) -> dict[str, int]:
+    eligible_ids = [int(value or 0) for value in contribution_ids if int(value or 0)]
+    if not eligible_ids:
+        return {
+            "auto_receipt_candidates": 0,
+            "auto_receipt_created": 0,
+            "auto_receipt_sent": 0,
+            "auto_receipt_queued": 0,
+            "auto_receipt_failed": 0,
+            "auto_receipt_without_email": 0,
+        }
+    outcomes = schedule_automatic_receipts_for_events(
+        eligible_ids,
+        actor=actor,
+        send_now=False,
+    )
+    summary = summarize_automatic_receipt_outcomes(outcomes, send_now=False)
+    return {
+        "auto_receipt_candidates": len(eligible_ids),
+        "auto_receipt_created": int(summary["created"]),
+        "auto_receipt_sent": int(summary["sent"]),
+        "auto_receipt_queued": int(summary["queued"]),
+        "auto_receipt_failed": int(summary["failed"]),
+        "auto_receipt_without_email": int(summary["without_email"]),
+    }
+
+
 def _recompute_native_statement_lot_status(pilot_lot: StatementImportPilotLot) -> str:
     current_status = normalize_query(pilot_lot.lot_status)
     if current_status == "encerrado":
@@ -1395,16 +1460,15 @@ def prepare_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[
             reviewed += 1
         financial = _ensure_statement_financial_entries_postgres_native(pilot_lot, actor=actor)
         _refresh_native_statement_lot_metadata(pilot_lot)
+    receipt_result = _statement_auto_receipt_result(
+        _statement_receipt_eligible_native_contribution_ids(lot=pilot_lot),
+        actor=actor,
+    )
     return {
         "importados": int(financial.get("created", 0) or 0),
         "movidos_contribuintes": 0,
         "status_antes": previous_status,
-        "auto_receipt_candidates": 0,
-        "auto_receipt_created": 0,
-        "auto_receipt_sent": 0,
-        "auto_receipt_queued": 0,
-        "auto_receipt_failed": 0,
-        "auto_receipt_without_email": 0,
+        **receipt_result,
         "reviewed": reviewed,
         "actor": actor or "django",
     }
@@ -1451,6 +1515,9 @@ def update_statement_movement_postgres_native(
         meta["last_actor"] = actor
     if review_notes:
         pilot_movement.review_notes = review_notes
+    previous_eligible_ids = _statement_receipt_eligible_native_contribution_ids(
+        contribution_ids=[int(pilot_movement.imported_contribution_legacy_id or 0)],
+    )
     with transaction.atomic():
         if action == "ignore":
             pilot_movement.review_status = "ignorado"
@@ -1483,6 +1550,12 @@ def update_statement_movement_postgres_native(
         if action not in {"ignore", "same_owner"}:
             imported_contribution_id = _statement_sync_native_contribution_for_movement(pilot_movement, actor=actor)
         _refresh_native_statement_lot_metadata(pilot_lot)
+    new_eligible_ids = _statement_receipt_eligible_native_contribution_ids(
+        contribution_ids=[int(imported_contribution_id or 0)],
+    )
+    created_now = [item for item in new_eligible_ids if item not in previous_eligible_ids]
+    if created_now:
+        _statement_auto_receipt_result(created_now, actor=actor)
     return int(imported_contribution_id or 0)
 
 
@@ -1506,15 +1579,14 @@ def close_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[st
         metadata["closed_by"] = actor or "django"
         pilot_lot.metadata = metadata
         pilot_lot.save(update_fields=["lot_status", "metadata", "updated_at"])
+    receipt_result = _statement_auto_receipt_result(
+        _statement_receipt_eligible_native_contribution_ids(lot=pilot_lot),
+        actor=actor,
+    )
     return {
         "importados": int(financial.get("created", 0) or 0),
         "movidos_contribuintes": 0,
-        "auto_receipt_candidates": 0,
-        "auto_receipt_created": 0,
-        "auto_receipt_sent": 0,
-        "auto_receipt_queued": 0,
-        "auto_receipt_failed": 0,
-        "auto_receipt_without_email": 0,
+        **receipt_result,
     }
 
 

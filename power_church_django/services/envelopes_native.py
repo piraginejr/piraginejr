@@ -37,6 +37,11 @@ from power_church_django.services.contributions_native import (
     _sync_person_contribution_snapshot,
 )
 from power_church_django.services.django_audit import record_django_audit_event
+from power_church_django.services.receipt_delivery import (
+    cancel_receipts_for_contribution_ids,
+    schedule_automatic_receipts_for_events,
+    summarize_automatic_receipt_outcomes,
+)
 from power_church_django.services.runtime_errors import LegacyWriteError
 from power_church_django.services.runtime_formatting import CONTRIBUTION_STATUS_OPTIONS, _clean_optional_text
 from power_church_django.services.runtime_support import envelope_upload_root
@@ -53,6 +58,21 @@ ENVELOPE_STATUS_LABELS = {
     "ignorado": "Ignorado",
     "duplicado": "Duplicado",
 }
+
+
+def _auto_issue_native_envelope_receipts(contribution_ids: list[int], *, actor: str = "") -> dict[str, int]:
+    clean_ids = [int(value or 0) for value in contribution_ids if int(value or 0)]
+    if not clean_ids:
+        return {"created": 0, "sent": 0, "queued": 0, "failed": 0, "without_email": 0}
+    try:
+        outcomes = schedule_automatic_receipts_for_events(
+            clean_ids,
+            actor=actor,
+            send_now=True,
+        )
+    except Exception:
+        return {"created": 0, "sent": 0, "queued": 0, "failed": 1, "without_email": 0}
+    return summarize_automatic_receipt_outcomes(outcomes, send_now=True)
 
 
 def _default_organization_id() -> int:
@@ -749,6 +769,7 @@ def _materialize_native_envelope(
         raise LegacyWriteError(f"A soma das linhas ({total:.2f}) nao fecha com o total do envelope ({expected_total:.2f}).")
 
     created_contribution_ids: list[int] = []
+    receipt_summary = {"created": 0, "sent": 0, "queued": 0, "failed": 0, "without_email": 0}
     envelope.lot_name = normalize_query(get("nome_lote", "")) or envelope.lot_name or "Envelope manual Postgres"
     envelope.competence = competence
     envelope.competence_order = competence_order
@@ -832,6 +853,11 @@ def _materialize_native_envelope(
         previous_contribution_ids = [int(item.contribution_legacy_id or 0) for item in previous_items if int(item.contribution_legacy_id or 0)]
         envelope.items.filter(is_active=True).update(is_active=False)
         if previous_contribution_ids:
+            cancel_receipts_for_contribution_ids(
+                previous_contribution_ids,
+                actor=actor,
+                reason="Recibo anterior cancelado para reemissao automatica do envelope.",
+            )
             previous_contributions = list(
                 NativeContribution.objects.filter(legacy_id__in=previous_contribution_ids, is_active=True)
             )
@@ -894,6 +920,7 @@ def _materialize_native_envelope(
                 notes=str(line.get("notes") or ""),
                 is_active=True,
             )
+    receipt_summary = _auto_issue_native_envelope_receipts(created_contribution_ids, actor=actor)
     if int(envelope.native_lot_legacy_id or 0):
         _refresh_envelope_lot_status_postgres(int(envelope.native_lot_legacy_id or 0), actor=actor)
     refresh_envelope_profile_updates_postgres(envelope, actor=actor)
@@ -910,7 +937,12 @@ def _materialize_native_envelope(
         )
     except Exception:
         pass
-    return {"envelope_id": int(envelope.legacy_id or 0), "lot_id": int(envelope.native_lot_legacy_id or 0), "contribution_ids": created_contribution_ids}
+    return {
+        "envelope_id": int(envelope.legacy_id or 0),
+        "lot_id": int(envelope.native_lot_legacy_id or 0),
+        "contribution_ids": created_contribution_ids,
+        "auto_receipt": receipt_summary,
+    }
 
 
 def create_envelope_contribution_batch_postgres(payload: Any, upload: Any, actor: str = "") -> dict[str, object]:

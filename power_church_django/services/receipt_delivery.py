@@ -858,6 +858,15 @@ def _cancel_active_receipt_snapshots_for_contribution_ids(
     return cancelled_ids
 
 
+def cancel_receipts_for_contribution_ids(
+    contribution_ids: list[int],
+    *,
+    actor: str = "",
+    reason: str = "",
+) -> list[int]:
+    return _cancel_active_receipt_snapshots_for_contribution_ids(contribution_ids, actor=actor, reason=reason)
+
+
 def issue_receipt_for_contribution_ids(
     *,
     person_id: int,
@@ -1478,6 +1487,7 @@ def schedule_automatic_receipts_for_events(
     *,
     actor: str = "",
     send_now: bool | None = None,
+    trigger: str = ReceiptDispatch.Trigger.AUTOMATIC,
 ) -> list[dict[str, Any]]:
     if not receipt_email_enabled():
         return []
@@ -1534,7 +1544,7 @@ def schedule_automatic_receipts_for_events(
             subject="",
             body="",
             actor=actor,
-            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            trigger=trigger,
             auto_created=True,
             send_now=effective_send_now,
         )
@@ -1555,6 +1565,39 @@ def schedule_automatic_receipts_for_events(
     except Exception as exc:
         outcomes.append({"status": "erro", "error": str(exc), "contribution_ids": clean_ids})
     return outcomes
+
+
+def summarize_automatic_receipt_outcomes(
+    outcomes: list[dict[str, Any]],
+    *,
+    send_now: bool,
+) -> dict[str, int]:
+    created = 0
+    sent = 0
+    queued = 0
+    failed = 0
+    without_email = 0
+    for item in outcomes:
+        status = normalize_query(item.get("status"))
+        if status == "sem_email":
+            without_email += 1
+            continue
+        if status == "erro":
+            failed += 1
+            continue
+        if status == "ok":
+            created += 1
+            if send_now:
+                sent += 1
+            else:
+                queued += 1
+    return {
+        "created": created,
+        "sent": sent,
+        "queued": queued,
+        "failed": failed,
+        "without_email": without_email,
+    }
 
 
 def mark_receipt_dispatches_cancelled(receipt_ids: list[int], *, actor: str = "", reason: str = "") -> int:
@@ -1642,3 +1685,97 @@ def backfill_receipt_dispatches(*, actor: str = "") -> dict[str, int]:
         except Exception:
             continue
     return {"scanned": scanned, "created": created}
+
+
+def backfill_native_event_receipts(*, actor: str = "") -> dict[str, int]:
+    from power_church_django.apps.contributions.models import NativeContribution, NativeEnvelope, NativeEnvelopeItem
+    from power_church_django.apps.imports.models import StatementImportPilotMovement
+
+    covered_contribution_ids = {
+        int(value or 0)
+        for value in ReceiptItemSnapshot.objects.filter(receipt__is_cancelled=False).values_list("contribution_legacy_id", flat=True)
+        if int(value or 0)
+    }
+
+    envelope_groups_scanned = 0
+    statement_groups_scanned = 0
+    envelope_outcomes: list[dict[str, Any]] = []
+    statement_outcomes: list[dict[str, Any]] = []
+
+    envelope_ids = list(
+        NativeEnvelope.objects.filter(is_active=True, status="lancado").order_by("competence_order", "received_at", "legacy_id").values_list("legacy_id", flat=True)
+    )
+    for envelope_id in [int(value or 0) for value in envelope_ids if int(value or 0)]:
+        contribution_ids = [
+            int(value or 0)
+            for value in NativeEnvelopeItem.objects.filter(
+                envelope__legacy_id=envelope_id,
+                envelope__is_active=True,
+                is_active=True,
+            ).values_list("contribution_legacy_id", flat=True)
+            if int(value or 0)
+        ]
+        eligible_ids = list(
+            NativeContribution.objects.filter(
+                legacy_id__in=contribution_ids,
+                is_active=True,
+            )
+            .exclude(person_legacy_id__isnull=True)
+            .exclude(person_legacy_id=0)
+            .order_by("legacy_id")
+            .values_list("legacy_id", flat=True)
+        )
+        pending_ids = [int(value or 0) for value in eligible_ids if int(value or 0) and int(value or 0) not in covered_contribution_ids]
+        if not pending_ids:
+            continue
+        envelope_groups_scanned += 1
+        outcomes = schedule_automatic_receipts_for_events(
+            pending_ids,
+            actor=actor,
+            send_now=False,
+            trigger=ReceiptDispatch.Trigger.RETROACTIVE,
+        )
+        envelope_outcomes.extend(outcomes)
+        covered_contribution_ids.update(pending_ids)
+
+    movement_lot_map = {
+        int(movement_id or 0): int(lot_id or 0)
+        for movement_id, lot_id in StatementImportPilotMovement.objects.values_list("id", "lot_id")
+    }
+    statement_groups: dict[int, list[int]] = {}
+    for contribution in NativeContribution.objects.filter(
+        is_active=True,
+        statement_movement_legacy_id__isnull=False,
+    ).exclude(person_legacy_id__isnull=True).exclude(person_legacy_id=0).order_by("statement_movement_legacy_id", "legacy_id"):
+        contribution_id = int(contribution.legacy_id or 0)
+        if not contribution_id or contribution_id in covered_contribution_ids:
+            continue
+        lot_id = int(movement_lot_map.get(int(contribution.statement_movement_legacy_id or 0)) or 0)
+        if not lot_id:
+            continue
+        statement_groups.setdefault(lot_id, []).append(contribution_id)
+
+    for lot_id in sorted(statement_groups):
+        pending_ids = [int(value or 0) for value in statement_groups.get(lot_id, []) if int(value or 0)]
+        if not pending_ids:
+            continue
+        statement_groups_scanned += 1
+        outcomes = schedule_automatic_receipts_for_events(
+            pending_ids,
+            actor=actor,
+            send_now=False,
+            trigger=ReceiptDispatch.Trigger.RETROACTIVE,
+        )
+        statement_outcomes.extend(outcomes)
+        covered_contribution_ids.update(pending_ids)
+
+    envelope_summary = summarize_automatic_receipt_outcomes(envelope_outcomes, send_now=False)
+    statement_summary = summarize_automatic_receipt_outcomes(statement_outcomes, send_now=False)
+    return {
+        "envelope_groups_scanned": envelope_groups_scanned,
+        "statement_groups_scanned": statement_groups_scanned,
+        "queued": int(envelope_summary["queued"] + statement_summary["queued"]),
+        "created": int(envelope_summary["created"] + statement_summary["created"]),
+        "failed": int(envelope_summary["failed"] + statement_summary["failed"]),
+        "without_email": int(envelope_summary["without_email"] + statement_summary["without_email"]),
+    }

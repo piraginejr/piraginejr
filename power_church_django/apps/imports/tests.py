@@ -4,10 +4,15 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from power_church_core.normalization import normalize_match_name
-from power_church_django.apps.contributions.models import ContributionTypeSnapshot, NativeContribution
+from power_church_django.apps.contributions.models import (
+    ContributionTypeSnapshot,
+    NativeContribution,
+    ReceiptDispatch,
+    ReceiptSnapshot,
+)
 from power_church_django.apps.imports.models import CentRuleSnapshot, StatementImportPilotLot, StatementImportPilotMovement
 from power_church_django.apps.imports.services import (
     close_statement_lot_postgres_native,
@@ -19,8 +24,12 @@ from power_church_django.apps.imports.services import (
 from power_church_django.apps.people.models import PersonSnapshot
 
 
+@override_settings(
+    POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED=True,
+    POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED=False,
+)
 class NativeStatementImportWorkflowTests(TestCase):
-    def _person(self, legacy_id: int, name: str, cpf: str = "") -> PersonSnapshot:
+    def _person(self, legacy_id: int, name: str, cpf: str = "", email: str = "") -> PersonSnapshot:
         return PersonSnapshot.objects.create(
             legacy_id=legacy_id,
             organization_id=1,
@@ -35,8 +44,8 @@ class NativeStatementImportWorkflowTests(TestCase):
             birth_date_raw="",
             sex="",
             marital_status="",
-            primary_email="",
-            normalized_email="",
+            primary_email=email,
+            normalized_email=email.upper(),
             primary_phone="",
             primary_whatsapp="",
             status="membro_ativo",
@@ -135,7 +144,7 @@ class NativeStatementImportWorkflowTests(TestCase):
     def test_prepare_lot_creates_native_contribution_and_marks_lot_ready(self) -> None:
         self._type()
         self._rule()
-        person = self._person(1, "Maria Souza", "12345678901")
+        person = self._person(1, "Maria Souza", "12345678901", email="maria@example.com")
         lot = self._lot("postgres_nativo:prepare")
         movement = self._movement(lot, order_in_lot=1, source_name=person.name)
 
@@ -152,6 +161,13 @@ class NativeStatementImportWorkflowTests(TestCase):
         self.assertEqual(contribution.person_legacy_id, person.legacy_id)
         self.assertEqual(contribution.operational_status, "regular")
         self.assertEqual(contribution.statement_movement_legacy_id, movement.id)
+        self.assertEqual(result["auto_receipt_candidates"], 1)
+        self.assertEqual(result["auto_receipt_created"], 1)
+        self.assertEqual(result["auto_receipt_queued"], 1)
+        receipt = ReceiptSnapshot.objects.get(is_cancelled=False)
+        dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
+        self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.AUTOMATIC)
 
     def test_manual_approve_without_person_is_preserved_on_reprocess_and_allows_close(self) -> None:
         self._type()
@@ -190,7 +206,7 @@ class NativeStatementImportWorkflowTests(TestCase):
     def test_same_owner_deactivates_existing_statement_contribution(self) -> None:
         self._type()
         self._rule()
-        person = self._person(2, "João Souza", "98765432100")
+        person = self._person(2, "João Souza", "98765432100", email="joao@example.com")
         lot = self._lot("postgres_nativo:same-owner")
         movement = self._movement(lot, order_in_lot=1, source_name=person.name)
 

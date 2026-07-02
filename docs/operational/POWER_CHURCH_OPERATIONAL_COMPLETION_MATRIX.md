@@ -45,7 +45,7 @@ Os percentuais abaixo sao estimativas operacionais, nao metricas matematicas exa
 
 Hoje, o operador **consegue executar uma fatia ainda maior do nucleo operacional**, e a principal lacuna estrutural anterior, **o enforcement de permissoes por modulo**, foi fechada com evidencia tecnica no runtime atual.
 
-O sistema agora esta **estimado em 85% de operacionalidade geral**.
+O sistema agora esta **estimado em 86% de operacionalidade geral**.
 
 O miolo de:
 
@@ -70,7 +70,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 
 | Indicador | Antes | Depois | Evolucao |
 | --- | ---: | ---: | ---: |
-| Operacionalidade geral estimada | `77%` | `85%` | `+8 p.p.` |
+| Operacionalidade geral estimada | `77%` | `86%` | `+9 p.p.` |
 | FAILs na `regression_audit` | `0` | `0` | estavel |
 | WARNs na `regression_audit` | `19` | `19` | estavel |
 | Enforcement de permissao por view | `Quebrada` | `Operacional` | ganho estrutural |
@@ -78,7 +78,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 
 ### Percentual geral atualizado
 
-- **Operacionalidade geral estimada:** `85%`
+- **Operacionalidade geral estimada:** `86%`
 
 ### Percentual por area e evolucao
 
@@ -88,7 +88,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 | Contribuicoes | `78%` | `81%` | Lista, detalhe, extrato e contribuintes auxiliares existem. Fluxos continuam fortes e agora protegidos por modulo; faltam homologacoes humanas de escrita. |
 | Recibos | `82%` | `84%` | Hub, geracao, detalhe, PDF e monitor existem. Falta validar disparo real e fila em campanha viva na nuvem. |
 | Envelopes | `76%` | `88%` | Fluxo fim a fim foi reforcado com suporte real a arquivo/pasta local, edicao visivel no lote, lancamento/ignorar/correcao cobertos em teste e auditoria sem FAILs da area. Restam amostras humanas de envelope lancado e sugestao cadastral viva. |
-| Importacoes | `72%` | `75%` | Importacao de pessoas e auditoria de extrato existem; com permissoes corrigidas, falta aprofundar reprocesso, preparo e encerramento. |
+| Importacoes | `72%` | `84%` | Importacao de pessoas segue estavel e o lote bancario nativo agora prepara, reprocessa, audita e encerra com contribuicao nativa/sinalizacao correta; falta rodada humana com PDF bancario real. |
 | Auditoria | `88%` | `90%` | Auditoria operacional, tecnica, Django e de e-mails formam um modulo consistente e agora protegido por perfil. |
 | Relatorios | `92%` | `93%` | HTML, PDF e filtros principais estao funcionando bem. |
 | Exports | `90%` | `90%` | CSV e XLSX, inclusive dinamicos, respondem corretamente; o que resta e performance. |
@@ -106,7 +106,7 @@ O que ainda segura o selo de "100% operacional" nao e mais uma dependencia centr
 | People | Operacional com risco de seguranca | Operacional protegido | O modulo segue forte; o ganho principal foi governanca de acesso. |
 | Contributors | Operacional com risco de seguranca | Operacional protegido | Lista e detalhe seguem estaveis, agora sob `view_contributors` / `manage_contributors`. |
 | Contributions | Operacional com risco de seguranca | Operacional protegido | Lista, detalhe, split, extrato e recibos continuam fortes com gate por perfil. |
-| Imports | Parcialmente operacional | Parcialmente operacional protegido | Permissoes fecharam, mas ainda faltam homologacoes de preparo/reprocesso/encerramento. |
+| Imports | Parcialmente operacional | Parcialmente operacional forte e protegido | Permissoes fecharam e o motor nativo agora cobre preparo, reprocesso e encerramento; resta homologar upload real de PDF bancario e sanear pilotos antigos. |
 | Reports | Operacional com risco baixo | Operacional protegido | HTML/PDF seguem estaveis e agora respeitam perfil. |
 | Audit | Operacional com risco de exposicao | Operacional protegido | Ganhou fechamento claro do acesso ao modulo. |
 | Accounts | Parcialmente operacional | Parcialmente operacional protegido | Painel segue tecnico, mas agora so perfis corretos entram. |
@@ -117,7 +117,7 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 
 1. **Fluxos de escrita critica ainda sem homologacao manual completa no runtime atual**
    - Envelopes: lancar, corrigir, ignorar, reabrir por estados diferentes.
-   - Importacoes: preparar, reprocessar e encerrar lote nativo.
+   - Importacoes: subir PDF bancario real e validar conciliação em amostra viva do operador.
    - Recibos: campanha automatica real e reprocessamento de fila com dados vivos.
 
 2. **Configuracao operacional espalhada**
@@ -210,13 +210,16 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 
 | Area | Capacidade | Status | Evidencia | Arquivo / rota relacionada | Risco operacional | Prioridade | Proxima acao sugerida |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Importacoes | Dashboard de importacoes bancarias | Operacional | `/imports/` com `200` | `apps/imports/views.py:index` | Baixo | Alta | Manter cobertura |
+| Importacoes | Dashboard de importacoes bancarias | Operacional | `/imports/` com `200`; contadores seguem a mesma regra de pendencia humana do lote | `apps/imports/views.py:index`, `apps/imports/services.py` | Baixo | Alta | Manter cobertura |
+| Importacoes | Subir PDF bancario para novo lote | Exige validacao manual | Fluxo `POST /imports/` segue ativo e o parser nativo cria lote Postgres; nesta rodada faltou apenas amostra PDF real para homologacao humana | `apps/imports/views.py:index`, `apps/imports/services.py:create_statement_lot_postgres_native` | Medio | Alta | Rodar 1 extrato real controlado com operador |
 | Importacoes | Abrir lote e movimentos | Operacional | `/imports/<kind>/<lot_id>/` e detalhe de movimento ativos | `apps/imports/urls.py`, `templates/imports/lot_detail.html` | Baixo | Alta | Manter cobertura |
-| Importacoes | Auditoria de movimento de extrato | Operacional | Tela mostra associacao, documento, status, destino e acao | `templates/power_church_django/imports/lot_detail.html` | Medio | Alta | Manter como fluxo padrao |
-| Importacoes | Preparar lote para auditoria | Exige validacao manual | Botao exposto em lotes nativos; sem rodada automatica de negocio atual | `templates/imports/lot_detail.html` | Medio | Alta | Homologar com lote de teste controlado |
-| Importacoes | Reprocessar lote | Exige validacao manual | Botao exposto; falta prova atual do comportamento pos-migracao | `templates/imports/lot_detail.html` | Medio | Alta | Homologar num lote isolado |
-| Importacoes | Encerrar lote manualmente | Exige validacao manual | Acao exposta e importante para regra operacional; sem prova recente no runtime | `templates/imports/lot_detail.html` | Alto | Alta | Validar bloqueios e criterio real de encerramento |
+| Importacoes | Auditoria de movimento de extrato | Operacional | Tela mostra associacao, documento, status, destino e acao; testes nativos cobrem aprovar com pessoa, aprovar sem pessoa e mesma titularidade | `templates/power_church_django/imports/movement_detail.html`, `apps/imports/tests.py` | Medio | Alta | Manter como fluxo padrao |
+| Importacoes | Preparar lote para auditoria | Operacional | Testes criam contribuicao nativa no `prepare`; runtime controlado no Docker confirmou lote preparado com movimentos importados | `apps/imports/services.py:prepare_statement_lot_postgres_native`, `apps/imports/tests.py` | Medio | Alta | Validar com PDF real do operador |
+| Importacoes | Reprocessar lote | Operacional | Testes confirmam preservacao da decisao manual “sem vincular pessoa agora” durante o reprocesso | `apps/imports/services.py:reprocess_statement_lot_postgres_native`, `apps/imports/tests.py` | Medio | Alta | Manter sentinela e validar com lote vivo quando houver |
+| Importacoes | Encerrar lote manualmente | Operacional | Testes e fluxo controlado no Docker confirmaram bloqueio por pendencia e encerramento apenas depois da auditoria, preservando sem-associacao corretamente | `apps/imports/services.py:close_statement_lot_postgres_native`, `apps/imports/tests.py` | Alto | Alta | Homologar uma rodada humana com amostra viva |
 | Importacoes | Regras de centavos | Operacional | `/imports/rules/` com `200`; modulo ativo | `apps/imports/views.py:cent_rules`, `/imports/rules/` | Baixo | Alta | Manter cobertura |
+| Importacoes | Importacao de pessoas por planilha | Operacional | Tela, POST, lotes, filtro e impressao seguem ativos; testes existentes cobrem o relatorio filtrado do lote | `apps/people/views.py:imports`, `apps/people/views.py:import_lot`, `apps/people/tests.py` | Baixo | Alta | Manter cobertura e fazer rodada humana apenas de amostra final |
+| Importacoes | Historico/processamento de lotes de pessoas | Operacional | Dashboard e detalhe de lotes `#992`, `#991`, `#3`, `#2`, `#1` responderam `200`; nomes filtrados para correcao e impressao seguem disponiveis | `services/people_import_native.py`, `templates/power_church_django/people/import_lot.html`, `reports/regression_audit_20260701_183556.md` | Baixo | Alta | Manter como trilha oficial da secretaria |
 | Importacoes | Consistencia de lotes piloto antigos | Parcialmente operacional | 6 movimentos ignorados com `imported_contribution_legacy_id` orfao nao bloqueiam operacao, mas poluem consistencia | `reports/regression_warns_triage_20260701_175638.md` | Baixo no uso, medio tecnico | Media | Decidir limpeza ou reclassificacao |
 
 ### 6. Auditoria
@@ -308,7 +311,7 @@ Os principais bloqueadores para chamar o sistema de "100% operacional" hoje sao:
 1. Homologar lancamento de envelope pendente em cenarios reais de 1 linha e multiplas linhas.
 2. Homologar correcao de envelope ja lancado em estado compativel.
 3. Homologar ignorar envelope com justificativa e retorno correto ao lote.
-4. Homologar preparar, reprocessar e encerrar lote de importacao bancaria nativo.
+4. Homologar upload real de PDF bancario e a conciliacao de um lote nativo completo.
 5. Validar campanha real de fila de recibos com itens pendentes, enviados e falhos.
 6. Validar envio real de recibo via Microsoft Graph em nuvem.
 7. Validar envio real de extrato por e-mail em nuvem.

@@ -13,7 +13,9 @@ from django.db import models, transaction
 from django.db.models import Count, Q
 
 from power_church_core.bank_lots import StatementEntryPlan, statement_entry_plan
+from power_church_core.banking import statement_contributor_name_for_identity, statement_layout_contributor_source
 from power_church_core.bank_parsers import parse_statement_pdf_by_layout, statement_should_skip_entry
+from power_church_core.contributors import contributor_kind_for_identity
 from power_church_core.formatting import br_date, br_datetime
 from power_church_core.normalization import (
     document_digits,
@@ -23,6 +25,7 @@ from power_church_core.normalization import (
     moneyless_int,
     normalize_match_name,
     normalize_query,
+    santander_document_type,
     valid_cpf,
 )
 from power_church_django.services.runtime_formatting import _money, format_status
@@ -34,6 +37,14 @@ from power_church_django.apps.people.models import (
     PersonContributorSnapshot,
     PersonRelationshipSnapshot,
     PersonSnapshot,
+)
+from power_church_django.services.contributions_native import (
+    _catalogs_for_org,
+    _native_contributor_id_for_person,
+    _next_native_contribution_public_id,
+    _resolve_native_aux_contributor,
+    _selected_option_name,
+    _sync_person_contribution_snapshot,
 )
 from power_church_django.services.legacy import broad_family_candidates_summary, organized_family_nuclei_summary
 
@@ -103,6 +114,24 @@ def _parse_iso_date(value: object) -> date | None:
         return date.fromisoformat(text)
     except ValueError:
         return None
+
+
+def _merge_notes(*parts: object) -> str:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = normalize_query(part)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return "\n".join(normalized)
+
+
+def _statement_human_pending_filter() -> Q:
+    return Q(review_status__in=["pendente", "revisar_pessoa", "revisar_destinacao", "classificacao_pendente"]) | (
+        Q(review_status="revisar_duplicidade") & Q(imported_contribution_legacy_id__isnull=True)
+    )
 
 
 def _scalar(conn: sqlite3.Connection, sql: str, params: tuple[object, ...] = ()) -> object:
@@ -564,10 +593,7 @@ def get_statement_lot_detail_from_snapshot(
         ).order_by("-updated_at", "-id").first()
     if pilot_lot is None:
         return None
-    human_pending_filter = (
-        Q(review_status__in=["pendente", "revisar_pessoa", "revisar_destinacao", "classificacao_pendente"])
-        | (Q(review_status="revisar_duplicidade") & Q(imported_contribution_legacy_id__isnull=True))
-    )
+    human_pending_filter = _statement_human_pending_filter()
     movement_qs = pilot_lot.movements.all().order_by("movement_date", "order_in_lot", "id")
     if status == "pendencias":
         movement_qs = movement_qs.filter(human_pending_filter)
@@ -975,8 +1001,13 @@ def _statement_native_review_status(
     selected_type_id: int,
     confidence: str,
 ) -> tuple[str, str, int | None]:
+    association_reviewed = bool((pilot_movement.metadata or {}).get("association_reviewed"))
     if not selected_type_id:
         return "revisar_destinacao", confidence, None
+    if association_reviewed:
+        if selected_person_id:
+            return "aprovado", confidence or "aprovado_manual", None
+        return "aprovado", confidence or "sem_vinculo_manual", None
     if not selected_person_id:
         return "revisar_pessoa", confidence or "sem_vinculo", None
     duplicate = _find_duplicate_contribution_for_native_statement(pilot_movement, selected_person_id)
@@ -1003,16 +1034,29 @@ def _apply_native_statement_resolution(
     selected_person_id = moneyless_int(pilot_movement.resolved_person_legacy_id)
     confidence = pilot_movement.confidence or ""
     suggested_people: list[PersonSnapshot] = []
-    if not selected_person_id or not preserve_manual_selection:
+    association_reviewed = bool(meta.get("association_reviewed"))
+    should_recalculate_suggestion = (not selected_person_id and not association_reviewed) or not preserve_manual_selection
+    if should_recalculate_suggestion:
         suggested_people, suggested_confidence = _native_statement_candidate_people(pilot_movement)
         confidence = confidence or suggested_confidence
         first_person = suggested_people[0] if suggested_people else None
         pilot_movement.suggested_person_legacy_id = int(first_person.legacy_id or 0) if first_person else None
-        if not selected_person_id and len(suggested_people) == 1:
+        if not selected_person_id and not association_reviewed and len(suggested_people) == 1:
             selected_person_id = int(first_person.legacy_id or 0)
             pilot_movement.resolved_person_legacy_id = selected_person_id
-        elif not selected_person_id:
+        elif not selected_person_id and not association_reviewed:
             pilot_movement.resolved_person_legacy_id = None
+    elif not selected_person_id:
+        pilot_movement.resolved_person_legacy_id = None
+        suggested_person = None
+        if moneyless_int(pilot_movement.suggested_person_legacy_id):
+            suggested_person = (
+                PersonSnapshot.objects.filter(legacy_id=int(pilot_movement.suggested_person_legacy_id or 0))
+                .only("legacy_id", "name", "cpf")
+                .first()
+            )
+            if suggested_person is not None:
+                suggested_people = [suggested_person]
 
     suggested_person = suggested_people[0] if suggested_people else None
     resolved_person = None
@@ -1042,31 +1086,297 @@ def _apply_native_statement_resolution(
     return pilot_movement
 
 
+def _statement_contribution_person_id_for_movement(pilot_movement: StatementImportPilotMovement) -> int | None:
+    resolved_person_id = moneyless_int(pilot_movement.resolved_person_legacy_id)
+    if resolved_person_id:
+        return resolved_person_id
+    if bool((pilot_movement.metadata or {}).get("association_reviewed")):
+        return None
+    if normalize_query(pilot_movement.review_status) in {"pronto", "aprovado", "importado", "revisar_destinacao"}:
+        suggested_person_id = moneyless_int(pilot_movement.suggested_person_legacy_id)
+        return suggested_person_id or None
+    return None
+
+
+def _statement_contribution_status_for_movement(
+    pilot_movement: StatementImportPilotMovement,
+    person_id: int | None,
+) -> str:
+    review_status = normalize_query(pilot_movement.review_status)
+    if review_status == "ignorado":
+        return "ignorado"
+    if review_status == "revisar_duplicidade":
+        return "duplicidade_suspeita"
+    if not int(person_id or 0):
+        return "sem_associacao"
+    if review_status == "revisar_destinacao":
+        return "classificacao_pendente"
+    return "regular"
+
+
+def _statement_receipt_method_for_movement(
+    pilot_movement: StatementImportPilotMovement,
+    catalogs: dict[str, object],
+) -> tuple[int | None, str]:
+    receiving_code = normalize_query(pilot_movement.receiving_code).upper()
+    options = list(catalogs.get("receiving_options") or [])
+    token_groups: list[list[str]] = []
+    if receiving_code == "PIX":
+        token_groups = [["PIX"]]
+    elif receiving_code in {"TRANSFERENCIA", "TED", "DOC"}:
+        token_groups = [["TRANSFER"], ["TED"], ["DOC"]]
+    elif receiving_code == "DEPOSITO":
+        token_groups = [["DEPOS"]]
+    elif receiving_code:
+        token_groups = [[receiving_code]]
+    for tokens in token_groups:
+        for option in options:
+            option_name = normalize_query(option.get("nome")).upper()
+            if option_name and all(token in option_name for token in tokens):
+                return int(option.get("id") or 0) or None, str(option.get("nome") or "")
+    fallback_name = normalize_query(pilot_movement.receiving_code) or normalize_query(pilot_movement.movement_kind)
+    return None, fallback_name
+
+
+def _statement_campaign_for_movement(pilot_movement: StatementImportPilotMovement) -> tuple[int | None, str]:
+    rule_id = moneyless_int((pilot_movement.metadata or {}).get("regra_id"))
+    if not rule_id:
+        return None, ""
+    rule = (
+        CentRuleSnapshot.objects.filter(legacy_id=rule_id)
+        .only("campaign_legacy_id", "campaign_name")
+        .first()
+    )
+    if rule is None:
+        return None, ""
+    return int(rule.campaign_legacy_id or 0) or None, rule.campaign_name or ""
+
+
+def _statement_notes_for_movement(pilot_movement: StatementImportPilotMovement) -> str:
+    parts = [
+        f"Importado do lote de extrato #{_statement_resolved_lot_id(pilot_movement.lot)}",
+        f"Banco: {pilot_movement.lot.bank_name or 'Extrato bancario'}",
+        f"Tipo: {normalize_query(pilot_movement.movement_kind) or 'Sem tipo'}",
+    ]
+    if normalize_query(pilot_movement.source_name):
+        parts.append(f"Origem: {pilot_movement.source_name}")
+    elif normalize_query(pilot_movement.origin_label):
+        parts.append(f"Origem: {pilot_movement.origin_label}")
+    if normalize_query(pilot_movement.bank_document):
+        parts.append(f"Docto: {pilot_movement.bank_document}")
+    if normalize_query(pilot_movement.cent_code):
+        parts.append(f"Centavos: {pilot_movement.cent_code}")
+    if normalize_query(pilot_movement.review_notes):
+        parts.append(pilot_movement.review_notes)
+    return " | ".join(part for part in parts if normalize_query(part))
+
+
+def _statement_sync_native_contribution_for_movement(
+    pilot_movement: StatementImportPilotMovement,
+    *,
+    actor: str = "",
+) -> int:
+    meta = dict(pilot_movement.metadata or {})
+    organization_id = moneyless_int(meta.get("organizacao_id")) or _default_contribution_type_organization_id()
+    selected_type_id = _statement_selected_type_id(pilot_movement) or _statement_default_type_id(pilot_movement)
+    catalogs = _catalogs_for_org(int(organization_id or 0), selected_type_id=int(selected_type_id or 0))
+    type_name = _selected_option_name(catalogs["type_options"], int(selected_type_id or 0)) or str(meta.get("tipo_sugerido") or "")
+    person_id = _statement_contribution_person_id_for_movement(pilot_movement)
+    status = _statement_contribution_status_for_movement(pilot_movement, person_id)
+    receipt_method_id, receipt_method_name = _statement_receipt_method_for_movement(pilot_movement, catalogs)
+    campaign_id, campaign_name = _statement_campaign_for_movement(pilot_movement)
+    source_label = statement_layout_contributor_source(pilot_movement.lot.layout_code)
+    contribution_id = int(pilot_movement.imported_contribution_legacy_id or 0)
+    contribution = (
+        NativeContribution.objects.filter(legacy_id=contribution_id).first()
+        if contribution_id
+        else None
+    )
+    is_new = contribution is None
+    if contribution is None:
+        contribution_id = contribution_id or _next_native_contribution_public_id()
+        contribution = NativeContribution(
+            legacy_id=int(contribution_id or 0),
+            organization_id=int(organization_id or 0),
+        )
+
+    contributor_id: int | None = None
+    native_aux_contributor_id: int | None = None
+    contributor_source = "postgres_native_statement"
+    contributor_name = normalize_query(pilot_movement.source_name)
+    contributor_document = normalize_query(pilot_movement.bank_document)
+    contributor_type = contributor_kind_for_identity(
+        contributor_name,
+        document_type=normalize_query(pilot_movement.document_type) or santander_document_type(contributor_document),
+        document_value=contributor_document,
+    )
+    if int(person_id or 0):
+        person = (
+            PersonSnapshot.objects.filter(legacy_id=int(person_id or 0))
+            .only("legacy_id", "name", "cpf")
+            .first()
+        )
+        if person is not None:
+            contributor_id = _native_contributor_id_for_person(person)
+            contributor_source = "person_snapshot"
+            contributor_name = person.name or contributor_name
+            contributor_document = person.cpf or contributor_document
+            contributor_type = "pf"
+    else:
+        aux_name = statement_contributor_name_for_identity(
+            pilot_movement.lot.layout_code,
+            pilot_movement.source_name,
+            pilot_movement.bank_document,
+            pilot_movement.document_type,
+        ) or contributor_name or contributor_document or "Contribuinte sem vinculo"
+        aux = _resolve_native_aux_contributor(
+            organization_id=int(organization_id or 0),
+            legacy_contributor_id=moneyless_int(
+                pilot_movement.resolved_contributor_legacy_id or pilot_movement.suggested_contributor_legacy_id
+            ),
+            name=aux_name,
+            document=contributor_document,
+            source=source_label,
+        )
+        contributor_id = int(aux.legacy_reference_id or 0) or None
+        native_aux_contributor_id = int(aux.pk or 0) or None
+        contributor_source = "legacy_aux_contributor" if contributor_id else "native_aux_contributor"
+        contributor_name = aux.name or aux_name
+        contributor_document = aux.primary_document or contributor_document
+        contributor_type = aux.contributor_type or contributor_type
+
+    contribution.person_legacy_id = int(person_id or 0) or None
+    contribution.contributor_legacy_id = int(contributor_id or 0) or None
+    contribution.native_aux_contributor_id = int(native_aux_contributor_id or 0) or None
+    contribution.contributor_source = contributor_source
+    contribution.contributor_name = contributor_name or ""
+    contribution.contributor_document = contributor_document or ""
+    contribution.contributor_type = contributor_type or ""
+    contribution.received_at = pilot_movement.movement_date
+    contribution.received_at_raw = pilot_movement.movement_date.isoformat() if pilot_movement.movement_date else ""
+    contribution.competence = pilot_movement.competence or ""
+    contribution.competence_order = int(pilot_movement.competence_order or 0)
+    contribution.amount = pilot_movement.amount
+    contribution.contribution_type_legacy_id = int(selected_type_id or 0)
+    contribution.contribution_type_name = type_name or "Sem tipo"
+    contribution.campaign_legacy_id = int(campaign_id or 0) or None
+    contribution.campaign_name = campaign_name or ""
+    contribution.receipt_method_legacy_id = int(receipt_method_id or 0) or None
+    contribution.receipt_method_name = receipt_method_name or ""
+    contribution.operational_status = status
+    contribution.notes = _statement_notes_for_movement(pilot_movement)
+    contribution.statement_movement_legacy_id = int(pilot_movement.id or 0)
+    contribution.source = "postgres_native_statement"
+    contribution.is_active = True
+    if is_new:
+        contribution.created_by = actor or "django"
+    contribution.updated_by = actor or "django"
+    contribution.save()
+    _sync_person_contribution_snapshot(contribution)
+    pilot_movement.imported_contribution_legacy_id = int(contribution.legacy_id or 0)
+    pilot_movement.save(update_fields=["imported_contribution_legacy_id", "updated_at"])
+    return int(contribution.legacy_id or 0)
+
+
+def _statement_deactivate_imported_contribution_for_movement(
+    pilot_movement: StatementImportPilotMovement,
+    *,
+    actor: str = "",
+    note: str = "",
+) -> None:
+    contribution_id = int(pilot_movement.imported_contribution_legacy_id or 0)
+    if not contribution_id:
+        return
+    contribution = NativeContribution.objects.filter(legacy_id=contribution_id).first()
+    if contribution is None:
+        return
+    contribution.is_active = False
+    contribution.operational_status = "ignorado"
+    contribution.notes = _merge_notes(contribution.notes, note)
+    contribution.updated_by = actor or "django"
+    contribution.save()
+    _sync_person_contribution_snapshot(contribution)
+
+
+def _ensure_statement_financial_entries_postgres_native(
+    pilot_lot: StatementImportPilotLot,
+    *,
+    actor: str = "",
+) -> dict[str, int]:
+    created = 0
+    synced = 0
+    for movement in pilot_lot.movements.exclude(review_status="ignorado").order_by("order_in_lot", "id"):
+        already_linked = bool(int(movement.imported_contribution_legacy_id or 0))
+        contribution_id = _statement_sync_native_contribution_for_movement(movement, actor=actor)
+        if contribution_id:
+            synced += 1
+            if not already_linked:
+                created += 1
+    return {"created": created, "synced": synced}
+
+
+def _recompute_native_statement_lot_status(pilot_lot: StatementImportPilotLot) -> str:
+    current_status = normalize_query(pilot_lot.lot_status)
+    if current_status == "encerrado":
+        return "encerrado"
+    total = pilot_lot.movements.count()
+    pending_human_count = pilot_lot.movements.filter(_statement_human_pending_filter()).count()
+    ignored_count = pilot_lot.movements.filter(review_status="ignorado").count()
+    linked_ids = list(
+        pilot_lot.movements.exclude(imported_contribution_legacy_id__isnull=True).values_list(
+            "imported_contribution_legacy_id", flat=True
+        )
+    )
+    imported_count = (
+        NativeContribution.objects.filter(legacy_id__in=linked_ids, is_active=True).count()
+        if linked_ids
+        else 0
+    )
+    if total and imported_count + ignored_count >= total and pending_human_count == 0:
+        return "concluido"
+    if imported_count or ignored_count or pending_human_count:
+        return "parcial"
+    return "pendente"
+
+
 def _refresh_native_statement_lot_metadata(pilot_lot: StatementImportPilotLot) -> StatementImportPilotLot:
     review_counts = {
         (row["review_status"] or "sem_status"): int(row["total"] or 0)
         for row in pilot_lot.movements.values("review_status").annotate(total=Count("id")).order_by("-total", "review_status")
     }
-    pending_human_count = pilot_lot.movements.filter(
-        Q(review_status__in=["pendente", "revisar_pessoa", "revisar_destinacao", "classificacao_pendente"])
-        | (Q(review_status="revisar_duplicidade") & Q(imported_contribution_legacy_id__isnull=True))
-    ).count()
+    pending_human_count = pilot_lot.movements.filter(_statement_human_pending_filter()).count()
+    linked_ids = list(
+        pilot_lot.movements.exclude(imported_contribution_legacy_id__isnull=True).values_list(
+            "imported_contribution_legacy_id", flat=True
+        )
+    )
     metadata = dict(pilot_lot.metadata or {})
     metadata["review_counts"] = review_counts
-    metadata["imported_count"] = 0
+    metadata["imported_count"] = (
+        NativeContribution.objects.filter(legacy_id__in=linked_ids, is_active=True).count()
+        if linked_ids
+        else 0
+    )
     metadata["ignored_count"] = pilot_lot.movements.filter(review_status="ignorado").count()
     metadata["pending_human_count"] = int(pending_human_count)
     pilot_lot.metadata = metadata
     pilot_lot.movement_count = pilot_lot.movements.count()
     pilot_lot.total_value = sum((movement.amount for movement in pilot_lot.movements.all()), Decimal("0"))
-    pilot_lot.save(update_fields=["metadata", "movement_count", "total_value", "updated_at"])
+    pilot_lot.lot_status = _recompute_native_statement_lot_status(pilot_lot)
+    pilot_lot.save(update_fields=["metadata", "movement_count", "total_value", "lot_status", "updated_at"])
     return pilot_lot
 
 
 def _native_form_lists(data: object) -> dict[str, list[str]]:
     if hasattr(data, "lists"):
         return {str(key): [str(item) for item in values] for key, values in data.lists()}
-    return {}
+    normalized: dict[str, list[str]] = {}
+    for key, value in dict(data or {}).items():
+        if isinstance(value, (list, tuple)):
+            normalized[str(key)] = [str(item) for item in value]
+        else:
+            normalized[str(key)] = [str(value)]
+    return normalized
 
 
 def prepare_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[str, int | str]:
@@ -1083,11 +1393,10 @@ def prepare_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[
             _apply_native_statement_resolution(movement, preserve_manual_selection=True)
             movement.save()
             reviewed += 1
-        pilot_lot.lot_status = "parcial"
+        financial = _ensure_statement_financial_entries_postgres_native(pilot_lot, actor=actor)
         _refresh_native_statement_lot_metadata(pilot_lot)
-        pilot_lot.save(update_fields=["lot_status", "metadata", "movement_count", "total_value", "updated_at"])
     return {
-        "importados": 0,
+        "importados": int(financial.get("created", 0) or 0),
         "movidos_contribuintes": 0,
         "status_antes": previous_status,
         "auto_receipt_candidates": 0,
@@ -1114,9 +1423,8 @@ def reprocess_statement_lot_postgres_native(lot_id: int) -> int:
             _apply_native_statement_resolution(movement, preserve_manual_selection=True)
             movement.save()
             updated += 1
-        pilot_lot.lot_status = "parcial"
+        _ensure_statement_financial_entries_postgres_native(pilot_lot)
         _refresh_native_statement_lot_metadata(pilot_lot)
-        pilot_lot.save(update_fields=["lot_status", "metadata", "movement_count", "total_value", "updated_at"])
     return updated
 
 
@@ -1133,7 +1441,7 @@ def update_statement_movement_postgres_native(
     if pilot_movement is None:
         raise ValueError("Movimento nativo de extrato nao encontrado.")
     data = _native_form_lists(form)
-    action = normalize_query((data.get("action") or ["approve"])[0])
+    action = str((data.get("action") or ["approve"])[0] or "").strip().lower()
     review_notes = str((data.get("review_notes") or [""])[0] or "").strip()
     resolved_person_id = moneyless_int((data.get("resolved_person_id") or ["0"])[0])
     resolved_type_id = moneyless_int((data.get("resolved_tipo_contribuicao_id") or ["0"])[0])
@@ -1147,10 +1455,20 @@ def update_statement_movement_postgres_native(
         if action == "ignore":
             pilot_movement.review_status = "ignorado"
             pilot_movement.resolved_person_legacy_id = None
+            _statement_deactivate_imported_contribution_for_movement(
+                pilot_movement,
+                actor=actor,
+                note=review_notes or "Movimento de extrato marcado como ignorado na auditoria.",
+            )
         elif action == "same_owner":
             pilot_movement.review_status = "ignorado"
             pilot_movement.resolved_person_legacy_id = None
             pilot_movement.review_notes = review_notes or "Mesma titularidade / origem interna."
+            _statement_deactivate_imported_contribution_for_movement(
+                pilot_movement,
+                actor=actor,
+                note=pilot_movement.review_notes,
+            )
         else:
             pilot_movement.resolved_person_legacy_id = resolved_person_id or None
             if resolved_type_id:
@@ -1161,11 +1479,11 @@ def update_statement_movement_postgres_native(
         pilot_movement.metadata = meta
         pilot_movement.save()
         pilot_lot = pilot_movement.lot
-        if pilot_lot.lot_status in {"", "pendente"}:
-            pilot_lot.lot_status = "parcial"
+        imported_contribution_id = 0
+        if action not in {"ignore", "same_owner"}:
+            imported_contribution_id = _statement_sync_native_contribution_for_movement(pilot_movement, actor=actor)
         _refresh_native_statement_lot_metadata(pilot_lot)
-        pilot_lot.save(update_fields=["lot_status", "metadata", "movement_count", "total_value", "updated_at"])
-    return 0
+    return int(imported_contribution_id or 0)
 
 
 def close_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[str, int | str]:
@@ -1182,13 +1500,14 @@ def close_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[st
             f"O lote ainda tem {pending_human_count} pendencia(s) humana(s). Conclua a auditoria antes de encerrar."
         )
     with transaction.atomic():
+        financial = _ensure_statement_financial_entries_postgres_native(pilot_lot, actor=actor)
         pilot_lot.lot_status = "encerrado"
         metadata = dict(pilot_lot.metadata or {})
         metadata["closed_by"] = actor or "django"
         pilot_lot.metadata = metadata
         pilot_lot.save(update_fields=["lot_status", "metadata", "updated_at"])
     return {
-        "importados": 0,
+        "importados": int(financial.get("created", 0) or 0),
         "movidos_contribuintes": 0,
         "auto_receipt_candidates": 0,
         "auto_receipt_created": 0,
@@ -1398,10 +1717,7 @@ def dashboard_summary_postgres() -> dict[str, Any]:
     unlinked_contributions = contributions_qs.filter(person_legacy_id__isnull=True).count()
     statement_lots = StatementImportPilotLot.objects.count()
     pix_lots = 0
-    pending_bank_reviews = StatementImportPilotMovement.objects.filter(
-        Q(review_status__in=["revisar_pessoa", "revisar_destinacao"])
-        | Q(review_status="revisar_duplicidade", imported_contribution_legacy_id__isnull=True)
-    ).count()
+    pending_bank_reviews = StatementImportPilotMovement.objects.filter(_statement_human_pending_filter()).count()
 
     relationships = PersonRelationshipSnapshot.objects.filter(
         is_active=True,

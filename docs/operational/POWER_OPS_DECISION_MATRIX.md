@@ -80,6 +80,23 @@ Principio guia:
 | --- | --- | --- |
 | **Tecnologia/Ferramenta:** verificador mestre do runtime + smoke controlado de login, dashboard, envelopes, recibos, extratos, API e PDFs<br>**Funcao:** provar que os fluxos reais continuam operando apos mudancas<br>**Decisao:** Usar agora<br>**Justificativa:** o risco principal do projeto nao e infra pura; e regressao de regra operacional<br>**Como entra no Power Church:** vira a camada principal do Power Church Operations por cima das ferramentas nativas<br>**Risco ou cuidado:** smoke mal desenhado pode dar falso positivo se nao cobrir os bloqueadores reais | **Tecnologia/Ferramenta:** suite ampliada por perfil, permissao, concorrencia e massa anonima de regressao<br>**Funcao:** aprofundar cobertura sem depender so do operador humano<br>**Decisao:** Usar depois<br>**Justificativa:** deve crescer junto com a API e com os modulos mais sensiveis<br>**Como entra no Power Church:** segunda geracao do verificador, mais completa e mais proxima do uso real em nuvem<br>**Risco ou cuidado:** testes muito pesados podem dificultar ciclo rapido de deploy | **Tecnologia/Ferramenta:** teste exclusivamente manual e exploratorio do operador como unica barreira<br>**Funcao:** descobrir bugs apenas apos a subida<br>**Decisao:** Nao usar agora<br>**Justificativa:** deixa o ambiente do cliente absorver o custo da validacao<br>**Como entra no Power Church:** nao entra como estrategia principal<br>**Risco ou cuidado:** aumenta retrabalho, desgaste com o operador e percepcao de retrocesso |
 
+## Regra de execucao assistida
+
+Para evitar silencio operacional em validacoes longas, o Power Church Operations passa a adotar a seguinte regra:
+
+1. Qualquer comando, auditoria ou teste que fique **7 minutos sem progresso observavel** deve ser interrompido.
+2. Antes de interromper, registrar o ponto em que a execucao parou e o objetivo do comando.
+3. Depois da interrupcao, a validacao deve ser retomada em blocos menores, com checkpoints explicitos por modulo, rota ou lote.
+4. Sempre que possivel, preferir comandos com timeout, saida incremental ou relatorios parciais em vez de uma auditoria unica e opaca.
+5. Se o processo for propositalmente demorado, isso deve ser avisado antes da execucao, com a estimativa esperada e o criterio de abandono.
+
+Objetivo pratico da regra:
+
+- evitar janelas longas sem retorno;
+- reduzir risco de travamento invisivel;
+- manter a homologacao auditavel;
+- permitir troca rapida para uma estrategia mais granular quando a verificacao ampla nao responder.
+
 ## Arquitetura operacional final proposta
 
 ### Camada base nativa

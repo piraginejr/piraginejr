@@ -247,6 +247,63 @@ curl -I http://127.0.0.1:8001/accounts/login/
 curl -i http://127.0.0.1:8001/api/v1/health/
 ```
 
+## Rotina Temporaria De Recuperacao De Recibos
+
+Quando houver regressao de gatilho e precisarmos recuperar recibos que deveriam ter sido emitidos automaticamente, a estrategia mais segura e:
+
+- reenfileirar os faltantes;
+- tratar tudo como recuperacao retroativa;
+- drenar a fila com cadencia controlada, no estilo dos extratos.
+
+Isso agora pode ser acoplado temporariamente a uma atualizacao do runtime.
+
+### Como ativar
+
+No `runtime.env` da nuvem, definir temporariamente:
+
+```env
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_ENABLED=true
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_STAMP=receipt_recovery_20260702
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_DRAIN_QUEUE=true
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_LIMIT=40
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_SLEEP_SECONDS=3
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_PAUSE_EVERY=40
+POWER_CHURCH_TEMP_RECEIPT_RECOVERY_PAUSE_SECONDS=60
+```
+
+### O que acontece na subida
+
+Durante o startup do container Django:
+
+1. roda `python manage.py backfill_automatic_event_receipts`;
+2. reenfileira os recibos faltantes apenas para quem tem e-mail;
+3. se `DRAIN_QUEUE=true`, roda `python manage.py process_receipt_dispatch_queue --drain` com a cadencia configurada;
+4. grava um carimbo em `/app/data/runtime_flags/<STAMP>.done`.
+
+### Garantia de execucao unica
+
+Se o mesmo `STAMP` ja tiver sido executado, a rotina nao roda de novo.
+
+Isso evita:
+
+- duplicidade de envio;
+- nova drenagem indevida em reinicios futuros;
+- repeticao acidental na mesma versao.
+
+### Desligamento depois da recuperacao
+
+Depois da execucao bem-sucedida:
+
+- conferir o log em `/app/logs/<STAMP>.log`;
+- voltar `POWER_CHURCH_TEMP_RECEIPT_RECOVERY_ENABLED=false`;
+- manter o `STAMP` registrado para auditoria.
+
+Observacao:
+
+- essa rotina e excepcional;
+- nao substitui o fluxo normal restaurado dos envelopes e extratos;
+- o uso recomendado e apenas para limpar passivo criado por regressao operacional.
+
 ### 5. Smoke test funcional
 
 Minimo recomendado:

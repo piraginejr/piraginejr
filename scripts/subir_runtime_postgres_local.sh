@@ -9,6 +9,7 @@ COMPOSE_FILE="$PROJECT_DIR/docker-compose.runtime.yml"
 ENV_FILE="$RUNTIME_DIR/env/runtime.env"
 RUNTIME_URL="${POWER_CHURCH_RUNTIME_URL:-http://127.0.0.1:8001/accounts/login/}"
 FORCE_BUILD="${POWER_CHURCH_RUNTIME_FORCE_BUILD:-0}"
+RUNTIME_COMMIT_FILE="$RUNTIME_DIR/.runtime_git_commit"
 
 export POWER_CHURCH_RUNTIME_DIR="$RUNTIME_DIR"
 
@@ -131,11 +132,28 @@ if [[ -z "$DOCKER_BIN" ]]; then
   exit 1
 fi
 
+CURRENT_GIT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")"
+RUNTIME_GIT_COMMIT=""
+if [[ -f "$RUNTIME_COMMIT_FILE" ]]; then
+  RUNTIME_GIT_COMMIT="$(tr -d '\r\n' < "$RUNTIME_COMMIT_FILE")"
+fi
+
+if [[ "$FORCE_BUILD" != "1" && -n "$CURRENT_GIT_COMMIT" && "$CURRENT_GIT_COMMIT" != "$RUNTIME_GIT_COMMIT" ]]; then
+  FORCE_BUILD="1"
+  if [[ -n "$RUNTIME_GIT_COMMIT" ]]; then
+    echo "Commit do Git mudou desde o ultimo runtime local."
+    echo "Runtime salvo: $RUNTIME_GIT_COMMIT"
+    echo "Git atual:    $CURRENT_GIT_COMMIT"
+  else
+    echo "Runtime local sem marcador de commit. Farei um rebuild para alinhar o codigo."
+  fi
+fi
+
 if ! ensure_docker_ready; then
   exit 1
 fi
 
-if /usr/bin/curl -fsS --max-time 2 "$RUNTIME_URL" >/dev/null 2>&1; then
+if [[ "$FORCE_BUILD" != "1" ]] && /usr/bin/curl -fsS --max-time 2 "$RUNTIME_URL" >/dev/null 2>&1; then
   echo "Runtime PostgreSQL ja esta respondendo em $RUNTIME_URL"
   exit 0
 fi
@@ -162,6 +180,10 @@ else
 fi
 zsh "$SCRIPT_DIR/hidratar_runtime_importacoes_postgres_local.sh"
 "$DOCKER_BIN" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
+
+if [[ -n "$CURRENT_GIT_COMMIT" ]]; then
+  printf '%s\n' "$CURRENT_GIT_COMMIT" > "$RUNTIME_COMMIT_FILE"
+fi
 
 echo
 echo "Runtime Docker do Power Church PostgreSQL no ar."

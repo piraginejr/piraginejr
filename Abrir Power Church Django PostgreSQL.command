@@ -11,7 +11,8 @@ echo "Endereco: $RUNTIME_URL"
 if [[ "${POWER_CHURCH_RUNTIME_FORCE_BUILD:-0}" == "1" ]]; then
   echo "Modo: rebuild completo do runtime"
 else
-  echo "Modo: abertura rapida, sem rebuild"
+  echo "Modo: abertura inteligente"
+  echo "Ele pode abrir rapido, aguardar o Docker, ou rebuildar se o Git mudou."
 fi
 echo
 

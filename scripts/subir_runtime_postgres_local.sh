@@ -10,6 +10,7 @@ ENV_FILE="$RUNTIME_DIR/env/runtime.env"
 RUNTIME_URL="${POWER_CHURCH_RUNTIME_URL:-http://127.0.0.1:8001/accounts/login/}"
 FORCE_BUILD="${POWER_CHURCH_RUNTIME_FORCE_BUILD:-0}"
 RUNTIME_COMMIT_FILE="$RUNTIME_DIR/.runtime_git_commit"
+START_REASON="fast"
 
 export POWER_CHURCH_RUNTIME_DIR="$RUNTIME_DIR"
 
@@ -82,6 +83,7 @@ launch_docker_runtime_app() {
   local app_path
   app_path="$(resolve_app_path "$app_name" || true)"
   [[ -n "$app_path" ]] || return 1
+  START_REASON="docker_boot"
   echo "Docker indisponivel. Abrindo $app_name automaticamente..."
   /usr/bin/open -a "$app_path" >/dev/null 2>&1 || return 1
   return 0
@@ -140,6 +142,7 @@ fi
 
 if [[ "$FORCE_BUILD" != "1" && -n "$CURRENT_GIT_COMMIT" && "$CURRENT_GIT_COMMIT" != "$RUNTIME_GIT_COMMIT" ]]; then
   FORCE_BUILD="1"
+  START_REASON="git_rebuild"
   if [[ -n "$RUNTIME_GIT_COMMIT" ]]; then
     echo "Commit do Git mudou desde o ultimo runtime local."
     echo "Runtime salvo: $RUNTIME_GIT_COMMIT"
@@ -154,9 +157,22 @@ if ! ensure_docker_ready; then
 fi
 
 if [[ "$FORCE_BUILD" != "1" ]] && /usr/bin/curl -fsS --max-time 2 "$RUNTIME_URL" >/dev/null 2>&1; then
+  echo "Modo detectado: abertura rapida."
   echo "Runtime PostgreSQL ja esta respondendo em $RUNTIME_URL"
   exit 0
 fi
+
+case "$START_REASON" in
+  git_rebuild)
+    echo "Modo detectado: rebuild automatico por mudanca de commit no Git."
+    ;;
+  docker_boot)
+    echo "Modo detectado: espera do Docker/OrbStack iniciar antes da subida."
+    ;;
+  *)
+    echo "Modo detectado: subida local normal do runtime."
+    ;;
+esac
 
 echo "Subindo runtime Docker do Power Church..."
 echo "Runtime alvo: $RUNTIME_DIR"

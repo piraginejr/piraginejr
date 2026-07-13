@@ -1011,10 +1011,6 @@ def _find_duplicate_contribution_for_native_statement(
         exact_day = queryset.filter(received_at=pilot_movement.movement_date).order_by("-legacy_id").first()
         if exact_day is not None:
             return exact_day
-    if pilot_movement.competence:
-        exact_competence = queryset.filter(competence=pilot_movement.competence).order_by("-legacy_id").first()
-        if exact_competence is not None:
-            return exact_competence
     return None
 
 

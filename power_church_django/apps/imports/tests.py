@@ -22,7 +22,7 @@ from power_church_django.apps.imports.services import (
     reprocess_statement_lot_postgres_native,
     update_statement_movement_postgres_native,
 )
-from power_church_django.apps.people.models import PersonSnapshot
+from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 
 
 @override_settings(
@@ -140,6 +140,32 @@ class NativeStatementImportWorkflowTests(TestCase):
                 "contribution_type_id": 0,
                 "rule_type_id": 10,
             },
+        )
+
+    def _existing_contribution(
+        self,
+        person: PersonSnapshot,
+        *,
+        legacy_id: int,
+        received_at: date,
+        competence: str,
+        amount: str = "100.00",
+    ) -> PersonContributionSnapshot:
+        return PersonContributionSnapshot.objects.create(
+            legacy_id=legacy_id,
+            organization_id=person.organization_id,
+            person=person,
+            contributor_legacy_id=None,
+            received_at=received_at,
+            received_at_raw=received_at.isoformat(),
+            competence=competence,
+            competence_order=202607,
+            amount=Decimal(amount),
+            operational_status="regular",
+            contribution_type_name="Dizimo",
+            receipt_method_name="PIX",
+            source_name="Teste existente",
+            is_active=True,
         )
 
     def test_prepare_lot_creates_native_contribution_and_marks_lot_ready(self) -> None:
@@ -314,3 +340,53 @@ class NativeStatementImportWorkflowTests(TestCase):
         self.assertEqual(contribution.person_legacy_id, person.legacy_id)
         self.assertIsNone(contribution.native_aux_contributor_id)
         self.assertEqual(contribution.contributor_source, "person_snapshot")
+
+    def test_prepare_lot_marks_duplicate_when_same_person_amount_and_day_match(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(13, "Pessoa Duplicada", "22233344455")
+        self._existing_contribution(
+            person,
+            legacy_id=9001,
+            received_at=date(2026, 7, 1),
+            competence="2026-07",
+        )
+        lot = self._lot("postgres_nativo:duplicate-same-day")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=person.name,
+            bank_document=person.cpf,
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        self.assertEqual(movement.review_status, "revisar_duplicidade")
+        self.assertEqual(movement.duplicate_contribution_legacy_id, 9001)
+
+    def test_prepare_lot_allows_same_person_amount_in_same_month_with_different_day(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(14, "Pessoa Repetida no Mes", "33344455566")
+        self._existing_contribution(
+            person,
+            legacy_id=9002,
+            received_at=date(2026, 7, 2),
+            competence="2026-07",
+        )
+        lot = self._lot("postgres_nativo:no-duplicate-same-competence")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=person.name,
+            bank_document=person.cpf,
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertIsNone(movement.duplicate_contribution_legacy_id)

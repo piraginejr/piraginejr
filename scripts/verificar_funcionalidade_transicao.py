@@ -113,6 +113,20 @@ def build_checks(db_path: Path) -> list[Check]:
     )
     expect(
         checks,
+        "Parser Santander periodo por movimentos",
+        bank_parsers.santander_period_from_entries(
+            [
+                {"received_on": "2026-06-30"},
+                {"received_on": "2026-06-01"},
+                {"received_on": "2026-06-22"},
+            ],
+            "2026-06-01",
+            "2026-07-13",
+        )
+        == ("2026-06-01", "2026-06-30"),
+    )
+    expect(
+        checks,
         "Parser Sicoob remetente",
         bank_parsers.sicoob_receiving_extract_source_name(
             "CRED.TR.CT.INTERCRE",

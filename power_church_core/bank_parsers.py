@@ -1152,6 +1152,25 @@ def santander_period_from_text(full_text: object, layout_code: object) -> tuple[
     raise ValueError(f"Nao foi possivel identificar o periodo do extrato {detected}.")
 
 
+def santander_period_from_entries(
+    entries: list[dict[str, object]],
+    fallback_start: str,
+    fallback_end: str,
+) -> tuple[str, str]:
+    movement_dates: list[date] = []
+    for entry in entries:
+        received_on = normalize_query(entry.get("received_on"))
+        if not received_on:
+            continue
+        try:
+            movement_dates.append(date.fromisoformat(received_on))
+        except ValueError:
+            continue
+    if movement_dates:
+        return min(movement_dates).isoformat(), max(movement_dates).isoformat()
+    return fallback_start, fallback_end
+
+
 def parse_santander_statement_pdf(pdf_path: Path, requested_layout_code: str = "SANTANDER_AUTO") -> dict[str, object]:
     pages = extract_pdf_pages(pdf_path)
     full_text = "\n".join(pages)
@@ -1233,6 +1252,7 @@ def parse_santander_statement_pdf(pdf_path: Path, requested_layout_code: str = "
             index += 1
     if not entries:
         raise ValueError("Nao foi possivel localizar PIX recebidos validos no extrato Santander.")
+    period_start, period_end = santander_period_from_entries(entries, period_start, period_end)
     return {
         "bank_name": "Santander",
         "statement_kind": "extrato_santander",

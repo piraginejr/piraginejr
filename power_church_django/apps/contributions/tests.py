@@ -25,6 +25,7 @@ from power_church_django.apps.contributions.models import (
 )
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.contributions_native import person_statement_data_postgres
+from power_church_django.services.contributors_native import link_contributor_to_person_by_id_postgres, lookup_envelope_people_postgres
 from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
     ENVELOPE_IN_PROGRESS_TIMEOUT,
@@ -405,6 +406,42 @@ class EnvelopeOperationalFlowTests(TestCase):
             ).exists()
         )
 
+    def test_lookup_phone_suggestion_uses_canonical_person_reference(self) -> None:
+        payload = lookup_envelope_people_postgres(phone=self.person.primary_phone)
+
+        self.assertEqual(len(payload["phone_matches"]), 1)
+        self.assertTrue(payload["phone_matches"][0]["participant_ref"].startswith(f"Pessoa #{self.person.legacy_id} · {self.person.name}"))
+
+    def test_create_manual_envelope_from_phone_suggestion_keeps_existing_person(self) -> None:
+        suggestion = lookup_envelope_people_postgres(phone=self.person.primary_phone)["phone_matches"][0]["participant_ref"]
+
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as runtime_dir:
+            source_file = Path(source_dir) / "telefone.jpg"
+            source_file.write_bytes(b"fake-phone-envelope")
+
+            with patch.dict(os.environ, {"POWER_CHURCH_ENVELOPE_DIR": runtime_dir}, clear=False):
+                result = create_envelope_contribution_batch_postgres(
+                    {
+                        "data_recebimento": "2026-07-03",
+                        "competencia_mes": "2026-07",
+                        "nome_lote": "Envelope por telefone",
+                        "valor_total": "80,00",
+                        "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                        "participante_principal_ref": suggestion,
+                        "telefone_informado": self.person.primary_phone,
+                        "justificativa": "Teste de sugestao por telefone.",
+                        "origem_operacional": "Fluxo por telefone",
+                        "imagem_envelope_path": str(source_file),
+                    },
+                    None,
+                    actor="tester",
+                )
+
+        envelope = NativeEnvelope.objects.get(legacy_id=result["envelope_id"])
+        self.assertEqual(envelope.person_legacy_id, self.person.legacy_id)
+        self.assertIsNone(envelope.native_aux_contributor_id)
+        self.assertFalse(NativeAuxContributor.objects.filter(name=self.person.name, person_legacy_id__isnull=True).exists())
+
     def test_lot_detail_exposes_edit_url_for_launched_envelope(self) -> None:
         lot = NativeEnvelopeLot.objects.create(
             legacy_id=2,
@@ -568,6 +605,63 @@ class EnvelopeOperationalFlowTests(TestCase):
         self.assertIsNotNone(detail)
         self.assertEqual(detail["contribuinte_nome"], aux.name)
         self.assertEqual(detail["documento_principal"], aux.primary_document)
+
+    def test_linking_aux_contributor_moves_existing_records_to_canonical_person(self) -> None:
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            legacy_reference_id=901,
+            name="Pessoa Envelope",
+            normalized_name="PESSOA ENVELOPE",
+            primary_document="12345678901",
+            person_legacy_id=None,
+            is_active=True,
+        )
+        duplicate_aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            name="Pessoa Envelope",
+            normalized_name="PESSOA ENVELOPE",
+            primary_document="12345678901",
+            person_legacy_id=self.person.legacy_id,
+            is_active=True,
+        )
+        contribution = NativeContribution.objects.create(
+            legacy_id=9901,
+            organization_id=1,
+            person_legacy_id=None,
+            contributor_legacy_id=aux.legacy_reference_id,
+            contributor_source="legacy_aux_contributor",
+            contributor_name=aux.name,
+            contributor_document=aux.primary_document,
+            contributor_type="pf",
+            native_aux_contributor_id=aux.id,
+            contribution_type_legacy_id=self.type_snapshot.legacy_id,
+            contribution_type_name=self.type_snapshot.name,
+            operational_status="regular",
+            amount=Decimal("50.00"),
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=9902,
+            organization_id=1,
+            person_legacy_id=None,
+            contributor_legacy_id=aux.legacy_reference_id,
+            native_aux_contributor_id=aux.id,
+            status="lancado",
+            is_active=True,
+        )
+
+        linked = link_contributor_to_person_by_id_postgres(aux.legacy_reference_id, self.person.legacy_id, actor="tester")
+
+        self.assertTrue(linked)
+        contribution.refresh_from_db()
+        envelope.refresh_from_db()
+        duplicate_aux.refresh_from_db()
+        self.assertEqual(contribution.person_legacy_id, self.person.legacy_id)
+        self.assertIsNone(contribution.native_aux_contributor_id)
+        self.assertEqual(contribution.contributor_source, "person_snapshot")
+        self.assertEqual(envelope.person_legacy_id, self.person.legacy_id)
+        self.assertIsNone(envelope.native_aux_contributor_id)
+        self.assertFalse(duplicate_aux.is_active)
 
 
 class PersonStatementDataPostgresTests(TestCase):

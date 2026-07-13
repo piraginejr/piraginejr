@@ -36,7 +36,7 @@
         </datalist>
         <datalist id="envelope-participant-options">
           {% for option in form_data.participant_options %}
-            <option value="{{ option.value }}" data-kind="{{ option.kind|default:'' }}">{{ option.label }}</option>
+            <option value="{{ option.value }}" data-kind="{{ option.kind|default:'' }}" data-phone="{{ option.phone|default:'' }}" data-whatsapp="{{ option.whatsapp|default:'' }}">{{ option.label }}</option>
           {% endfor %}
         </datalist>
         <div class="envelope-entry-grid">
@@ -452,7 +452,7 @@
                 cpf +
                 matched +
                 "<div class='actions compact-actions'>" +
-                  "<button type='button' class='button secondary' data-person-label='" + escapeHtml(item.label) + "'>Usar na identificacao principal</button>" +
+                  "<button type='button' class='button secondary' data-participant-ref='" + escapeHtml(item.participant_ref || '') + "'>Usar na identificacao principal</button>" +
                 "</div>" +
               "</div>"
             );
@@ -559,9 +559,9 @@
         }
         if (hintsContent && personRefInput) {
           hintsContent.addEventListener("click", function (event) {
-            const button = event.target.closest("[data-person-label]");
+            const button = event.target.closest("[data-participant-ref]");
             if (!button) return;
-            personRefInput.value = button.dataset.personLabel || "";
+            personRefInput.value = button.dataset.participantRef || "";
             personRefInput.dispatchEvent(new Event("input", { bubbles: true }));
             personRefInput.focus();
             syncPhoneWarning();

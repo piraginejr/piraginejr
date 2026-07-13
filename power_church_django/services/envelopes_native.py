@@ -17,7 +17,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from power_church_core.formatting import br_date, br_datetime, br_money, competencia_from_date, parse_money
-from power_church_core.normalization import normalize_query
+from power_church_core.normalization import format_cpf, normalize_match_name, normalize_query
 from power_church_django.apps.contributions.models import (
     NativeAuxContributor,
     NativeContribution,
@@ -60,6 +60,24 @@ ENVELOPE_STATUS_LABELS = {
     "ignorado": "Ignorado",
     "duplicado": "Duplicado",
 }
+
+
+def _person_option_label(person: dict[str, Any]) -> str:
+    cpf = f" · CPF {person['cpf']}" if person.get("cpf") else ""
+    code = f" · Ficha {person['codigo']}" if person.get("codigo") else ""
+    search_hint = ""
+    if any(ord(ch) > 127 for ch in str(person.get("nome") or "")):
+        search_hint = f" · busca {normalize_match_name(person.get('nome'))}"
+    return f"Pessoa #{person['id']} · {person['nome']} · {person['sigla']}{code}{cpf}{search_hint}"
+
+
+def _contributor_option_label(contributor: dict[str, Any]) -> str:
+    document = f" · {contributor['documento']}" if contributor.get("documento") else ""
+    kind = f" · {contributor['tipo']}" if contributor.get("tipo") else ""
+    search_hint = ""
+    if any(ord(ch) > 127 for ch in str(contributor.get("nome") or "")):
+        search_hint = f" · busca {normalize_match_name(contributor.get('nome'))}"
+    return f"Contribuinte #{contributor['id']} · {contributor['nome']}{kind}{document}{search_hint}"
 
 
 def _auto_issue_native_envelope_receipts(contribution_ids: list[int], *, actor: str = "") -> dict[str, int]:
@@ -639,18 +657,37 @@ def _participant_options_native(
     options: list[dict[str, str]] = []
     options.extend(
         {
-            "value": f"Pessoa #{int(person.get('id') or 0)}",
+            "value": _person_option_label(
+                {
+                    "id": int(person.get("id") or 0),
+                    "nome": person.get("nome") or "",
+                    "codigo": person.get("codigo") or "",
+                    "cpf": person.get("cpf") or "",
+                    "sigla": person.get("sigla") or "",
+                }
+            ),
             "label": f"Pessoa do rol · {person.get('nome') or ''}",
             "kind": "pessoa",
+            "phone": person.get("telefone") or "",
+            "whatsapp": person.get("whatsapp") or "",
         }
         for person in people
         if int(person.get("id") or 0)
     )
     options.extend(
         {
-            "value": f"Contribuinte #{int(contributor.get('id') or 0)}",
+            "value": _contributor_option_label(
+                {
+                    "id": int(contributor.get("id") or 0),
+                    "nome": contributor.get("nome") or "",
+                    "documento": contributor.get("documento") or "",
+                    "tipo": contributor.get("tipo") or "",
+                }
+            ),
             "label": f"Contribuinte auxiliar · {contributor.get('nome') or ''}",
             "kind": "contribuinte",
+            "phone": "",
+            "whatsapp": "",
         }
         for contributor in contributors
         if int(contributor.get("id") or 0) and contributor.get("nome")
@@ -1500,6 +1537,8 @@ def get_envelope_detail_postgres(envelope_id: int) -> dict[str, Any] | None:
         if int(envelope.native_aux_contributor_id or 0)
         else None
     )
+    if aux_contributor is not None and person is not None and int(aux_contributor.person_legacy_id or 0) == int(person.legacy_id or 0):
+        aux_contributor = None
     profile_updates = []
     for update in envelope.profile_updates.order_by("status", "field_name", "id"):
         update_person = (

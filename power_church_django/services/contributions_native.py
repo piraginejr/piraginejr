@@ -637,6 +637,15 @@ def _contributor_cache_from_person(person: PersonSnapshot) -> dict[str, object]:
 
 def _contributor_cache_from_aux(aux: NativeAuxContributor) -> dict[str, object]:
     person_id = int(aux.person_legacy_id or 0) or None
+    if person_id:
+        person = PersonSnapshot.objects.filter(legacy_id=person_id, is_active=True).only("legacy_id", "name", "cpf").first()
+        if person is not None:
+            cache = _contributor_cache_from_person(person)
+            if not int(cache.get("contributor_legacy_id") or 0) and int(aux.legacy_reference_id or 0):
+                cache["contributor_legacy_id"] = int(aux.legacy_reference_id or 0)
+            if not normalize_query(cache.get("contributor_document")) and aux.primary_document:
+                cache["contributor_document"] = aux.primary_document
+            return cache
     source = "native_aux_contributor"
     if int(aux.legacy_reference_id or 0):
         source = "legacy_aux_contributor"
@@ -1105,6 +1114,10 @@ def get_contribution_detail_postgres(contribution_id: int) -> dict[str, Any] | N
         aux = NativeAuxContributor.objects.filter(pk=int(contribution.native_aux_contributor_id or 0)).first()
     if int(contribution.contributor_legacy_id or 0):
         contributor = _legacy_contributor_row(int(contribution.organization_id or 0), int(contribution.contributor_legacy_id or 0))
+    if aux is not None and person is not None and int(aux.person_legacy_id or 0) == int(person.legacy_id or 0):
+        aux = None
+    if contributor and person is not None and int(contributor.get("pessoa_id") or 0) == int(person.legacy_id or 0):
+        contributor = None
     catalogs = _catalogs_for_org(
         int(contribution.organization_id or 0),
         selected_type_id=int(contribution.contribution_type_legacy_id or 0),
@@ -1149,7 +1162,7 @@ def get_contribution_detail_postgres(contribution_id: int) -> dict[str, Any] | N
             "person_cpf": format_cpf(person.cpf if person else ""),
             "person_status": format_status(person.status if person else ""),
             "person_sigla": status_sigla(person.status if person else "", bool(person)),
-            "contributor_id": int(contribution.contributor_legacy_id or 0),
+            "contributor_id": int((contributor or {}).get("id") or 0),
             "contributor_name": contribution.contributor_name or (aux.name if aux else str((contributor or {}).get("nome") or "")),
             "contributor_type": contribution.contributor_type or (aux.contributor_type if aux else str((contributor or {}).get("tipo") or "")),
             "contributor_document": contribution.contributor_document or (aux.primary_document if aux else str((contributor or {}).get("documento_principal") or "")),

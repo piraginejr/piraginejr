@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from power_church_core.normalization import document_query_matches, format_cpf, moneyless_int, normalize_match_name, normalize_query
-from power_church_django.apps.contributions.models import NativeAuxContributor, NativeContribution
+from power_church_django.apps.contributions.models import NativeAuxContributor, NativeContribution, NativeEnvelope, NativeEnvelopeItem
 from power_church_django.apps.people.models import (
     PersonAddressSnapshot,
     PersonContactSnapshot,
@@ -32,6 +32,15 @@ def _contributor_queryset():
     return NativeAuxContributor.objects.filter(is_active=True).order_by("name", "id")
 
 
+def _person_option_label(person: dict[str, Any]) -> str:
+    cpf = f" · CPF {person['cpf']}" if person.get("cpf") else ""
+    code = f" · Ficha {person['codigo_interno']}" if person.get("codigo_interno") else ""
+    search_hint = ""
+    if any(ord(ch) > 127 for ch in str(person.get("nome") or "")):
+        search_hint = f" · busca {normalize_match_name(person.get('nome'))}"
+    return f"Pessoa #{person['id']} · {person['nome']} · {status_sigla(person.get('status'), True)}{code}{cpf}{search_hint}"
+
+
 def _person_rows_for_links() -> list[dict[str, Any]]:
     return [
         {
@@ -43,6 +52,109 @@ def _person_rows_for_links() -> list[dict[str, Any]]:
         }
         for row in PersonSnapshot.objects.filter(is_active=True).only("legacy_id", "name", "status", "internal_code", "cpf")
     ]
+
+
+def _canonical_contributor_legacy_id_for_person(person: PersonSnapshot, contributor: NativeAuxContributor) -> int | None:
+    value = (
+        PersonContributorSnapshot.objects.filter(person=person, is_active=True)
+        .order_by("legacy_id")
+        .values_list("legacy_id", flat=True)
+        .first()
+    )
+    return int(value or contributor.legacy_reference_id or 0) or None
+
+
+def _append_merge_note(existing: object, merge_from_ids: list[int]) -> str:
+    note = f"Consolidado automaticamente a partir dos auxiliares {', '.join(str(value) for value in merge_from_ids)}."
+    base = normalize_query(existing)
+    return f"{base}\n{note}".strip() if base else note
+
+
+def _canonicalize_aux_contributor_records(contributor: NativeAuxContributor, person: PersonSnapshot) -> dict[str, Any]:
+    person_legacy_id = int(person.legacy_id or 0)
+    linked_contributors = list(
+        NativeAuxContributor.objects.filter(
+            organization_id=int(contributor.organization_id or person.organization_id or 0),
+            person_legacy_id=person_legacy_id,
+            is_active=True,
+        ).order_by("-legacy_reference_id", "id")
+    )
+    if not linked_contributors:
+        linked_contributors = [contributor]
+    canonical_aux = next((row for row in linked_contributors if int(row.pk or 0) == int(contributor.pk or 0)), linked_contributors[0])
+    duplicate_aux_ids = [int(row.pk or 0) for row in linked_contributors if int(row.pk or 0) != int(canonical_aux.pk or 0)]
+    canonical_contributor_id = _canonical_contributor_legacy_id_for_person(person, canonical_aux)
+    canonical_name = normalize_query(person.name) or normalize_query(contributor.name)
+    canonical_document = normalize_query(person.cpf) or normalize_query(contributor.primary_document)
+    canonical_type = "pf" if canonical_name else (normalize_query(contributor.contributor_type) or "")
+
+    contribution_ids = list(
+        NativeContribution.objects.filter(
+            native_aux_contributor_id__in=[int(row.pk or 0) for row in linked_contributors],
+            is_active=True,
+        ).values_list("legacy_id", flat=True)
+    )
+    if contribution_ids:
+        NativeContribution.objects.filter(legacy_id__in=contribution_ids).update(
+            person_legacy_id=person_legacy_id,
+            contributor_legacy_id=canonical_contributor_id,
+            native_aux_contributor_id=None,
+            contributor_source="person_snapshot",
+            contributor_name=canonical_name,
+            contributor_document=canonical_document,
+            contributor_type=canonical_type,
+        )
+        PersonContributionSnapshot.objects.filter(legacy_id__in=contribution_ids).update(
+            person=person,
+            contributor_legacy_id=canonical_contributor_id,
+        )
+
+    envelope_ids = list(
+        NativeEnvelope.objects.filter(
+            native_aux_contributor_id__in=[int(row.pk or 0) for row in linked_contributors],
+            is_active=True,
+        ).values_list("legacy_id", flat=True)
+    )
+    NativeEnvelope.objects.filter(
+        native_aux_contributor_id__in=[int(row.pk or 0) for row in linked_contributors],
+        is_active=True,
+    ).update(
+        person_legacy_id=person_legacy_id,
+        contributor_legacy_id=canonical_contributor_id,
+        native_aux_contributor_id=None,
+    )
+    item_ids = list(
+        NativeEnvelopeItem.objects.filter(
+            native_aux_contributor_id__in=[int(row.pk or 0) for row in linked_contributors],
+            is_active=True,
+        ).values_list("legacy_id", flat=True)
+    )
+    NativeEnvelopeItem.objects.filter(
+        native_aux_contributor_id__in=[int(row.pk or 0) for row in linked_contributors],
+        is_active=True,
+    ).update(
+        person_legacy_id=person_legacy_id,
+        contributor_legacy_id=canonical_contributor_id,
+        native_aux_contributor_id=None,
+        contributor_name=canonical_name,
+        contributor_document=canonical_document,
+    )
+    if duplicate_aux_ids:
+        for duplicate in linked_contributors:
+            if int(duplicate.pk or 0) == int(canonical_aux.pk or 0):
+                continue
+            duplicate.is_active = False
+            duplicate.notes = _append_merge_note(duplicate.notes, [int(canonical_aux.pk or 0)])
+            duplicate.save(update_fields=["is_active", "notes", "updated_at"])
+        canonical_aux.notes = _append_merge_note(canonical_aux.notes, duplicate_aux_ids)
+        canonical_aux.save(update_fields=["notes", "updated_at"])
+    return {
+        "canonical_aux_id": int(canonical_aux.pk or 0),
+        "merged_aux_ids": duplicate_aux_ids,
+        "contribution_ids": contribution_ids,
+        "envelope_ids": envelope_ids,
+        "item_ids": item_ids,
+    }
 
 
 def list_contributors_postgres(
@@ -391,6 +503,15 @@ def lookup_envelope_people_postgres(phone: str = "", address: str = "", limit: i
                     "cpf": format_cpf(person.cpf),
                     "matched_value": row.value or "",
                     "label": f"{person.name} ({person.internal_code or person.legacy_id})",
+                    "participant_ref": _person_option_label(
+                        {
+                            "id": person_id,
+                            "nome": person.name or "",
+                            "status": person.status or "",
+                            "codigo_interno": person.internal_code or "",
+                            "cpf": format_cpf(person.cpf),
+                        }
+                    ),
                     "source": row.contact_type or "Telefone",
                 }
             )
@@ -418,6 +539,15 @@ def lookup_envelope_people_postgres(phone: str = "", address: str = "", limit: i
                     "cpf": format_cpf(person.cpf),
                     "matched_value": matched,
                     "label": f"{person.name} ({person.internal_code or person.legacy_id})",
+                    "participant_ref": _person_option_label(
+                        {
+                            "id": person_id,
+                            "nome": person.name or "",
+                            "status": person.status or "",
+                            "codigo_interno": person.internal_code or "",
+                            "cpf": format_cpf(person.cpf),
+                        }
+                    ),
                     "source": "Endereco",
                 }
             )
@@ -491,7 +621,6 @@ def link_contributor_to_person_by_id_postgres(contributor_id: int, person_id: in
         return False
     contributor.person_legacy_id = int(person.legacy_id or 0)
     contributor.save(update_fields=["person_legacy_id", "updated_at"])
-    NativeContribution.objects.filter(native_aux_contributor_id=int(contributor.id or 0), is_active=True).update(person_legacy_id=int(person.legacy_id or 0))
     if contributor.legacy_reference_id:
         PersonContributorSnapshot.objects.update_or_create(
             legacy_id=int(contributor.legacy_reference_id or 0),
@@ -508,6 +637,7 @@ def link_contributor_to_person_by_id_postgres(contributor_id: int, person_id: in
                 "is_active": True,
             },
         )
+    normalization = _canonicalize_aux_contributor_records(contributor, person)
     try:
         record_django_audit_event(
             actor=actor,
@@ -517,7 +647,15 @@ def link_contributor_to_person_by_id_postgres(contributor_id: int, person_id: in
             organization_id=int(contributor.organization_id or 0),
             source="contributors_postgres",
             summary=f"Contribuinte auxiliar vinculado a {person.name}",
-            after={"contributor_id": int(contributor.pk or 0), "person_legacy_id": int(person.legacy_id or 0)},
+            after={
+                "contributor_id": int(contributor.pk or 0),
+                "person_legacy_id": int(person.legacy_id or 0),
+                "canonical_aux_id": int(normalization.get("canonical_aux_id") or 0),
+                "merged_aux_ids": normalization.get("merged_aux_ids") or [],
+                "contribution_ids": normalization.get("contribution_ids") or [],
+                "envelope_ids": normalization.get("envelope_ids") or [],
+                "item_ids": normalization.get("item_ids") or [],
+            },
         )
     except Exception:
         pass
@@ -548,7 +686,6 @@ def create_frequentador_from_contributor_postgres(contributor_id: int, family_pe
     )
     contributor.person_legacy_id = int(person.legacy_id or 0)
     contributor.save(update_fields=["person_legacy_id", "updated_at"])
-    NativeContribution.objects.filter(native_aux_contributor_id=int(contributor.id or 0), is_active=True).update(person_legacy_id=int(person.legacy_id or 0))
     if contributor.legacy_reference_id:
         PersonContributorSnapshot.objects.update_or_create(
             legacy_id=int(contributor.legacy_reference_id or 0),
@@ -565,6 +702,7 @@ def create_frequentador_from_contributor_postgres(contributor_id: int, family_pe
                 "is_active": True,
             },
         )
+    normalization = _canonicalize_aux_contributor_records(contributor, person)
     if int(family_person_id or 0):
         related = PersonSnapshot.objects.filter(legacy_id=int(family_person_id or 0), is_active=True).first()
         if related is not None:
@@ -587,7 +725,15 @@ def create_frequentador_from_contributor_postgres(contributor_id: int, family_pe
             organization_id=int(person.organization_id or 0),
             source="contributors_postgres",
             summary=f"Frequentador criado a partir do contribuinte auxiliar {contributor.name}",
-            after={"person_legacy_id": int(person.legacy_id or 0), "contributor_id": int(contributor.pk or 0)},
+            after={
+                "person_legacy_id": int(person.legacy_id or 0),
+                "contributor_id": int(contributor.pk or 0),
+                "canonical_aux_id": int(normalization.get("canonical_aux_id") or 0),
+                "merged_aux_ids": normalization.get("merged_aux_ids") or [],
+                "contribution_ids": normalization.get("contribution_ids") or [],
+                "envelope_ids": normalization.get("envelope_ids") or [],
+                "item_ids": normalization.get("item_ids") or [],
+            },
         )
     except Exception:
         pass

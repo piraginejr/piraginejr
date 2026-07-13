@@ -5,8 +5,10 @@ import mimetypes
 import re
 import shlex
 import unicodedata
+import zipfile
 from datetime import datetime, timedelta
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -328,6 +330,59 @@ def _local_envelope_files(folder_value: object) -> list[Path]:
         if path.is_file() and path.suffix.lower() in ENVELOPE_ALLOWED_EXTENSIONS and not path.name.startswith(".")
     ]
     return sorted(files, key=lambda path: path.name.lower())
+
+
+def _zip_entry_display_name(raw_name: object) -> str:
+    raw_text = str(raw_name or "").replace("\\", "/").strip()
+    parts = [part for part in raw_text.split("/") if part not in {"", "."}]
+    if not parts:
+        return ""
+    return "/".join(parts)
+
+
+def _zip_envelope_file_payloads(upload: Any) -> list[dict[str, object]]:
+    if upload is None:
+        return []
+    filename = normalize_query(getattr(upload, "name", ""))
+    if not filename.lower().endswith(".zip"):
+        raise LegacyWriteError("O arquivo compactado do lote precisa estar em formato .zip.")
+    chunks = getattr(upload, "chunks", None)
+    payload = b"".join(chunks()) if callable(chunks) else bytes(upload.read())
+    if not payload:
+        raise LegacyWriteError("O arquivo .zip do lote esta vazio.")
+    try:
+        archive = zipfile.ZipFile(BytesIO(payload))
+    except zipfile.BadZipFile as exc:
+        raise LegacyWriteError("Nao foi possivel abrir o .zip informado para o lote.") from exc
+    payloads: list[dict[str, object]] = []
+    for member in sorted(archive.infolist(), key=lambda item: str(item.filename or "").casefold()):
+        if member.is_dir():
+            continue
+        display_name = _zip_entry_display_name(member.filename)
+        if not display_name:
+            continue
+        leaf_name = display_name.rsplit("/", 1)[-1]
+        if leaf_name.startswith(".") or display_name.startswith("__MACOSX/"):
+            continue
+        suffix = Path(leaf_name).suffix.lower()
+        if suffix not in ENVELOPE_ALLOWED_EXTENSIONS:
+            continue
+        try:
+            content = archive.read(member)
+        except RuntimeError as exc:
+            raise LegacyWriteError("O .zip do lote contem arquivo protegido ou ilegivel.") from exc
+        payloads.append(
+            _file_payload_from_bytes(
+                display_name,
+                mimetypes.guess_type(leaf_name)[0] or "",
+                content,
+            )
+        )
+    if not payloads:
+        raise LegacyWriteError("O .zip informado nao contem imagens ou PDFs validos de envelopes.")
+    if len(payloads) > 5000:
+        raise LegacyWriteError("O .zip do lote excede o limite operacional de 5000 arquivos.")
+    return payloads
 
 
 def _store_native_envelope_file(
@@ -967,7 +1022,12 @@ def create_envelope_contribution_batch_postgres(payload: Any, upload: Any, actor
     return _materialize_native_envelope(envelope, payload, actor=actor, source="postgres_native_envelope")
 
 
-def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[Any, ...] | None = None, actor: str = "") -> dict[str, object]:
+def create_envelope_image_lot_postgres(
+    payload: Any,
+    uploads: list[Any] | tuple[Any, ...] | None = None,
+    zip_upload: Any | None = None,
+    actor: str = "",
+) -> dict[str, object]:
     get = getattr(payload, "get", lambda *_args, **_kwargs: "")
     organization_id = _default_organization_id()
     competence_mes = normalize_query(get("competencia_mes", ""))
@@ -983,10 +1043,11 @@ def create_envelope_image_lot_postgres(payload: Any, uploads: list[Any] | tuple[
     if not lot_name:
         raise LegacyWriteError("Informe o nome do lote.")
     upload_payloads = [_file_payload_from_upload(upload) for upload in list(uploads or [])]
+    upload_payloads.extend(_zip_envelope_file_payloads(zip_upload))
     upload_payloads.extend(_file_payload_from_path(path) for path in _local_envelope_files(get("pasta_origem", "")))
     upload_payloads = sorted(upload_payloads, key=lambda item: str(item.get("filename") or "").casefold())
     if not upload_payloads:
-        raise LegacyWriteError("Selecione arquivos ou informe uma pasta local com imagens/PDFs de envelopes.")
+        raise LegacyWriteError("Selecione arquivos, envie um .zip ou informe uma pasta local com imagens/PDFs de envelopes.")
     lot_legacy_id = _next_native_envelope_lot_legacy_id()
     lot_folder = _slug_folder(lot_name)
     with transaction.atomic():

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 from datetime import timedelta
+from io import BytesIO
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import zipfile
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -314,6 +317,57 @@ class EnvelopeOperationalFlowTests(TestCase):
 
         self.assertEqual(len(result["envelope_ids"]), 2)
         self.assertEqual(NativeEnvelope.objects.filter(native_lot_legacy_id=result["lot_id"]).count(), 2)
+
+    def test_create_envelope_lot_accepts_zip_upload(self) -> None:
+        archive_buffer = BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("GAZOFILACIO/.DS_Store", b"ignored")
+            archive.writestr("GAZOFILACIO/001.jpg", b"fake-image-a")
+            archive.writestr("GAZOFILACIO/002.png", b"fake-image-b")
+            archive.writestr("__MACOSX/ignored.jpg", b"ignored")
+            archive.writestr("GAZOFILACIO/readme.txt", b"ignored")
+        zip_upload = SimpleUploadedFile("gazofilacio.zip", archive_buffer.getvalue(), content_type="application/zip")
+
+        with TemporaryDirectory() as runtime_dir:
+            with patch.dict(os.environ, {"POWER_CHURCH_ENVELOPE_DIR": runtime_dir}, clear=False):
+                result = create_envelope_image_lot_postgres(
+                    {
+                        "nome_lote": "Lote zipado",
+                        "competencia_mes": "2026-07",
+                        "data_padrao_recebimento": "2026-07-01",
+                        "origem_operacional": "Upload zipado",
+                        "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                    },
+                    zip_upload=zip_upload,
+                    actor="tester",
+                )
+
+        created = list(NativeEnvelope.objects.filter(native_lot_legacy_id=result["lot_id"]).order_by("legacy_id"))
+        self.assertEqual(len(created), 2)
+        self.assertEqual(created[0].image_original_name, "GAZOFILACIO/001.jpg")
+        self.assertEqual(created[1].image_original_name, "GAZOFILACIO/002.png")
+
+    def test_create_envelope_lot_rejects_zip_without_supported_files(self) -> None:
+        archive_buffer = BytesIO()
+        with zipfile.ZipFile(archive_buffer, "w") as archive:
+            archive.writestr("GAZOFILACIO/.DS_Store", b"ignored")
+            archive.writestr("GAZOFILACIO/readme.txt", b"ignored")
+        zip_upload = SimpleUploadedFile("vazio.zip", archive_buffer.getvalue(), content_type="application/zip")
+
+        with TemporaryDirectory() as runtime_dir:
+            with patch.dict(os.environ, {"POWER_CHURCH_ENVELOPE_DIR": runtime_dir}, clear=False):
+                with self.assertRaisesMessage(LegacyWriteError, "O .zip informado nao contem imagens ou PDFs validos de envelopes."):
+                    create_envelope_image_lot_postgres(
+                        {
+                            "nome_lote": "Lote zipado",
+                            "competencia_mes": "2026-07",
+                            "data_padrao_recebimento": "2026-07-01",
+                            "origem_operacional": "Upload zipado",
+                            "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                        },
+                        zip_upload=zip_upload,
+                        actor="tester",
+                    )
 
     def test_create_manual_envelope_accepts_local_file_path_and_updates_phone_immediately(self) -> None:
         with TemporaryDirectory() as source_dir, TemporaryDirectory() as runtime_dir:

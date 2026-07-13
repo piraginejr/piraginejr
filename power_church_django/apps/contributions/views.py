@@ -603,6 +603,7 @@ def envelope_lot_new(request: HttpRequest) -> HttpResponse:
             result = create_envelope_image_lot_postgres(
                 request.POST,
                 request.FILES.getlist("imagens_envelope"),
+                request.FILES.get("arquivo_zip_lote"),
                 actor=_actor(request),
             )
             duplicates = len(result.get("duplicates") or [])

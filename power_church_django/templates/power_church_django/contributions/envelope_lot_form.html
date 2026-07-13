@@ -66,10 +66,16 @@
             <input type="file" name="imagens_envelope" multiple accept=".jpg,.jpeg,.png,.pdf,.webp,.tif,.tiff,image/*,application/pdf">
             <span class="small muted">O sistema ordena pelo nome do arquivo para seguir a sequencia do scanner. Limite local configurado: ate 5000 arquivos por lote.</span>
           </label>
+          <label class="wide envelope-upload-label">
+            Arquivo ZIP do lote, se preferir
+            <span class="envelope-upload-callout">Ideal para a nuvem: envie um unico .zip com todas as imagens/PDFs</span>
+            <input type="file" name="arquivo_zip_lote" accept=".zip,application/zip,application/x-zip-compressed">
+            <span class="small muted">Fluxo recomendado para a nuvem. O sistema abre o .zip, ignora arquivos ocultos como .DS_Store e processa apenas imagens/PDFs validos em ordem alfabetica.</span>
+          </label>
           <label class="wide">
-            Pasta local no Mac, se preferir
+            Pasta local no Mac (uso local/tecnico)
             <input name="pasta_origem" placeholder="/Users/piraginejr/.../ENVELOPES JANEIRO 26">
-            <span class="small muted">Aceita caminho normal, caminho com espacos escapados e links file:// copiados do Finder. Na nuvem, o caminho principal sera sempre o upload multiplo.</span>
+            <span class="small muted">Aceita caminho normal, caminho com espacos escapados e links file:// copiados do Finder. Use este campo apenas em ambiente local. Na nuvem, prefira o upload multiplo ou o .zip.</span>
           </label>
           <label class="wide">
             Observacoes do lote

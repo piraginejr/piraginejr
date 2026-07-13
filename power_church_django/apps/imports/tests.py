@@ -9,6 +9,7 @@ from django.test import TestCase, override_settings
 from power_church_core.normalization import normalize_match_name
 from power_church_django.apps.contributions.models import (
     ContributionTypeSnapshot,
+    NativeAuxContributor,
     NativeContribution,
     ReceiptDispatch,
     ReceiptSnapshot,
@@ -249,3 +250,67 @@ class NativeStatementImportWorkflowTests(TestCase):
                 summary = dashboard_summary_postgres()
 
         self.assertEqual(summary["pending_bank_reviews"], 3)
+
+    def test_prepare_lot_defaults_to_dizimo_when_cent_rule_is_missing(self) -> None:
+        self._type(legacy_id=10, name="Dizimo")
+        person = self._person(11, "Pessoa Sem Regra", "11122233344")
+        lot = self._lot("postgres_nativo:dizimo-fallback")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=person.name,
+            cent_code="00",
+            bank_document=person.cpf,
+            rule_id=0,
+        )
+        movement.metadata["tipo_sugerido"] = ""
+        movement.metadata["rule_type_id"] = 0
+        movement.metadata["contribution_type_id"] = 0
+        movement.metadata["resolved_tipo_contribuicao_id"] = 0
+        movement.save(update_fields=["metadata", "updated_at"])
+
+        result = prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(result["importados"], 1)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(contribution.contribution_type_legacy_id, 10)
+        self.assertEqual(contribution.contribution_type_name, "Dizimo")
+
+    def test_prepare_lot_uses_canonical_person_when_aux_is_already_linked(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(12, "Domingos O Cardoso")
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            legacy_reference_id=901,
+            person_legacy_id=person.legacy_id,
+            name=person.name.upper(),
+            normalized_name=normalize_match_name(person.name),
+            primary_document="4199690",
+            document_type="",
+            contributor_type="pf",
+            origin="extrato_bradesco",
+            quality="doador",
+            status="ativo",
+            notes="",
+            is_active=True,
+        )
+        lot = self._lot("postgres_nativo:aux-canonico")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=person.name.upper(),
+            bank_document="4199690",
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(aux.person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, person.legacy_id)
+        self.assertIsNone(contribution.native_aux_contributor_id)
+        self.assertEqual(contribution.contributor_source, "person_snapshot")

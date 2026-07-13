@@ -787,6 +787,22 @@ def _statement_selected_type_id(pilot_movement: StatementImportPilotMovement) ->
     )
 
 
+def _statement_dizimo_type_id(organization_id: int) -> int:
+    if not int(organization_id or 0):
+        return 0
+    row = (
+        ContributionTypeSnapshot.objects.filter(
+            organization_id=int(organization_id or 0),
+            is_active=True,
+        )
+        .filter(Q(code__iexact="dizimo") | Q(name__iexact="dizimo"))
+        .only("legacy_id")
+        .order_by("legacy_id")
+        .first()
+    )
+    return int(row.legacy_id or 0) if row is not None else 0
+
+
 def _statement_default_type_id(pilot_movement: StatementImportPilotMovement) -> int:
     current = _statement_selected_type_id(pilot_movement)
     if current:
@@ -806,18 +822,22 @@ def _statement_default_type_id(pilot_movement: StatementImportPilotMovement) -> 
         )
         if rule and int(rule.contribution_type_legacy_id or 0):
             return int(rule.contribution_type_legacy_id or 0)
+        dizimo_id = _statement_dizimo_type_id(organization_id)
+        if dizimo_id:
+            return dizimo_id
     meta = pilot_movement.metadata or {}
     suggested_name = normalize_query(meta.get("tipo_sugerido"))
-    if not suggested_name:
-        return 0
-    type_row = (
-        ContributionTypeSnapshot.objects.filter(is_active=True)
-        .filter(name__iexact=suggested_name)
-        .only("legacy_id")
-        .order_by("legacy_id")
-        .first()
-    )
-    return int(type_row.legacy_id or 0) if type_row is not None else 0
+    if suggested_name:
+        type_row = (
+            ContributionTypeSnapshot.objects.filter(is_active=True)
+            .filter(name__iexact=suggested_name)
+            .only("legacy_id")
+            .order_by("legacy_id")
+            .first()
+        )
+        if type_row is not None:
+            return int(type_row.legacy_id or 0)
+    return _statement_dizimo_type_id(organization_id)
 
 
 def _statement_contribution_status(contribution_legacy_id: int | None) -> str:
@@ -1242,12 +1262,29 @@ def _statement_sync_native_contribution_for_movement(
             document=contributor_document,
             source=source_label,
         )
-        contributor_id = int(aux.legacy_reference_id or 0) or None
-        native_aux_contributor_id = int(aux.pk or 0) or None
-        contributor_source = "legacy_aux_contributor" if contributor_id else "native_aux_contributor"
-        contributor_name = aux.name or aux_name
-        contributor_document = aux.primary_document or contributor_document
-        contributor_type = aux.contributor_type or contributor_type
+        linked_person_id = int(aux.person_legacy_id or 0) or None
+        linked_person = None
+        if linked_person_id:
+            linked_person = (
+                PersonSnapshot.objects.filter(legacy_id=linked_person_id)
+                .only("legacy_id", "name", "cpf")
+                .first()
+            )
+        if linked_person is not None:
+            person_id = int(linked_person.legacy_id or 0)
+            contributor_id = _native_contributor_id_for_person(linked_person)
+            native_aux_contributor_id = None
+            contributor_source = "person_snapshot"
+            contributor_name = linked_person.name or aux.name or aux_name
+            contributor_document = linked_person.cpf or aux.primary_document or contributor_document
+            contributor_type = "pf"
+        else:
+            contributor_id = int(aux.legacy_reference_id or 0) or None
+            native_aux_contributor_id = int(aux.pk or 0) or None
+            contributor_source = "legacy_aux_contributor" if contributor_id else "native_aux_contributor"
+            contributor_name = aux.name or aux_name
+            contributor_document = aux.primary_document or contributor_document
+            contributor_type = aux.contributor_type or contributor_type
 
     contribution.person_legacy_id = int(person_id or 0) or None
     contribution.contributor_legacy_id = int(contributor_id or 0) or None

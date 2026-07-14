@@ -201,6 +201,38 @@ class PersonIdentifierSnapshot(models.Model):
         return f"{self.identifier_type}:{self.value}"
 
 
+class FinancialIdentityLookup(models.Model):
+    organization_id = models.IntegerField("organizacao legado", db_index=True)
+    person = models.ForeignKey(PersonSnapshot, on_delete=models.CASCADE, related_name="financial_identity_lookups")
+    lookup_kind = models.CharField("tipo de consulta", max_length=64, db_index=True)
+    value = models.CharField("valor original", max_length=240)
+    normalized_value = models.CharField("valor normalizado", max_length=240, db_index=True)
+    source = models.CharField("origem", max_length=120, blank=True)
+    priority = models.IntegerField("prioridade", default=0, db_index=True)
+    notes = models.TextField("observacoes", blank=True)
+    is_active = models.BooleanField("ativo", default=True, db_index=True)
+    synced_at = models.DateTimeField("sincronizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "consulta de identidade financeira"
+        verbose_name_plural = "consultas de identidade financeira"
+        ordering = ["person_id", "-priority", "lookup_kind", "normalized_value", "id"]
+        db_table = "people_financialidentitylookup"
+        indexes = [
+            models.Index(fields=["organization_id", "is_active", "normalized_value"]),
+            models.Index(fields=["person", "is_active", "lookup_kind"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["person", "lookup_kind", "normalized_value", "source"],
+                name="people_financialidentitylookup_unique",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.person_id}:{self.lookup_kind}:{self.value}"
+
+
 class PersonContributionSnapshot(models.Model):
     legacy_id = models.IntegerField("id legado", unique=True, db_index=True)
     organization_id = models.IntegerField("organizacao legado", db_index=True)

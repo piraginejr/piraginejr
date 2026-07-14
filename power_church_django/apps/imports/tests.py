@@ -23,6 +23,9 @@ from power_church_django.apps.imports.services import (
     update_statement_movement_postgres_native,
 )
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
+from power_church_django.apps.people.models import PersonContributorSnapshot, PersonIdentifierSnapshot
+from power_church_django.services.financial_identity_lookup import rebuild_financial_identity_lookup
+from power_church_django.services.receipt_delivery import backfill_native_event_receipts
 
 
 @override_settings(
@@ -105,6 +108,8 @@ class NativeStatementImportWorkflowTests(TestCase):
         cent_code: str = "11",
         bank_document: str = "",
         rule_id: int = 20,
+        origin_label: str = "Transferencia",
+        raw_text: str | None = None,
     ) -> StatementImportPilotMovement:
         return StatementImportPilotMovement.objects.create(
             lot=lot,
@@ -123,7 +128,7 @@ class NativeStatementImportWorkflowTests(TestCase):
             prefix="",
             source_name=source_name,
             source_name_normalized=normalize_match_name(source_name),
-            origin_label="Transferencia",
+            origin_label=origin_label,
             confidence="",
             match_score=Decimal("0"),
             review_status=review_status,
@@ -131,7 +136,7 @@ class NativeStatementImportWorkflowTests(TestCase):
             duplicate_reason="",
             fingerprint="",
             signature_global="",
-            raw_text=source_name,
+            raw_text=raw_text if raw_text is not None else source_name,
             metadata={
                 "tipo_sugerido": "Dizimo",
                 "organizacao_id": 1,
@@ -168,6 +173,51 @@ class NativeStatementImportWorkflowTests(TestCase):
             is_active=True,
         )
 
+    def _person_contributor(
+        self,
+        person: PersonSnapshot,
+        *,
+        legacy_id: int,
+        name: str,
+        primary_document: str = "",
+        document_type: str = "",
+    ) -> PersonContributorSnapshot:
+        return PersonContributorSnapshot.objects.create(
+            legacy_id=legacy_id,
+            organization_id=person.organization_id,
+            person=person,
+            name=name,
+            contributor_type="pf" if document_type != "cnpj" else "pj",
+            primary_document=primary_document,
+            document_type=document_type,
+            origin="teste",
+            quality="doador",
+            status="ativo",
+            is_active=True,
+        )
+
+    def _person_identifier(
+        self,
+        person: PersonSnapshot,
+        *,
+        legacy_id: int,
+        identifier_type: str,
+        value: str,
+        notes: str = "",
+        contributor_legacy_id: int | None = None,
+    ) -> PersonIdentifierSnapshot:
+        return PersonIdentifierSnapshot.objects.create(
+            legacy_id=legacy_id,
+            organization_id=person.organization_id,
+            person=person,
+            contributor_legacy_id=contributor_legacy_id,
+            identifier_type=identifier_type,
+            value=value,
+            is_primary=True,
+            notes=notes,
+            is_active=True,
+        )
+
     def test_prepare_lot_creates_native_contribution_and_marks_lot_ready(self) -> None:
         self._type()
         self._rule()
@@ -195,6 +245,32 @@ class NativeStatementImportWorkflowTests(TestCase):
         dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
         self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
         self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.AUTOMATIC)
+
+    def test_backfill_native_event_receipts_requeues_existing_statement_receipt_without_dispatch(self) -> None:
+        self._type()
+        self._rule()
+        self._person(11, "Carlos Extrato", "12312312399", email="carlos@example.com")
+        lot = self._lot("postgres_nativo:receipt-backfill")
+        movement = self._movement(lot, order_in_lot=1, source_name="Carlos Extrato")
+
+        result = prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        receipt = ReceiptSnapshot.objects.get(is_cancelled=False)
+        ReceiptDispatch.objects.filter(legacy_receipt_id=receipt.legacy_id).delete()
+
+        summary = backfill_native_event_receipts(actor="tester")
+
+        movement.refresh_from_db()
+        lot.refresh_from_db()
+        dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
+
+        self.assertEqual(result["auto_receipt_created"], 1)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(lot.lot_status, "concluido")
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
+        self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.RETROACTIVE)
+        self.assertEqual(summary["existing_receipts_queued"], 1)
+        self.assertEqual(summary["queued"], 1)
 
     def test_manual_approve_without_person_is_preserved_on_reprocess_and_allows_close(self) -> None:
         self._type()
@@ -304,6 +380,36 @@ class NativeStatementImportWorkflowTests(TestCase):
         self.assertEqual(contribution.contribution_type_legacy_id, 10)
         self.assertEqual(contribution.contribution_type_name, "Dizimo")
 
+    def test_prepare_lot_requires_destination_review_when_non_zero_cent_rule_is_missing(self) -> None:
+        self._type(legacy_id=10, name="Dizimo")
+        person = self._person(111, "Pessoa Centavos Sem Regra", "99988877766")
+        lot = self._lot("postgres_nativo:destinacao-pendente")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=person.name,
+            cent_code="26",
+            bank_document=person.cpf,
+            rule_id=0,
+        )
+        movement.metadata["tipo_sugerido"] = "Dizimo"
+        movement.metadata["rule_type_id"] = 0
+        movement.metadata["contribution_type_id"] = 0
+        movement.metadata["resolved_tipo_contribuicao_id"] = 0
+        movement.save(update_fields=["metadata", "updated_at"])
+
+        result = prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        lot.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(result["importados"], 1)
+        self.assertEqual(movement.review_status, "revisar_destinacao")
+        self.assertEqual((movement.metadata or {}).get("resolved_tipo_contribuicao_id"), 0)
+        self.assertEqual((lot.metadata or {}).get("pending_human_count"), 1)
+        self.assertEqual(((lot.metadata or {}).get("review_counts") or {}).get("revisar_destinacao"), 1)
+        self.assertEqual(contribution.contribution_type_legacy_id, 0)
+
     def test_prepare_lot_uses_canonical_person_when_aux_is_already_linked(self) -> None:
         self._type()
         self._rule()
@@ -390,3 +496,195 @@ class NativeStatementImportWorkflowTests(TestCase):
         movement.refresh_from_db()
         self.assertEqual(movement.review_status, "pronto")
         self.assertIsNone(movement.duplicate_contribution_legacy_id)
+
+    def test_prepare_lot_uses_masked_cpf_identity_to_resolve_person(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(15, "Nelson Chrizostimo da Silva Filho", "29789621787")
+        self._person_contributor(
+            person,
+            legacy_id=301,
+            name="NELSON C SILVA FH",
+            primary_document="***.896.217-**",
+            document_type="cpf",
+        )
+        self._person_identifier(
+            person,
+            legacy_id=401,
+            identifier_type="cpf",
+            value="***.896.217-**",
+            notes="Registrado automaticamente pela origem pix.",
+        )
+        lot = self._lot("postgres_nativo:masked-cpf")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name="NELSON C SILVA FH",
+            bank_document="***.896.217-**",
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(movement.resolved_person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.contributor_source, "person_snapshot")
+
+    def test_prepare_lot_uses_company_identity_linked_to_person(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(16, "Diego Juliano Bravim", "")
+        self._person_contributor(
+            person,
+            legacy_id=302,
+            name="Bravim Consultoria Ltda",
+            primary_document="56.102.293 0001-72",
+            document_type="cnpj",
+        )
+        self._person_identifier(
+            person,
+            legacy_id=402,
+            identifier_type="cnpj",
+            value="56.102.293 0001-72",
+            notes="contribuinte:Bravim Consultoria Ltda",
+        )
+        lot = self._lot("postgres_nativo:company-identity")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name="Bravim Consultoria Ltda",
+            bank_document="56.102.293 0001-72",
+            rule_id=20,
+        )
+        movement.document_type = "cnpj"
+        movement.save(update_fields=["document_type", "updated_at"])
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(movement.resolved_person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.contributor_source, "person_snapshot")
+
+    def test_prepare_lot_uses_financial_name_when_person_has_no_cpf(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(17, "Maria José Gomes de Oliveira", "")
+        self._person_contributor(
+            person,
+            legacy_id=303,
+            name="MARIA J GOMES DE OLIVEIRA",
+            primary_document="",
+            document_type="",
+        )
+        lot = self._lot("postgres_nativo:name-only")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name="MARIA J GOMES DE OLIVEIRA",
+            bank_document="",
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(movement.resolved_person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.contributor_source, "person_snapshot")
+
+    def test_prepare_lot_sends_to_manual_review_when_known_payer_differs_from_known_beneficiary(self) -> None:
+        self._type()
+        self._rule()
+        payer = self._person(18, "Ana Herculana da Silva", "")
+        beneficiary = self._person(19, "Paulo Henrique Rodrigues da Silva", "")
+        lot = self._lot("postgres_nativo:declared-beneficiary")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name=payer.name,
+            bank_document="",
+            rule_id=20,
+            origin_label="Dizimo de Paulo Henrique Rodrigues da Silva",
+            raw_text="PIX RECEBIDO - OUTRA IF | Dizimo de Paulo Henrique Rodrigues da Silva",
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "revisar_pessoa")
+        self.assertIsNone(movement.resolved_person_legacy_id)
+        self.assertEqual(movement.suggested_person_legacy_id, beneficiary.legacy_id)
+        self.assertEqual((movement.metadata or {}).get("declared_beneficiary_name"), beneficiary.name)
+        self.assertTrue((movement.metadata or {}).get("declared_beneficiary_requires_review"))
+        self.assertIsNone(contribution.person_legacy_id)
+        self.assertEqual(contribution.contributor_name, payer.name)
+        self.assertIn("Origem: Ana Herculana da Silva", contribution.notes)
+        self.assertIn("Beneficiario declarado: Paulo Henrique Rodrigues da Silva", contribution.notes)
+
+    def test_prepare_lot_auto_links_declared_beneficiary_when_payer_is_not_known_person(self) -> None:
+        self._type()
+        self._rule()
+        beneficiary = self._person(20, "Paulo Henrique Rodrigues da Silva", "")
+        lot = self._lot("postgres_nativo:declared-beneficiary-auto")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name="Ana Herculana da Silva",
+            bank_document="",
+            rule_id=20,
+            origin_label="Dizimo de Paulo Henrique Rodrigues da Silva",
+            raw_text="PIX RECEBIDO - OUTRA IF | Dizimo de Paulo Henrique Rodrigues da Silva",
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(movement.resolved_person_legacy_id, beneficiary.legacy_id)
+        self.assertFalse((movement.metadata or {}).get("declared_beneficiary_requires_review"))
+        self.assertEqual(contribution.person_legacy_id, beneficiary.legacy_id)
+        self.assertEqual(contribution.contributor_name, beneficiary.name)
+        self.assertIn("Origem: Ana Herculana da Silva", contribution.notes)
+        self.assertIn("Beneficiario declarado: Paulo Henrique Rodrigues da Silva", contribution.notes)
+
+    def test_financial_identity_lookup_table_feeds_people_matching_cache(self) -> None:
+        self._type()
+        self._rule()
+        person = self._person(21, "Andre Luis Carvalho Alves", "")
+        self._person_contributor(
+            person,
+            legacy_id=304,
+            name="Andre Luis Carvalho Alves",
+            primary_document="03292342422",
+            document_type="cpf",
+        )
+
+        total = rebuild_financial_identity_lookup()
+        self.assertGreater(total, 0)
+
+        lot = self._lot("postgres_nativo:lookup-table")
+        movement = self._movement(
+            lot,
+            order_in_lot=1,
+            source_name="Andre Luis Carvalho Alves",
+            bank_document="032.923.424-22",
+            rule_id=20,
+        )
+
+        prepare_statement_lot_postgres_native(lot.id, actor="teste")
+
+        movement.refresh_from_db()
+        contribution = NativeContribution.objects.get(legacy_id=movement.imported_contribution_legacy_id)
+        self.assertEqual(movement.review_status, "pronto")
+        self.assertEqual(movement.resolved_person_legacy_id, person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, person.legacy_id)

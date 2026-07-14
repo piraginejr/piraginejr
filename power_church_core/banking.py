@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .normalization import cleaned_document_token, normalize_match_name, normalize_query, santander_document_type
 
@@ -14,6 +15,12 @@ STATEMENT_LAYOUT_LABELS = {
     "SANTANDER_NAO_CONSOLIDADO": "Santander Nao Consolidado",
 }
 SUPPORTED_STATEMENT_LAYOUTS = frozenset(STATEMENT_LAYOUT_LABELS)
+STATEMENT_BENEFICIARY_PATTERNS = (
+    re.compile(
+        r"\b(?:d[ií]zimo|oferta|contribui(?:cao|ção))\s+d[eo]\s+(.+?)(?=(?:\s+\b(?:cpf|cnpj|doc|documento|pix|ted|rem|ref|referente)\b|[|]|$))",
+        flags=re.IGNORECASE,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +91,36 @@ def statement_contributor_name_for_identity(
         return normalize_query(person_name)
     if cleaned_document_token(document_value):
         return statement_document_identity_label(layout_code, document_value, document_type)
+    return ""
+
+
+def statement_declared_beneficiary_name(
+    layout_code: object,
+    *,
+    detail_text: object = "",
+    raw_text: object = "",
+    source_name: object = "",
+) -> str:
+    _layout = normalize_query(layout_code).upper()
+    candidates = [
+        normalize_query(detail_text),
+        normalize_query(raw_text),
+    ]
+    source_norm = normalize_match_name(source_name)
+    for text in candidates:
+        if not text:
+            continue
+        for pattern in STATEMENT_BENEFICIARY_PATTERNS:
+            match = pattern.search(text)
+            if not match:
+                continue
+            beneficiary = normalize_query(match.group(1))
+            beneficiary = re.sub(r"\s+", " ", beneficiary).strip(" -:;,")
+            if not beneficiary:
+                continue
+            if source_norm and normalize_match_name(beneficiary) == source_norm:
+                continue
+            return beneficiary
     return ""
 
 

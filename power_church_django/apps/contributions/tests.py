@@ -18,6 +18,7 @@ from power_church_django.apps.contributions.models import (
     NativeAuxContributor,
     NativeContribution,
     NativeEnvelope,
+    NativeEnvelopeItem,
     NativeEnvelopeLot,
     NativeEnvelopeProfileUpdate,
     ReceiptDispatch,
@@ -25,7 +26,12 @@ from power_church_django.apps.contributions.models import (
 )
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.contributions_native import person_statement_data_postgres
-from power_church_django.services.contributors_native import link_contributor_to_person_by_id_postgres, lookup_envelope_people_postgres
+from power_church_django.services.contributors_native import (
+    link_contributor_to_person_by_id_postgres,
+    lookup_envelope_people_postgres,
+    repoint_contributor_to_person_by_id_postgres,
+    unlink_contributor_from_person_by_id_postgres,
+)
 from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
     ENVELOPE_IN_PROGRESS_TIMEOUT,
@@ -663,6 +669,184 @@ class EnvelopeOperationalFlowTests(TestCase):
         self.assertIsNone(envelope.native_aux_contributor_id)
         self.assertFalse(duplicate_aux.is_active)
 
+    def test_unlinking_aux_contributor_returns_records_to_aux_identity(self) -> None:
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            legacy_reference_id=902,
+            name="Pessoa Auxiliar",
+            normalized_name="PESSOA AUXILIAR",
+            primary_document="11122233344",
+            person_legacy_id=None,
+            is_active=True,
+        )
+        contribution = NativeContribution.objects.create(
+            legacy_id=9903,
+            organization_id=1,
+            person_legacy_id=None,
+            contributor_legacy_id=aux.legacy_reference_id,
+            contributor_source="legacy_aux_contributor",
+            contributor_name=aux.name,
+            contributor_document=aux.primary_document,
+            contributor_type="pf",
+            native_aux_contributor_id=aux.id,
+            contribution_type_legacy_id=self.type_snapshot.legacy_id,
+            contribution_type_name=self.type_snapshot.name,
+            operational_status="regular",
+            amount=Decimal("70.00"),
+            is_active=True,
+        )
+        PersonContributionSnapshot.objects.create(
+            legacy_id=contribution.legacy_id,
+            organization_id=1,
+            person=self.person,
+            contributor_legacy_id=aux.legacy_reference_id,
+            received_at=timezone.now().date(),
+            received_at_raw="2026-07-13",
+            competence="2026-07",
+            competence_order=202607,
+            amount=Decimal("70.00"),
+            operational_status="regular",
+            contribution_type_name="Dizimo",
+            receipt_method_name="PIX",
+            source_name=aux.name,
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=9904,
+            organization_id=1,
+            person_legacy_id=None,
+            contributor_legacy_id=aux.legacy_reference_id,
+            native_aux_contributor_id=aux.id,
+            status="lancado",
+            is_active=True,
+        )
+        item = NativeEnvelopeItem.objects.create(
+            legacy_id=9905,
+            envelope=envelope,
+            person_legacy_id=None,
+            contributor_legacy_id=aux.legacy_reference_id,
+            native_aux_contributor_id=aux.id,
+            contributor_name=aux.name,
+            contributor_document=aux.primary_document,
+            contribution_type_legacy_id=self.type_snapshot.legacy_id,
+            contribution_type_name=self.type_snapshot.name,
+            amount=Decimal("70.00"),
+            is_active=True,
+        )
+
+        self.assertTrue(link_contributor_to_person_by_id_postgres(aux.legacy_reference_id, self.person.legacy_id, actor="tester"))
+        self.assertTrue(unlink_contributor_from_person_by_id_postgres(aux.legacy_reference_id, actor="tester"))
+
+        aux.refresh_from_db()
+        contribution.refresh_from_db()
+        envelope.refresh_from_db()
+        item.refresh_from_db()
+        self.assertIsNone(aux.person_legacy_id)
+        self.assertIsNone(contribution.person_legacy_id)
+        self.assertEqual(contribution.native_aux_contributor_id, aux.id)
+        self.assertEqual(contribution.contributor_source, "legacy_aux_contributor")
+        self.assertFalse(PersonContributionSnapshot.objects.filter(legacy_id=contribution.legacy_id).exists())
+        self.assertIsNone(envelope.person_legacy_id)
+        self.assertEqual(envelope.native_aux_contributor_id, aux.id)
+        self.assertIsNone(item.person_legacy_id)
+        self.assertEqual(item.native_aux_contributor_id, aux.id)
+
+    def test_repointing_aux_contributor_moves_records_to_new_person(self) -> None:
+        original_person = self.person
+        target_person = PersonSnapshot.objects.create(
+            legacy_id=502,
+            organization_id=1,
+            internal_code="P502",
+            name="Pessoa Correta",
+            normalized_name="PESSOA CORRETA",
+            social_name="",
+            cpf="55566677788",
+            primary_email="",
+            normalized_email="",
+            primary_phone="",
+            primary_whatsapp="",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            legacy_reference_id=903,
+            name="Pessoa Correta",
+            normalized_name="PESSOA CORRETA",
+            primary_document="55566677788",
+            person_legacy_id=original_person.legacy_id,
+            is_active=True,
+        )
+        contribution = NativeContribution.objects.create(
+            legacy_id=9906,
+            organization_id=1,
+            person_legacy_id=original_person.legacy_id,
+            contributor_legacy_id=aux.legacy_reference_id,
+            contributor_source="person_snapshot",
+            contributor_name=aux.name,
+            contributor_document=aux.primary_document,
+            contributor_type="pf",
+            native_aux_contributor_id=None,
+            contribution_type_legacy_id=self.type_snapshot.legacy_id,
+            contribution_type_name=self.type_snapshot.name,
+            operational_status="regular",
+            amount=Decimal("90.00"),
+            is_active=True,
+        )
+        PersonContributionSnapshot.objects.create(
+            legacy_id=contribution.legacy_id,
+            organization_id=1,
+            person=original_person,
+            contributor_legacy_id=aux.legacy_reference_id,
+            received_at=timezone.now().date(),
+            received_at_raw="2026-07-13",
+            competence="2026-07",
+            competence_order=202607,
+            amount=Decimal("90.00"),
+            operational_status="regular",
+            contribution_type_name="Dizimo",
+            receipt_method_name="PIX",
+            source_name=aux.name,
+            is_active=True,
+        )
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=9907,
+            organization_id=1,
+            person_legacy_id=original_person.legacy_id,
+            contributor_legacy_id=aux.legacy_reference_id,
+            native_aux_contributor_id=None,
+            status="lancado",
+            is_active=True,
+        )
+        item = NativeEnvelopeItem.objects.create(
+            legacy_id=9908,
+            envelope=envelope,
+            person_legacy_id=original_person.legacy_id,
+            contributor_legacy_id=aux.legacy_reference_id,
+            native_aux_contributor_id=None,
+            contributor_name=aux.name,
+            contributor_document=aux.primary_document,
+            contribution_type_legacy_id=self.type_snapshot.legacy_id,
+            contribution_type_name=self.type_snapshot.name,
+            amount=Decimal("90.00"),
+            is_active=True,
+        )
+
+        self.assertTrue(repoint_contributor_to_person_by_id_postgres(aux.legacy_reference_id, target_person.legacy_id, actor="tester"))
+
+        aux.refresh_from_db()
+        contribution.refresh_from_db()
+        envelope.refresh_from_db()
+        item.refresh_from_db()
+        snapshot = PersonContributionSnapshot.objects.get(legacy_id=contribution.legacy_id)
+        self.assertEqual(aux.person_legacy_id, target_person.legacy_id)
+        self.assertEqual(contribution.person_legacy_id, target_person.legacy_id)
+        self.assertEqual(snapshot.person_id, target_person.id)
+        self.assertEqual(envelope.person_legacy_id, target_person.legacy_id)
+        self.assertEqual(item.person_legacy_id, target_person.legacy_id)
+
 
 class PersonStatementDataPostgresTests(TestCase):
     def setUp(self) -> None:
@@ -813,4 +997,38 @@ class EnvelopeAutomaticReceiptTests(TestCase):
         self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
         self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.RETROACTIVE)
         self.assertEqual(summary["created"], 1)
+        self.assertEqual(summary["queued"], 1)
+
+    def test_backfill_native_event_receipts_requeues_existing_envelope_receipt_without_dispatch(self) -> None:
+        envelope = NativeEnvelope.objects.create(
+            legacy_id=703,
+            organization_id=1,
+            lot_name="Lote retroativo fila",
+            competence="jul/2026",
+            competence_order=202607,
+            status=ENVELOPE_PENDING_STATUS,
+            is_active=True,
+        )
+        launch_pending_envelope_postgres(
+            envelope.legacy_id,
+            {
+                "data_recebimento": "2026-07-07",
+                "valor_total": "55,00",
+                "tipo_contribuicao_id_padrao": str(self.type_snapshot.legacy_id),
+                "participante_principal_ref": f"Pessoa #{self.person.legacy_id}",
+                "justificativa": "Envelope com recibo sem fila.",
+                "origem_operacional": "Teste fila retroativa",
+            },
+            actor="tester",
+        )
+
+        receipt = ReceiptSnapshot.objects.get(is_cancelled=False)
+        ReceiptDispatch.objects.filter(legacy_receipt_id=receipt.legacy_id).delete()
+
+        summary = backfill_native_event_receipts(actor="tester")
+
+        dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
+        self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.RETROACTIVE)
+        self.assertEqual(summary["existing_receipts_queued"], 1)
         self.assertEqual(summary["queued"], 1)

@@ -51,6 +51,8 @@ from power_church_django.services.contributors_native import (
     link_contributor_to_person_by_id_postgres,
     list_contributors_postgres,
     lookup_envelope_people_postgres,
+    repoint_contributor_to_person_by_id_postgres,
+    unlink_contributor_from_person_by_id_postgres,
     update_person_email_from_manual_delivery_postgres,
 )
 from power_church_django.services.runtime_support import envelope_upload_root
@@ -1290,6 +1292,13 @@ def contributor_detail(request: HttpRequest, contributor_id: int) -> HttpRespons
                 person_id = int(request.POST.get("person_id") or 0)
                 link_contributor_to_person_by_id_postgres(contributor_id, person_id, actor=_actor(request))
                 messages.success(request, "Contribuinte vinculado a pessoa com auditoria.")
+            elif action == "repoint_person":
+                person_id = int(request.POST.get("person_id") or 0)
+                repoint_contributor_to_person_by_id_postgres(contributor_id, person_id, actor=_actor(request))
+                messages.success(request, "Identidade financeira reapontada com auditoria.")
+            elif action == "unlink_person":
+                unlink_contributor_from_person_by_id_postgres(contributor_id, actor=_actor(request))
+                messages.success(request, "Identidade financeira desvinculada e voltou para revisao controlada.")
             elif action == "create_frequentador":
                 family_person_id = int(request.POST.get("family_person_id") or 0)
                 person_id = create_frequentador_from_contributor_postgres(contributor_id, family_person_id=family_person_id, actor=_actor(request))

@@ -318,10 +318,19 @@ def contributor_name_is_noise(name: object, source: object = "") -> bool:
 
 
 def sicoob_detail_line_is_noise(value: object) -> bool:
-    norm = normalize_match_name(value)
-    return norm in {
+    text = normalize_query(value)
+    norm = normalize_match_name(text)
+    if norm in {
         "DATA DOCUMENTO HISTORICO VALOR",
-    }
+    }:
+        return True
+    if text.lower().startswith(("http://", "https://", "www.")):
+        return True
+    if "ib.sicoob.com.br" in text.lower():
+        return True
+    if re.fullmatch(r"\d{1,3}/\d{1,3}", text):
+        return True
+    return False
 
 
 def bradesco_extract_source_name(prefix: str, detail_lines: list[str]) -> tuple[str, str, str]:
@@ -954,6 +963,12 @@ def parse_sicoob_receipts_pdf(
                     if unresolved_block is not None:
                         unresolved_block["value_text"] = inline_value
                         continue
+                if document_token.upper() == "PIX" and normalize_query(tail) == "PIX RECEBIDO - OUTRA IF" and inline_value:
+                    unresolved_block = first_unvalued_pix_block(page_blocks, current)
+                    if unresolved_block is not None and [item for item in unresolved_block.get("details", []) if normalize_query(item)]:
+                        unresolved_block["date_token"] = current_date_token
+                        unresolved_block["value_text"] = inline_value
+                        continue
                 if (
                     current is not None
                     and normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF"
@@ -1005,6 +1020,15 @@ def parse_sicoob_receipts_pdf(
                 current = start_block(page_number, current_date_token, line)
                 continue
 
+            if line.startswith("Recebimento Pix") and current_date_token:
+                if (
+                    current is not None
+                    and normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF"
+                    and normalize_query(current.get("value_text"))
+                    and [item for item in current.get("details", []) if normalize_query(item)]
+                ):
+                    page_blocks.append(current)
+                    current = None
             if line.startswith("Recebimento Pix") and current is None and current_date_token:
                 current = start_block(
                     page_number,
@@ -1019,7 +1043,9 @@ def parse_sicoob_receipts_pdf(
 
         if current is not None:
             details = [item for item in current.get("details", []) if normalize_query(item)]
-            if normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF" and normalize_query(current.get("value_text")) and not details:
+            if normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF" and not normalize_query(current.get("value_text")) and details:
+                carry_block = current
+            elif normalize_query(current.get("history")) == "PIX RECEBIDO - OUTRA IF" and normalize_query(current.get("value_text")) and not details:
                 carry_block = current
             else:
                 page_blocks.append(current)
@@ -1046,6 +1072,8 @@ def parse_sicoob_receipts_pdf(
         if movement_kind in {"deposito_dinheiro", "deposito_cheque", "liberacao_deposito", "estorno_pix"}:
             continue
         value_text = normalize_query(block["value_text"])
+        if not value_text:
+            continue
         if value_text.endswith("D"):
             continue
         details = [normalize_query(item) for item in block["details"] if normalize_query(item)]

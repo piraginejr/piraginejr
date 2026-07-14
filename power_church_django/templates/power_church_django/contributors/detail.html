@@ -12,6 +12,11 @@
         <a class="button secondary" href="/contributors/">Voltar para contribuintes</a>
         {% if detail.contributor.person_id %}
           <a class="button" href="/people/{{ detail.contributor.person_id }}/">Abrir pessoa</a>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="unlink_person">
+            <button type="submit" class="secondary">Desvincular identidade</button>
+          </form>
         {% else %}
           <form method="post">
             {% csrf_token %}
@@ -22,40 +27,38 @@
       </div>
     </section>
 
-    {% if not detail.contributor.person_id %}
-      <section class="panel">
-        <div class="section-head">
-          <div>
-            <h2>Associar a pessoa do cadastro</h2>
-            <p class="muted">Sugestoes calculadas por documento, nome e similaridade. Use esta area quando a central indicar que o contribuinte pode pertencer a alguem do rol.</p>
-          </div>
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>{% if detail.contributor.person_id %}Corrigir vinculo da identidade financeira{% else %}Associar a pessoa do cadastro{% endif %}</h2>
+          <p class="muted">Sugestoes calculadas por documento, nome e similaridade. Use esta area quando a central indicar que o contribuinte pode pertencer a alguem do rol.</p>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Pessoa sugerida</th><th>Status</th><th>Motivo</th><th class="no-print">Acao</th></tr></thead>
-            <tbody>
-              {% for person in detail.possible_people %}
-                <tr>
-                  <td><a href="/people/{{ person.id }}/">{{ person.nome }}</a><div class="muted small">{{ person.codigo_interno|default:"sem numero" }} · CPF {{ person.cpf|default:"nao informado" }}</div></td>
-                  <td><span class="badge">{{ person.sigla }}</span> {{ person.status_label }}</td>
-                  <td>{{ person.reason }}</td>
-                  <td class="no-print">
-                    <form method="post">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="link_person">
-                      <input type="hidden" name="person_id" value="{{ person.id }}">
-                      <button type="submit">Vincular a esta pessoa</button>
-                    </form>
-                  </td>
-                </tr>
-              {% empty %}
-                <tr><td colspan="4">Nenhuma pessoa provavel encontrada. Use a busca geral de pessoas para conferir manualmente.</td></tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    {% endif %}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Pessoa sugerida</th><th>Status</th><th>Motivo</th><th class="no-print">Acao</th></tr></thead>
+          <tbody>
+            {% for person in detail.possible_people %}
+              <tr>
+                <td><a href="/people/{{ person.id }}/">{{ person.nome }}</a><div class="muted small">{{ person.codigo_interno|default:"sem numero" }} · CPF {{ person.cpf|default:"nao informado" }}</div></td>
+                <td><span class="badge">{{ person.sigla }}</span> {{ person.status_label }}</td>
+                <td>{{ person.reason }}</td>
+                <td class="no-print">
+                  <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="{% if detail.contributor.person_id %}repoint_person{% else %}link_person{% endif %}">
+                    <input type="hidden" name="person_id" value="{{ person.id }}">
+                    <button type="submit">{% if detail.contributor.person_id %}Reapontar para esta pessoa{% else %}Vincular a esta pessoa{% endif %}</button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4">Nenhuma pessoa provavel encontrada. Use a busca geral de pessoas para conferir manualmente.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="grid">
       <div class="card"><span class="label">Total contribuido</span><strong>{{ detail.total_contributions_fmt }}</strong></div>

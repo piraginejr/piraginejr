@@ -247,6 +247,26 @@ curl -I http://127.0.0.1:8001/accounts/login/
 curl -i http://127.0.0.1:8001/api/v1/health/
 ```
 
+## Hooks Automaticos Do Runtime
+
+O runtime agora possui um orquestrador fixo de hooks operacionais:
+
+- `deploy/runtime_startup.d/`
+- `deploy/runtime_background.d/`
+
+Na pratica:
+
+- todo script executavel colocado em `runtime_startup.d` roda automaticamente a cada subida do container;
+- todo script executavel colocado em `runtime_background.d` e iniciado em paralelo e continua rodando em loop, quando fizer sentido para aquela rotina;
+- isso evita depender do operador lembrar comandos manuais sempre que uma atualizacao sobe.
+
+Arquivos-base:
+
+- `deploy/run_runtime_hook_group.sh`
+- `deploy/docker-entrypoint-django-runtime.sh`
+
+Com isso, novas rotinas operacionais entram como hook e nao exigem nova costura no entrypoint.
+
 ## Rotina Temporaria De Recuperacao De Recibos
 
 Quando houver regressao de gatilho e precisarmos recuperar recibos que deveriam ter sido emitidos automaticamente, a estrategia mais segura e:
@@ -303,6 +323,38 @@ Observacao:
 - essa rotina e excepcional;
 - nao substitui o fluxo normal restaurado dos envelopes e extratos;
 - o uso recomendado e apenas para limpar passivo criado por regressao operacional.
+
+## Rotina Permanente De Manutencao De Recibos
+
+Agora existe tambem uma rotina permanente, pensada para rodar sozinha depois de cada atualizacao:
+
+- hook: `deploy/runtime_background.d/10_receipt_automation.sh`
+- loop real: `deploy/run_receipt_automation_loop.sh`
+
+Essa rotina:
+
+- reenfileira recibos automaticos faltantes;
+- drena a fila quando o envio automatico esta ligado;
+- reaproveita a mesma cadencia controlada usada nos disparos operacionais;
+- passa a cobrir futuras atualizacoes sem depender de nova acao manual.
+
+Variaveis novas do `runtime.env`:
+
+```env
+POWER_CHURCH_RECEIPT_AUTOMATION_ENABLED=true
+POWER_CHURCH_RECEIPT_AUTOMATION_FORCE=false
+POWER_CHURCH_RECEIPT_AUTOMATION_INTERVAL_SECONDS=300
+POWER_CHURCH_RECEIPT_AUTOMATION_DRAIN_QUEUE=true
+POWER_CHURCH_RECEIPT_AUTOMATION_LIMIT=40
+POWER_CHURCH_RECEIPT_AUTOMATION_SLEEP_SECONDS=3
+POWER_CHURCH_RECEIPT_AUTOMATION_PAUSE_EVERY=40
+POWER_CHURCH_RECEIPT_AUTOMATION_PAUSE_SECONDS=60
+```
+
+Regra pratica:
+
+- se `POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED=false` e `POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED=false`, o loop se auto-ignora;
+- se o envio automatico estiver ativo, ele assume a manutencao da fila sem depender do operador.
 
 ### 5. Smoke test funcional
 

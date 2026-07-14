@@ -40,10 +40,7 @@ cd /app/power_church_django
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 
-if [ "${POWER_CHURCH_TEMP_RECEIPT_RECOVERY_ENABLED:-false}" = "true" ]; then
-  if ! /app/deploy/run_temporary_receipt_recovery.sh; then
-    echo "Falha na rotina temporaria de recuperacao de recibos. Aplicacao seguira a subida normal." >&2
-  fi
-fi
+/app/deploy/run_runtime_hook_group.sh startup || true
+/app/deploy/run_runtime_hook_group.sh background &
 
 exec gunicorn power_church_site.wsgi:application --bind 0.0.0.0:8000

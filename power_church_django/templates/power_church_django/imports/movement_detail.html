@@ -15,7 +15,7 @@
           </p>
         {% endif %}
         <h1>{{ detail.movement.nome_origem }}</h1>
-        <p>{{ detail.movement.banco }} · lote #{{ detail.movement.lote_id }} · {{ detail.movement.nome_arquivo }}</p>
+        <p>{{ detail.movement.banco }} · {{ detail.movement.lote_label|default:detail.movement.lote_id }} · {{ detail.movement.nome_arquivo }}</p>
       </div>
       <a class="button secondary no-print" href="{{ return_to|default:detail.lot_url }}">Voltar para o lote</a>
     </section>

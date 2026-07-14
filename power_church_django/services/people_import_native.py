@@ -35,6 +35,7 @@ from power_church_django.apps.people.models import (
     PersonSnapshot,
 )
 from power_church_django.services.django_audit import record_django_audit_event
+from power_church_django.services.lot_labels import lot_public_label, month_year_from_any
 from power_church_django.services.runtime_errors import LegacyWriteError
 
 
@@ -606,6 +607,10 @@ def people_import_dashboard_postgres(limit: int = 12) -> dict[str, Any]:
         "lots": [
             {
                 "id": int(lot.legacy_id or 0),
+                "label": lot_public_label(
+                    int(lot.legacy_id or 0),
+                    month_year=month_year_from_any(lot.created_at_display, lot.confirmed_at_display),
+                ),
                 "type": lot.import_type or "",
                 "type_label": _people_import_type_label(lot.import_type),
                 "arquivo_nome": lot.file_name or "",
@@ -693,6 +698,10 @@ def get_people_import_lot_detail_postgres(
     return {
         "lot": {
             "id": int(lot.legacy_id or 0),
+            "label": lot_public_label(
+                int(lot.legacy_id or 0),
+                month_year=month_year_from_any(lot.created_at_display, lot.confirmed_at_display),
+            ),
             "type": lot.import_type or "",
             "type_label": _people_import_type_label(lot.import_type),
             "arquivo_nome": lot.file_name or "",

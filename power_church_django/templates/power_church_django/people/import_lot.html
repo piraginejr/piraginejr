@@ -5,7 +5,7 @@
     <section class="hero">
       <div>
         <p class="badge">{{ detail.lot.type_label }}</p>
-        <h1>{% if print_mode %}Relatorio filtrado do lote de pessoas #{{ detail.lot.id }}{% else %}Lote de pessoas #{{ detail.lot.id }}{% endif %}</h1>
+        <h1>{% if print_mode %}Relatorio filtrado do lote de pessoas {{ detail.lot.label|default:detail.lot.id }}{% else %}Lote de pessoas {{ detail.lot.label|default:detail.lot.id }}{% endif %}</h1>
         <p>{{ detail.lot.arquivo_nome }} · {{ detail.lot.criado_em }}</p>
       </div>
       <div class="actions no-print">

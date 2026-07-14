@@ -14,7 +14,7 @@
             {% endif %}
           </p>
         {% endif %}
-        <h1>Lote #{{ detail.lot.id }}</h1>
+        <h1>{{ detail.lot.label|default:detail.lot.id }}</h1>
         <p>{{ detail.lot.nome_arquivo }} · {{ detail.lot.periodo }}</p>
       </div>
       <a class="button secondary no-print" href="/imports/">Voltar para importacoes</a>

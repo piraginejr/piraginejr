@@ -100,7 +100,7 @@
               <tr>
                 <td>
                   <a href="{{ lot.detail_url }}"><strong>{{ lot.type_label }}</strong></a>
-                  <div class="muted small">Lote #{{ lot.id }} · {{ lot.arquivo_nome }}</div>
+                  <div class="muted small">{{ lot.label|default:lot.id }} · {{ lot.arquivo_nome }}</div>
                   <div class="small"><a href="{{ lot.detail_url }}">Abrir auditoria deste lote</a></div>
                 </td>
                 <td>{{ lot.criado_em }}</td>

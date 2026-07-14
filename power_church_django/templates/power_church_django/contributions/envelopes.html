@@ -53,7 +53,8 @@
         {% for lot in envelopes.lots %}
           <div class="card">
             <span class="label">{{ lot.competencia }}</span>
-            <h3>{{ lot.nome }}</h3>
+            <h3>{{ lot.rotulo|default:lot.nome }}</h3>
+            {% if lot.nome and lot.nome != lot.rotulo %}<p class="small muted">{{ lot.nome }}</p>{% endif %}
             <p>{{ lot.total_envelopes }} envelope(s) · {{ lot.total_valor_fmt }}</p>
             <p class="small muted">{{ lot.pendentes }} pendente(s) · {{ lot.em_digitacao }} em digitacao · {{ lot.lancados }} lancado(s) · {{ lot.ignorados }} ignorado(s) · {{ lot.duplicados }} duplicado(s)</p>
             {% if lot.caminho_pasta %}<p class="small muted">Pasta: {{ lot.caminho_pasta }}</p>{% endif %}
@@ -89,7 +90,7 @@
             <tr>
               <td>{{ item.data }}</td>
               <td>{{ item.competencia }}</td>
-              <td>{{ item.lote_nome }}</td>
+              <td>{{ item.lote_rotulo|default:item.lote_nome }}{% if item.lote_nome and item.lote_nome != item.lote_rotulo %}<div class="small muted">{{ item.lote_nome }}</div>{% endif %}</td>
               <td>
                 <a href="{{ item.detail_url }}"><strong>{{ item.nome }}</strong></a>
                 {% if item.nome_informado and item.nome_informado != item.nome %}

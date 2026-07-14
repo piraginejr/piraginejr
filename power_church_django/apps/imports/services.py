@@ -13,10 +13,15 @@ from django.db import models, transaction
 from django.db.models import Count, Q
 
 from power_church_core.bank_lots import StatementEntryPlan, statement_entry_plan
-from power_church_core.banking import statement_contributor_name_for_identity, statement_layout_contributor_source
+from power_church_core.banking import (
+    statement_contributor_name_for_identity,
+    statement_declared_beneficiary_name,
+    statement_layout_contributor_source,
+)
 from power_church_core.bank_parsers import parse_statement_pdf_by_layout, statement_should_skip_entry
 from power_church_core.contributors import contributor_kind_for_identity
 from power_church_core.formatting import br_date, br_datetime
+from power_church_core.matching import derived_pix_name_aliases, match_pix_entry, pix_candidate_suggestions
 from power_church_core.normalization import (
     document_digits,
     document_query_matches,
@@ -35,6 +40,7 @@ from power_church_django.apps.people.models import (
     PersonContactSnapshot,
     PersonContributionSnapshot,
     PersonContributorSnapshot,
+    PersonIdentifierSnapshot,
     PersonRelationshipSnapshot,
     PersonSnapshot,
 )
@@ -46,7 +52,9 @@ from power_church_django.services.contributions_native import (
     _selected_option_name,
     _sync_person_contribution_snapshot,
 )
+from power_church_django.services.financial_identity_lookup import financial_identity_people_cache
 from power_church_django.services.legacy import broad_family_candidates_summary, organized_family_nuclei_summary
+from power_church_django.services.lot_labels import lot_public_label, month_year_from_any
 from power_church_django.services.receipt_delivery import (
     schedule_automatic_receipts_for_events,
     summarize_automatic_receipt_outcomes,
@@ -519,8 +527,13 @@ def _format_snapshot_lot_row(pilot_lot: StatementImportPilotLot) -> dict[str, ob
         if pilot_lot.source_backend != StatementImportPilotLot.SourceBackend.POSTGRES_NATIVE
         else int(pilot_lot.id or 0)
     )
+    public_lot_label = lot_public_label(
+        public_lot_id,
+        month_year=month_year_from_any(pilot_lot.period_start, pilot_lot.period_end, legacy_created_at),
+    )
     return {
         "id": public_lot_id,
+        "label": public_lot_label,
         "tipo": "Extrato",
         "banco": pilot_lot.bank_name or "",
         "layout": pilot_lot.layout_code or "",
@@ -649,6 +662,7 @@ def get_statement_lot_detail_from_snapshot(
                 "competencia": movement.competence or "",
                 "valor_fmt": _money(movement.amount),
                 "nome_origem": movement.source_name or "Sem remetente",
+                "beneficiario_declarado": str(meta.get("declared_beneficiary_name") or ""),
                 "documento": bank_document,
                 "documento_fmt": bank_document_fmt,
                 "documento_tipo": movement.movement_kind or "",
@@ -743,6 +757,14 @@ def get_statement_movement_detail_from_snapshot(
         "movement": {
             "id": int(pilot_movement.source_movement_id or movement_id),
             "lote_id": _statement_resolved_lot_id(pilot_movement.lot),
+            "lote_label": lot_public_label(
+                _statement_resolved_lot_id(pilot_movement.lot),
+                month_year=month_year_from_any(
+                    pilot_movement.lot.period_start,
+                    pilot_movement.lot.period_end,
+                    (pilot_movement.lot.metadata or {}).get("legacy_created_at"),
+                ),
+            ),
             "banco": pilot_movement.lot.bank_name or "",
             "nome_arquivo": pilot_movement.lot.file_name or "",
             "ordem": pilot_movement.order_in_lot,
@@ -751,6 +773,7 @@ def get_statement_movement_detail_from_snapshot(
             "competencia": pilot_movement.competence or "",
             "valor_fmt": _money(pilot_movement.amount),
             "nome_origem": pilot_movement.source_name or "Sem remetente",
+            "beneficiario_declarado": str(meta.get("declared_beneficiary_name") or ""),
             "documento": pilot_movement.bank_document or "",
             "documento_tipo": pilot_movement.movement_kind or "",
             "confidence": pilot_movement.confidence or "",
@@ -822,11 +845,15 @@ def _statement_default_type_id(pilot_movement: StatementImportPilotMovement) -> 
         )
         if rule and int(rule.contribution_type_legacy_id or 0):
             return int(rule.contribution_type_legacy_id or 0)
+        if cent_code != "00":
+            return 0
         dizimo_id = _statement_dizimo_type_id(organization_id)
         if dizimo_id:
             return dizimo_id
     meta = pilot_movement.metadata or {}
     suggested_name = normalize_query(meta.get("tipo_sugerido"))
+    if cent_code and cent_code != "00":
+        return 0
     if suggested_name:
         type_row = (
             ContributionTypeSnapshot.objects.filter(is_active=True)
@@ -920,6 +947,197 @@ def _statement_person_options(
     return options
 
 
+def _native_statement_match_people_queryset(person_ids: list[int]) -> list[PersonSnapshot]:
+    clean_ids = [int(value or 0) for value in person_ids if int(value or 0)]
+    if not clean_ids:
+        return []
+    people_by_id = {
+        int(row.legacy_id or 0): row
+        for row in PersonSnapshot.objects.filter(legacy_id__in=clean_ids, is_active=True)
+        .only("legacy_id", "name", "internal_code", "cpf", "status")
+    }
+    return [people_by_id[person_id] for person_id in clean_ids if person_id in people_by_id]
+
+
+def _statement_declared_beneficiary(pilot_movement: StatementImportPilotMovement) -> str:
+    return statement_declared_beneficiary_name(
+        pilot_movement.lot.layout_code,
+        detail_text=pilot_movement.origin_label,
+        raw_text=pilot_movement.raw_text,
+        source_name=pilot_movement.source_name,
+    )
+
+
+def _native_statement_match_people_by_lookup(
+    *,
+    lookup_name: str,
+    document_mask: str = "",
+    document_type: str = "",
+    matching_cache: dict[str, object] | None = None,
+) -> tuple[list[PersonSnapshot], str]:
+    people_cache = list((matching_cache or {}).get("people_cache") or [])
+    if people_cache:
+        match_result = match_pix_entry(
+            donor_name=lookup_name,
+            document_mask=document_mask,
+            document_type=document_type,
+            people_cache=people_cache,
+        )
+        person_id = int(match_result.get("person_id") or 0)
+        if person_id:
+            matched = _native_statement_match_people_queryset([person_id])
+            if matched:
+                return matched, str(match_result.get("confidence") or "forte_doc")
+        suggestions = pix_candidate_suggestions(
+            donor_name=lookup_name,
+            document_mask=document_mask,
+            document_type=document_type,
+            people_cache=people_cache,
+            limit=5,
+        )
+        suggestion_ids = [int(item.get("person_id") or 0) for item in suggestions if int(item.get("person_id") or 0)]
+        if suggestion_ids:
+            matched = _native_statement_match_people_queryset(suggestion_ids)
+            if matched:
+                top_score = float(suggestions[0].get("score") or 0)
+                confidence = "ambiguo"
+                if len(matched) == 1 and top_score >= 90:
+                    confidence = "provavel_nome"
+                return matched, confidence
+    normalized_name = normalize_match_name(lookup_name)
+    if normalized_name:
+        people = list(
+            PersonSnapshot.objects.filter(normalized_name=normalized_name, is_active=True)
+            .only("legacy_id", "name", "internal_code", "cpf", "status")
+            .order_by("legacy_id")[:5]
+        )
+        if people:
+            return people, "forte_nome"
+        people = list(
+            PersonSnapshot.objects.filter(normalized_name__startswith=normalized_name[:32], is_active=True)
+            .only("legacy_id", "name", "internal_code", "cpf", "status")
+            .order_by("legacy_id")[:5]
+        )
+        if people:
+            return people, "nome_parcial"
+    return [], ""
+
+
+def _native_statement_people_matching_cache() -> dict[str, object]:
+    cached = financial_identity_people_cache()
+    if cached.get("people_cache"):
+        return cached
+    people_rows = list(
+        PersonSnapshot.objects.filter(is_active=True)
+        .values("legacy_id", "name", "normalized_name", "status", "cpf")
+        .order_by("legacy_id")
+    )
+    aliases_by_person: dict[int, dict[tuple[str, str], dict[str, str]]] = defaultdict(dict)
+    identifiers_by_person: dict[int, list[dict[str, str]]] = defaultdict(list)
+
+    def add_alias(person_id: int, name: object, alias_kind: str, source_name: object = "") -> None:
+        person_id = int(person_id or 0)
+        alias_name = normalize_query(name)
+        if not person_id or not alias_name:
+            return
+        alias_name_norm = normalize_match_name(alias_name)
+        if not alias_name_norm:
+            return
+        aliases_by_person[person_id][(alias_name_norm, alias_kind)] = {
+            "name": alias_name,
+            "name_norm": alias_name_norm,
+            "alias_kind": alias_kind,
+            "source_name": normalize_query(source_name) or alias_name,
+        }
+
+    def add_identifier(person_id: int, kind: object, value: object, source_name: object = "") -> None:
+        person_id = int(person_id or 0)
+        identifier_value = normalize_query(value)
+        if not person_id or not identifier_value:
+            return
+        identifiers_by_person[person_id].append(
+            {
+                "kind": normalize_query(kind) or "documento",
+                "value": identifier_value,
+                "source_name": normalize_query(source_name),
+            }
+        )
+
+    for row in people_rows:
+        person_id = int(row["legacy_id"] or 0)
+        add_alias(person_id, row.get("name"), "ficha", row.get("name"))
+        add_identifier(person_id, "cpf", row.get("cpf"), "cpf_ficha")
+        for alias in derived_pix_name_aliases(row.get("name") or ""):
+            add_alias(person_id, alias, "derivado", row.get("name"))
+
+    for row in PersonIdentifierSnapshot.objects.filter(is_active=True).values(
+        "person__legacy_id",
+        "identifier_type",
+        "value",
+        "notes",
+    ):
+        add_identifier(
+            int(row["person__legacy_id"] or 0),
+            row.get("identifier_type"),
+            row.get("value"),
+            row.get("notes") or "identificador_financeiro",
+        )
+
+    for row in PersonContributorSnapshot.objects.filter(is_active=True).values(
+        "person__legacy_id",
+        "name",
+        "primary_document",
+        "document_type",
+    ):
+        person_id = int(row["person__legacy_id"] or 0)
+        contributor_name = row.get("name")
+        add_alias(person_id, contributor_name, "contribuinte", contributor_name)
+        add_identifier(
+            person_id,
+            row.get("document_type") or "documento",
+            row.get("primary_document"),
+            f"contribuinte:{normalize_query(contributor_name)}",
+        )
+
+    for row in (
+        PersonContributionSnapshot.objects.filter(is_active=True)
+        .exclude(source_name="")
+        .values("person__legacy_id", "source_name")
+    ):
+        person_id = int(row["person__legacy_id"] or 0)
+        source_name = row.get("source_name")
+        add_alias(person_id, source_name, "financeiro", source_name)
+
+    for row in NativeAuxContributor.objects.filter(is_active=True).exclude(person_legacy_id=None).values(
+        "person_legacy_id",
+        "name",
+        "primary_document",
+        "document_type",
+    ):
+        person_id = int(row["person_legacy_id"] or 0)
+        aux_name = row.get("name")
+        add_alias(person_id, aux_name, "auxiliar", aux_name)
+        add_identifier(
+            person_id,
+            row.get("document_type") or "documento",
+            row.get("primary_document"),
+            f"auxiliar:{normalize_query(aux_name)}",
+        )
+
+    people_cache = [
+        {
+            "id": int(row["legacy_id"] or 0),
+            "nome": row["name"] or "",
+            "name_norm": row["normalized_name"] or "",
+            "status": row["status"] or "",
+            "financial_aliases": list(aliases_by_person.get(int(row["legacy_id"] or 0), {}).values()),
+            "identifiers": identifiers_by_person.get(int(row["legacy_id"] or 0), []),
+        }
+        for row in people_rows
+    ]
+    return {"people_cache": people_cache}
+
+
 def _statement_type_options(
     pilot_movement: StatementImportPilotMovement,
     selected_type_id: int,
@@ -955,7 +1173,11 @@ def _statement_resolved_lot_id(pilot_lot: StatementImportPilotLot) -> int:
 
 def _native_statement_candidate_people(
     pilot_movement: StatementImportPilotMovement,
-) -> tuple[list[PersonSnapshot], str]:
+    *,
+    matching_cache: dict[str, object] | None = None,
+) -> tuple[list[PersonSnapshot], str, bool]:
+    declared_beneficiary = _statement_declared_beneficiary(pilot_movement)
+    payer_name = normalize_query(pilot_movement.source_name)
     document = document_digits(pilot_movement.bank_document or "")
     if len(document) == 11:
         people = list(
@@ -964,24 +1186,40 @@ def _native_statement_candidate_people(
             .order_by("legacy_id")[:5]
         )
         if people:
-            return people, "forte_doc"
-    normalized_name = normalize_query(pilot_movement.source_name_normalized or pilot_movement.source_name)
-    if normalized_name:
-        people = list(
-            PersonSnapshot.objects.filter(normalized_name=normalized_name, is_active=True)
-            .only("legacy_id", "name", "internal_code", "cpf", "status")
-            .order_by("legacy_id")[:5]
+            payer_people = people
+            payer_confidence = "forte_doc"
+        else:
+            payer_people, payer_confidence = _native_statement_match_people_by_lookup(
+                lookup_name=payer_name,
+                document_mask=pilot_movement.bank_document or "",
+                document_type=pilot_movement.document_type or "",
+                matching_cache=matching_cache,
+            )
+    else:
+        payer_people, payer_confidence = _native_statement_match_people_by_lookup(
+            lookup_name=payer_name,
+            document_mask=pilot_movement.bank_document or "",
+            document_type=pilot_movement.document_type or "",
+            matching_cache=matching_cache,
         )
-        if people:
-            return people, "forte_nome"
-        people = list(
-            PersonSnapshot.objects.filter(normalized_name__startswith=normalized_name[:32], is_active=True)
-            .only("legacy_id", "name", "internal_code", "cpf", "status")
-            .order_by("legacy_id")[:5]
+
+    if declared_beneficiary:
+        beneficiary_people, beneficiary_confidence = _native_statement_match_people_by_lookup(
+            lookup_name=declared_beneficiary,
+            document_mask="",
+            document_type="",
+            matching_cache=matching_cache,
         )
-        if people:
-            return people, "nome_parcial"
-    return [], ""
+        if len(beneficiary_people) == 1:
+            beneficiary_id = int(beneficiary_people[0].legacy_id or 0)
+            payer_ids = {int(person.legacy_id or 0) for person in payer_people}
+            if payer_ids and beneficiary_id not in payer_ids:
+                return beneficiary_people, beneficiary_confidence or "beneficiario_declarado", True
+            return beneficiary_people, beneficiary_confidence or "beneficiario_declarado", False
+
+    if payer_people:
+        return payer_people, payer_confidence, False
+    return [], "", False
 
 
 def _sync_statement_person_metadata(
@@ -995,6 +1233,7 @@ def _sync_statement_person_metadata(
     meta["suggested_person_cpf"] = suggested_person.cpf if suggested_person else ""
     meta["resolved_person_name"] = resolved_person.name if resolved_person else ""
     meta["resolved_person_cpf"] = resolved_person.cpf if resolved_person else ""
+    meta["declared_beneficiary_name"] = _statement_declared_beneficiary(pilot_movement)
     return meta
 
 
@@ -1028,6 +1267,8 @@ def _statement_native_review_status(
         if selected_person_id:
             return "aprovado", confidence or "aprovado_manual", None
         return "aprovado", confidence or "sem_vinculo_manual", None
+    if bool((pilot_movement.metadata or {}).get("declared_beneficiary_requires_review")):
+        return "revisar_pessoa", confidence or "beneficiario_declarado", None
     if not selected_person_id:
         return "revisar_pessoa", confidence or "sem_vinculo", None
     duplicate = _find_duplicate_contribution_for_native_statement(pilot_movement, selected_person_id)
@@ -1040,6 +1281,7 @@ def _apply_native_statement_resolution(
     pilot_movement: StatementImportPilotMovement,
     *,
     preserve_manual_selection: bool,
+    matching_cache: dict[str, object] | None = None,
 ) -> StatementImportPilotMovement:
     meta = dict(pilot_movement.metadata or {})
     if pilot_movement.review_status == "ignorado":
@@ -1057,11 +1299,15 @@ def _apply_native_statement_resolution(
     association_reviewed = bool(meta.get("association_reviewed"))
     should_recalculate_suggestion = (not selected_person_id and not association_reviewed) or not preserve_manual_selection
     if should_recalculate_suggestion:
-        suggested_people, suggested_confidence = _native_statement_candidate_people(pilot_movement)
+        suggested_people, suggested_confidence, require_review = _native_statement_candidate_people(
+            pilot_movement,
+            matching_cache=matching_cache,
+        )
         confidence = confidence or suggested_confidence
+        meta["declared_beneficiary_requires_review"] = bool(require_review)
         first_person = suggested_people[0] if suggested_people else None
         pilot_movement.suggested_person_legacy_id = int(first_person.legacy_id or 0) if first_person else None
-        if not selected_person_id and not association_reviewed and len(suggested_people) == 1:
+        if not selected_person_id and not association_reviewed and len(suggested_people) == 1 and not require_review:
             selected_person_id = int(first_person.legacy_id or 0)
             pilot_movement.resolved_person_legacy_id = selected_person_id
         elif not selected_person_id and not association_reviewed:
@@ -1182,6 +1428,8 @@ def _statement_notes_for_movement(pilot_movement: StatementImportPilotMovement) 
         parts.append(f"Origem: {pilot_movement.source_name}")
     elif normalize_query(pilot_movement.origin_label):
         parts.append(f"Origem: {pilot_movement.origin_label}")
+    if _statement_declared_beneficiary(pilot_movement):
+        parts.append(f"Beneficiario declarado: {_statement_declared_beneficiary(pilot_movement)}")
     if normalize_query(pilot_movement.bank_document):
         parts.append(f"Docto: {pilot_movement.bank_document}")
     if normalize_query(pilot_movement.cent_code):
@@ -1486,9 +1734,14 @@ def prepare_statement_lot_postgres_native(lot_id: int, actor: str = "") -> dict[
         raise ValueError("Lote nativo de extrato nao encontrado.")
     previous_status = pilot_lot.lot_status or ""
     reviewed = 0
+    matching_cache = _native_statement_people_matching_cache()
     with transaction.atomic():
         for movement in pilot_lot.movements.all().order_by("order_in_lot", "id"):
-            _apply_native_statement_resolution(movement, preserve_manual_selection=True)
+            _apply_native_statement_resolution(
+                movement,
+                preserve_manual_selection=True,
+                matching_cache=matching_cache,
+            )
             movement.save()
             reviewed += 1
         financial = _ensure_statement_financial_entries_postgres_native(pilot_lot, actor=actor)
@@ -1515,9 +1768,14 @@ def reprocess_statement_lot_postgres_native(lot_id: int) -> int:
     if pilot_lot is None:
         raise ValueError("Lote nativo de extrato nao encontrado.")
     updated = 0
+    matching_cache = _native_statement_people_matching_cache()
     with transaction.atomic():
         for movement in pilot_lot.movements.all().order_by("order_in_lot", "id"):
-            _apply_native_statement_resolution(movement, preserve_manual_selection=True)
+            _apply_native_statement_resolution(
+                movement,
+                preserve_manual_selection=True,
+                matching_cache=matching_cache,
+            )
             movement.save()
             updated += 1
         _ensure_statement_financial_entries_postgres_native(pilot_lot)
@@ -1574,7 +1832,11 @@ def update_statement_movement_postgres_native(
             if resolved_type_id:
                 meta["resolved_tipo_contribuicao_id"] = resolved_type_id
             pilot_movement.metadata = meta
-            _apply_native_statement_resolution(pilot_movement, preserve_manual_selection=True)
+            _apply_native_statement_resolution(
+                pilot_movement,
+                preserve_manual_selection=True,
+                matching_cache=_native_statement_people_matching_cache(),
+            )
             meta = dict(pilot_movement.metadata or {})
         pilot_movement.metadata = meta
         pilot_movement.save()

@@ -63,7 +63,7 @@
           <tbody>
             {% for lot in lots.items %}
               <tr>
-                <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/{% if lot.snapshot_backend == 'postgres_nativo' %}?backend=postgres_nativo{% endif %}"><strong>#{{ lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
+                <td><a href="/imports/{% if lot.tipo == 'PIX' %}pix{% else %}statement{% endif %}/{{ lot.id }}/{% if lot.snapshot_backend == 'postgres_nativo' %}?backend=postgres_nativo{% endif %}"><strong>{{ lot.label|default:lot.id }}</strong></a><div class="muted small">{{ lot.criado_em }}</div></td>
                 <td>
                   <span class="badge">{{ lot.tipo }}</span>
                   {% if lot.snapshot_backend %}

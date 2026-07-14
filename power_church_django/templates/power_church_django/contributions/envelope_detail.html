@@ -6,7 +6,7 @@
       <div>
         <p class="badge">{{ detail.competencia }} · {{ detail.status }}</p>
         <h1>Envelope #{{ detail.id }}</h1>
-        <p>{{ detail.lote_nome }} · {{ detail.data }} · total {{ detail.total_fmt }}</p>
+        <p>{{ detail.lote_rotulo|default:detail.lote_nome }}{% if detail.lote_nome and detail.lote_nome != detail.lote_rotulo %} · {{ detail.lote_nome }}{% endif %} · {{ detail.data }} · total {{ detail.total_fmt }}</p>
       </div>
       <div class="actions no-print">
         <a class="button" href="/contributions/envelopes/new/">Novo envelope</a>

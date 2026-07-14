@@ -6,7 +6,7 @@ import re
 import shlex
 import unicodedata
 import zipfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -39,6 +39,7 @@ from power_church_django.services.contributions_native import (
     _sync_person_contribution_snapshot,
 )
 from power_church_django.services.django_audit import record_django_audit_event
+from power_church_django.services.lot_labels import lot_public_label, month_year_from_any
 from power_church_django.services.receipt_delivery import (
     cancel_receipts_for_contribution_ids,
     schedule_automatic_receipts_for_events,
@@ -121,6 +122,13 @@ def _envelope_lock_owner_label(envelope: NativeEnvelope) -> str:
 
 def _envelope_status_label(status: str) -> str:
     return ENVELOPE_STATUS_LABELS.get(str(status or ""), str(status or ""))
+
+
+def _envelope_lot_label(lot_id: int, competence: object = "", received_at_raw: object = "", received_at: date | None = None) -> str:
+    return lot_public_label(
+        int(lot_id or 0),
+        month_year=month_year_from_any(competence, received_at_raw, received_at),
+    )
 
 
 def _is_stale_envelope_lock(envelope: NativeEnvelope, *, now: datetime | None = None) -> bool:
@@ -1239,6 +1247,7 @@ def get_envelope_lot_detail_postgres(lot_id: int) -> dict[str, Any] | None:
         )
     return {
         "id": int(lot.legacy_id or 0),
+        "rotulo": _envelope_lot_label(int(lot.legacy_id or 0), lot.competence, lot.default_received_at_raw, lot.default_received_at),
         "nome": lot.name or "",
         "competencia": lot.competence or "",
         "competencia_mes": lot.default_received_at_raw[:7] if lot.default_received_at_raw else "",
@@ -1477,6 +1486,7 @@ def list_envelopes_postgres(q: str = "", competencia: str = "") -> dict[str, Any
         lots.append(
             {
                 "id": lot_id,
+                "rotulo": _envelope_lot_label(lot_id, lot.competence, lot.default_received_at_raw, lot.default_received_at),
                 "nome": lot.name or "",
                 "competencia": lot.competence or "",
                 "status": lot.status or "",
@@ -1499,6 +1509,12 @@ def list_envelopes_postgres(q: str = "", competencia: str = "") -> dict[str, Any
             {
                 "id": int(row.legacy_id or 0),
                 "lote_id": int(row.native_lot_legacy_id or 0),
+                "lote_rotulo": _envelope_lot_label(
+                    int(row.native_lot_legacy_id or 0),
+                    row.competence,
+                    row.received_at_raw,
+                    row.received_at,
+                ) if int(row.native_lot_legacy_id or 0) else "",
                 "data": br_date(row.received_at_raw or (row.received_at.isoformat() if row.received_at else "")),
                 "competencia": row.competence or "",
                 "lote_nome": row.lot_name or "Envelope manual Postgres",
@@ -1567,6 +1583,12 @@ def get_envelope_detail_postgres(envelope_id: int) -> dict[str, Any] | None:
     return {
         "id": int(envelope.legacy_id or 0),
         "lote_id": int(envelope.native_lot_legacy_id or 0),
+        "lote_rotulo": _envelope_lot_label(
+            int(envelope.native_lot_legacy_id or 0),
+            envelope.competence,
+            envelope.received_at_raw,
+            envelope.received_at,
+        ) if int(envelope.native_lot_legacy_id or 0) else "",
         "lote_nome": envelope.lot_name or "Envelope manual Postgres",
         "lote_url": f"/contributions/envelopes/lots/{int(envelope.native_lot_legacy_id or 0)}/" if int(envelope.native_lot_legacy_id or 0) else "",
         "edit_url": f"/contributions/envelopes/{int(envelope.legacy_id or 0)}/edit/" if str(envelope.status or "") == "lancado" else "",

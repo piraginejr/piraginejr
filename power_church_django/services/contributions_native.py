@@ -108,7 +108,7 @@ def _catalogs_for_org(
         legacy_id = int(row["receipt_method_legacy_id"] or 0)
         if not legacy_id:
             continue
-        name = str(row["receipt_method_name"] or "")
+        name = normalize_query(row["receipt_method_name"])
         receiving_map[legacy_id] = {
             "id": legacy_id,
             "codigo": "",
@@ -148,7 +148,7 @@ def _catalogs_for_org(
             continue
         campaign_map[legacy_id] = {
             "id": legacy_id,
-            "nome": str(row["campaign_name"] or ""),
+            "nome": normalize_query(row["campaign_name"]),
             "status": "ativa",
             "selected": legacy_id == int(selected_campaign_id or 0),
         }
@@ -167,7 +167,7 @@ def _catalogs_for_org(
         if legacy_id and legacy_id not in campaign_map:
             campaign_map[legacy_id] = {
                 "id": legacy_id,
-                "nome": str(row["campaign_name"] or ""),
+                "nome": normalize_query(row["campaign_name"]),
                 "status": "ativa",
                 "selected": legacy_id == int(selected_campaign_id or 0),
             }
@@ -176,8 +176,8 @@ def _catalogs_for_org(
         "type_options": [
             {
                 "id": int(row.legacy_id or 0),
-                "codigo": row.code or "",
-                "nome": row.name or "",
+                "codigo": normalize_query(row.code),
+                "nome": normalize_query(row.name),
                 "selected": int(row.legacy_id or 0) == int(selected_type_id or 0),
             }
             for row in type_rows
@@ -402,13 +402,13 @@ def _legacy_contributor_row(organization_id: int, contributor_id: int) -> dict[s
         return {
             "id": int(contributor.legacy_id or 0),
             "pessoa_id": int(contributor.person.legacy_id or 0),
-            "nome": contributor.name or "",
-            "documento_principal": contributor.primary_document or "",
-            "documento_tipo": contributor.document_type or "",
-            "tipo": contributor.contributor_type or "",
-            "origem": contributor.origin or "",
-            "qualidade": contributor.quality or "",
-            "status": contributor.status or "",
+            "nome": normalize_query(contributor.name),
+            "documento_principal": normalize_query(contributor.primary_document),
+            "documento_tipo": normalize_query(contributor.document_type),
+            "tipo": normalize_query(contributor.contributor_type),
+            "origem": normalize_query(contributor.origin),
+            "qualidade": normalize_query(contributor.quality),
+            "status": normalize_query(contributor.status),
             "observacoes": "",
         }
     aux = (
@@ -424,14 +424,14 @@ def _legacy_contributor_row(organization_id: int, contributor_id: int) -> dict[s
     return {
         "id": int(aux.legacy_reference_id or 0),
         "pessoa_id": int(aux.person_legacy_id or 0) or None,
-        "nome": aux.name or "",
-        "documento_principal": aux.primary_document or "",
-        "documento_tipo": aux.document_type or "",
-        "tipo": aux.contributor_type or "",
-        "origem": aux.origin or "",
-        "qualidade": aux.quality or "",
-        "status": aux.status or "",
-        "observacoes": aux.notes or "",
+        "nome": normalize_query(aux.name),
+        "documento_principal": normalize_query(aux.primary_document),
+        "documento_tipo": normalize_query(aux.document_type),
+        "tipo": normalize_query(aux.contributor_type),
+        "origem": normalize_query(aux.origin),
+        "qualidade": normalize_query(aux.quality),
+        "status": normalize_query(aux.status),
+        "observacoes": normalize_query(aux.notes),
     }
 
 
@@ -513,8 +513,8 @@ def _native_people_options(organization_id: int, limit: int = 5000) -> list[dict
     return [
         {
             "id": int(row.legacy_id or 0),
-            "nome": row.name or "",
-            "codigo": row.internal_code or "",
+            "nome": normalize_query(row.name),
+            "codigo": normalize_query(row.internal_code),
             "cpf": format_cpf(row.cpf or ""),
             "status": format_status(row.status or ""),
             "sigla": status_sigla(row.status or "", True),
@@ -537,9 +537,9 @@ def _native_contributor_options(organization_id: int, limit: int = 5000) -> list
     return [
         {
             "id": int(row.legacy_id or 0),
-            "nome": row.name or "",
-            "documento": row.primary_document or "",
-            "tipo": (row.contributor_type or "").upper(),
+            "nome": normalize_query(row.name),
+            "documento": normalize_query(row.primary_document),
+            "tipo": normalize_query(row.contributor_type).upper(),
             "person_id": int(row.person.legacy_id or 0),
         }
         for row in options
@@ -606,8 +606,8 @@ def new_contribution_context_postgres(person_id: int) -> dict[str, Any] | None:
     return {
         "person": {
             "id": int(person.legacy_id or 0),
-            "codigo": person.internal_code or "",
-            "nome": person.name or "",
+            "codigo": normalize_query(person.internal_code),
+            "nome": normalize_query(person.name),
             "cpf": format_cpf(person.cpf),
             "status": format_status(person.status),
             "sigla": status_sigla(person.status, True),
@@ -629,7 +629,7 @@ def _contributor_cache_from_person(person: PersonSnapshot) -> dict[str, object]:
         "contributor_legacy_id": _native_contributor_id_for_person(person),
         "native_aux_contributor_id": None,
         "contributor_source": "person_snapshot",
-        "contributor_name": person.name or "",
+        "contributor_name": normalize_query(person.name),
         "contributor_document": person.cpf or "",
         "contributor_type": "pf",
     }
@@ -923,7 +923,7 @@ def create_contribution_postgres(payload: Any, actor: str = "") -> int:
         person_legacy_id=int(person.legacy_id or 0),
         contributor_legacy_id=_native_contributor_id_for_person(person),
         contributor_source="person_snapshot",
-        contributor_name=person.name or "",
+        contributor_name=normalize_query(person.name),
         contributor_document=person.cpf or "",
         contributor_type="pf",
         received_at=values["data_recebimento_date"],
@@ -1152,23 +1152,23 @@ def get_contribution_detail_postgres(contribution_id: int) -> dict[str, Any] | N
             "valor_input": br_money(contribution.amount or 0).replace("R$ ", ""),
             "status": contribution.operational_status or "regular",
             "status_label": (contribution.operational_status or "regular").replace("_", " ").title(),
-            "observacoes": contribution.notes or "",
+            "observacoes": normalize_query(contribution.notes),
             "ativo": bool(contribution.is_active),
             "criado_em": br_datetime(contribution.created_at),
             "atualizado_em": br_datetime(contribution.updated_at),
             "person_id": int(contribution.person_legacy_id or 0),
-            "person_name": person.name if person else "",
-            "person_code": person.internal_code if person else "",
+            "person_name": normalize_query(person.name) if person else "",
+            "person_code": normalize_query(person.internal_code) if person else "",
             "person_cpf": format_cpf(person.cpf if person else ""),
             "person_status": format_status(person.status if person else ""),
             "person_sigla": status_sigla(person.status if person else "", bool(person)),
             "contributor_id": int((contributor or {}).get("id") or 0),
-            "contributor_name": contribution.contributor_name or (aux.name if aux else str((contributor or {}).get("nome") or "")),
-            "contributor_type": contribution.contributor_type or (aux.contributor_type if aux else str((contributor or {}).get("tipo") or "")),
-            "contributor_document": contribution.contributor_document or (aux.primary_document if aux else str((contributor or {}).get("documento_principal") or "")),
-            "type_name": contribution.contribution_type_name or "",
-            "campaign_name": contribution.campaign_name or "",
-            "form_name": contribution.receipt_method_name or "",
+            "contributor_name": normalize_query(contribution.contributor_name) or (normalize_query(aux.name) if aux else str((contributor or {}).get("nome") or "")),
+            "contributor_type": normalize_query(contribution.contributor_type) or (normalize_query(aux.contributor_type) if aux else str((contributor or {}).get("tipo") or "")),
+            "contributor_document": normalize_query(contribution.contributor_document) or (normalize_query(aux.primary_document) if aux else str((contributor or {}).get("documento_principal") or "")),
+            "type_name": normalize_query(contribution.contribution_type_name),
+            "campaign_name": normalize_query(contribution.campaign_name),
+            "form_name": normalize_query(contribution.receipt_method_name),
             "pix_movement_id": int(contribution.pix_movement_legacy_id or 0),
             "pix_lot_id": 0,
             "statement_movement_id": int(contribution.statement_movement_legacy_id or 0),
@@ -1202,7 +1202,7 @@ def list_contributions_postgres(q: str = "", competencia: str = "", status: str 
     total_value = 0.0
     for row in queryset:
         person = people.get(int(row.person_legacy_id or 0))
-        identity_name = person.name if person else (row.contributor_name or "")
+        identity_name = normalize_query(person.name) if person else normalize_query(row.contributor_name)
         identity_document = person.cpf if person else (row.contributor_document or "")
         if q:
             text = " ".join(
@@ -1232,14 +1232,14 @@ def list_contributions_postgres(q: str = "", competencia: str = "", status: str 
                 "competencia": row.competence or "",
                 "competencia_ordem": int(row.competence_order or 0),
                 "nome": identity["name"] or "Contribuinte nao vinculado",
-                "nome_original": person.name if person else "",
+                "nome_original": normalize_query(person.name) if person else "",
                 "sort_key": identity["sort_key"],
                 "group_kind": identity["group_kind"],
                 "documento": identity["document"],
                 "sigla": status_sigla(person.status if person else "", bool(person)),
-                "tipo": row.contribution_type_name or "Sem tipo",
-                "forma": row.receipt_method_name or "Sem forma",
-                "status": row.operational_status or "regular",
+                "tipo": normalize_query(row.contribution_type_name) or "Sem tipo",
+                "forma": normalize_query(row.receipt_method_name) or "Sem forma",
+                "status": normalize_query(row.operational_status) or "regular",
                 "valor": float(row.amount or 0),
                 "valor_fmt": br_money(row.amount or 0),
             }
@@ -1381,7 +1381,7 @@ def person_statement_data_postgres(
     type_options = [
         {
             "id": int(row.legacy_id or 0),
-            "nome": row.name or "",
+            "nome": normalize_query(row.name),
             "selected": int(row.legacy_id or 0) in selected_type_ids,
         }
         for row in ContributionTypeSnapshot.objects.filter(
@@ -1412,8 +1412,9 @@ def person_statement_data_postgres(
                 "data": br_date(row.received_at_raw or (row.received_at.isoformat() if row.received_at else "")),
                 "competencia": row_competence,
                 "tipo": row.contribution_type_name or "",
-                "forma": row.receipt_method_name or "",
-                "observacoes": getattr(row, "notes", "") or "",
+                "tipo": normalize_query(row.contribution_type_name),
+                "forma": normalize_query(row.receipt_method_name),
+                "observacoes": normalize_query(getattr(row, "notes", "")),
                 "valor_fmt": br_money(value),
                 "detail_url": f"/contributions/{int(row.legacy_id or 0)}/",
             }
@@ -1423,12 +1424,12 @@ def person_statement_data_postgres(
     return {
         "person": {
             "id": int(person.legacy_id or 0),
-            "nome": person.name or "",
-            "codigo": person.internal_code or "",
+            "nome": normalize_query(person.name),
+            "codigo": normalize_query(person.internal_code),
             "cpf": format_cpf(person.cpf),
             "status": format_status(person.status),
             "sigla": status_sigla(person.status, True),
-            "email": person.primary_email or "",
+            "email": normalize_query(person.primary_email),
         },
         "entries": entries,
         "summary": {

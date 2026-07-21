@@ -33,15 +33,15 @@ def search_receipt_people_postgres(q: str = "", limit: int = 20) -> list[dict[st
     return [
         {
             "id": int(row.legacy_id or 0),
-            "nome": row.name or "",
-            "codigo": row.internal_code or "",
-            "codigo_interno": row.internal_code or "",
-            "cpf": row.cpf or "",
+            "nome": normalize_query(row.name),
+            "codigo": normalize_query(row.internal_code),
+            "codigo_interno": normalize_query(row.internal_code),
+            "cpf": normalize_query(row.cpf),
             "status": format_status(row.status),
             "status_label": format_status(row.status),
             "sigla": status_sigla(row.status, True),
-            "email": row.primary_email or "",
-            "telefone": row.primary_phone or "",
+            "email": normalize_query(row.primary_email),
+            "telefone": normalize_query(row.primary_phone),
         }
         for row in rows
     ]
@@ -71,9 +71,9 @@ def operational_audit_postgres(tipo: str = "", severidade: str = "", page: int =
                     "acao_sugerida": "Conferir o documento correto na ficha da pessoa.",
                     "numero_linha": "",
                     "pessoa_id": int(row.legacy_id or 0),
-                    "nome": row.name or "",
-                    "codigo_interno": row.internal_code or "",
-                    "status": row.status or "",
+                    "nome": normalize_query(row.name),
+                    "codigo_interno": normalize_query(row.internal_code),
+                    "status": normalize_query(row.status),
                     "resolvivel": True,
                     "origem": "postgres",
                 }
@@ -88,9 +88,9 @@ def operational_audit_postgres(tipo: str = "", severidade: str = "", page: int =
                     "acao_sugerida": "Revisar duplicidade e considerar mesclagem assistida.",
                     "numero_linha": "",
                     "pessoa_id": int(row.legacy_id or 0),
-                    "nome": row.name or "",
-                    "codigo_interno": row.internal_code or "",
-                    "status": row.status or "",
+                    "nome": normalize_query(row.name),
+                    "codigo_interno": normalize_query(row.internal_code),
+                    "status": normalize_query(row.status),
                     "resolvivel": True,
                     "origem": "postgres",
                 }
@@ -106,9 +106,9 @@ def operational_audit_postgres(tipo: str = "", severidade: str = "", page: int =
                     "acao_sugerida": "Conferir se ha familia, duplicidade ou e-mail corporativo compartilhado.",
                     "numero_linha": "",
                     "pessoa_id": int(row.legacy_id or 0),
-                    "nome": row.name or "",
-                    "codigo_interno": row.internal_code or "",
-                    "status": row.status or "",
+                    "nome": normalize_query(row.name),
+                    "codigo_interno": normalize_query(row.internal_code),
+                    "status": normalize_query(row.status),
                     "resolvivel": True,
                     "origem": "postgres",
                 }
@@ -131,9 +131,9 @@ def operational_audit_postgres(tipo: str = "", severidade: str = "", page: int =
             "acao_sugerida": "Revisar pessoa, destinacao ou duplicidade antes do encerramento do lote.",
             "numero_linha": "",
             "pessoa_id": int(person.legacy_id or 0) if person else 0,
-            "nome": person.name if person else (row.source_name or row.origin_label or row.bank_document or ""),
-            "codigo_interno": person.internal_code if person else "",
-            "status": person.status if person else "",
+            "nome": normalize_query(person.name) if person else (normalize_query(row.source_name) or normalize_query(row.origin_label) or normalize_query(row.bank_document) or ""),
+            "codigo_interno": normalize_query(person.internal_code) if person else "",
+            "status": normalize_query(person.status) if person else "",
             "resolvivel": True,
             "origem": "extrato_postgres",
         }

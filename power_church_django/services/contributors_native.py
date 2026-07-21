@@ -47,10 +47,10 @@ def _person_rows_for_links() -> list[dict[str, Any]]:
     return [
         {
             "id": int(row.legacy_id or 0),
-            "nome": row.name or "",
-            "status": row.status or "",
-            "codigo_interno": row.internal_code or "",
-            "cpf": row.cpf or "",
+            "nome": normalize_query(row.name),
+            "status": normalize_query(row.status),
+            "codigo_interno": normalize_query(row.internal_code),
+            "cpf": normalize_query(row.cpf),
         }
         for row in PersonSnapshot.objects.filter(is_active=True).only("legacy_id", "name", "status", "internal_code", "cpf")
     ]
@@ -334,16 +334,16 @@ def list_contributors_postgres(
         stat = stats.get(int(row.id or 0), {})
         payload = {
             "id": int(row.legacy_reference_id or row.id or 0),
-            "nome": row.name or "",
-            "documento_principal": row.primary_document or "",
-            "documento_tipo": row.document_type or "",
-            "tipo": row.contributor_type or "",
-            "status": row.status or "",
-            "origem": row.origin or "",
-            "qualidade": row.quality or "",
+            "nome": normalize_query(row.name),
+            "documento_principal": normalize_query(row.primary_document),
+            "documento_tipo": normalize_query(row.document_type),
+            "tipo": normalize_query(row.contributor_type),
+            "status": normalize_query(row.status),
+            "origem": normalize_query(row.origin),
+            "qualidade": normalize_query(row.quality),
             "pessoa_id": int(row.person_legacy_id or 0),
-            "pessoa_nome": (person_index.get(int(row.person_legacy_id or 0)).name if person_index.get(int(row.person_legacy_id or 0)) else ""),
-            "pessoa_status": (person_index.get(int(row.person_legacy_id or 0)).status if person_index.get(int(row.person_legacy_id or 0)) else ""),
+            "pessoa_nome": (normalize_query(person_index.get(int(row.person_legacy_id or 0)).name) if person_index.get(int(row.person_legacy_id or 0)) else ""),
+            "pessoa_status": (normalize_query(person_index.get(int(row.person_legacy_id or 0)).status) if person_index.get(int(row.person_legacy_id or 0)) else ""),
             "contribuicoes_qtd": int(stat.get("contribuicoes_qtd") or 0),
             "total_contribuido": float(stat.get("total_contribuido") or 0),
             "primeira_contribuicao": stat.get("primeira_contribuicao") or "",
@@ -515,7 +515,7 @@ def contributor_possible_people_postgres(contributor_id: int, limit: int = 12) -
                 "status": person.status or "",
                 "status_label": format_status(person.status),
                 "sigla": status_sigla(person.status, True),
-                "codigo_interno": person.internal_code or "",
+                "codigo_interno": normalize_query(person.internal_code),
                 "cpf": format_cpf(person.cpf),
                 "score": round(score, 4),
                 "reason": reason,
@@ -579,8 +579,8 @@ def get_contributor_detail_postgres(contributor_id: int) -> dict[str, Any] | Non
                     "competencia": row.competence or "",
                     "valor": float(row.amount or 0),
                     "status_operacional": row.operational_status or "",
-                    "tipo_nome": row.contribution_type_name or "",
-                    "forma_nome": row.receipt_method_name or "",
+                    "tipo_nome": normalize_query(row.contribution_type_name),
+                    "forma_nome": normalize_query(row.receipt_method_name),
                     "origem_nome": person_name_index.get(int(row.person_legacy_id or 0), ""),
                 }
             )
@@ -614,22 +614,22 @@ def lookup_envelope_people_postgres(phone: str = "", address: str = "", limit: i
             seen_phone.add(person_id)
             phone_matches.append(
                 {
-                    "nome": person.name or "",
+                    "nome": normalize_query(person.name),
                     "sigla": status_sigla(person.status, True),
-                    "codigo": person.internal_code or "",
+                    "codigo": normalize_query(person.internal_code),
                     "cpf": format_cpf(person.cpf),
-                    "matched_value": row.value or "",
-                    "label": f"{person.name} ({person.internal_code or person.legacy_id})",
+                    "matched_value": normalize_query(row.value),
+                    "label": f"{normalize_query(person.name)} ({normalize_query(person.internal_code) or person.legacy_id})",
                     "participant_ref": _person_option_label(
                         {
                             "id": person_id,
-                            "nome": person.name or "",
-                            "status": person.status or "",
-                            "codigo_interno": person.internal_code or "",
+                            "nome": normalize_query(person.name),
+                            "status": normalize_query(person.status),
+                            "codigo_interno": normalize_query(person.internal_code),
                             "cpf": format_cpf(person.cpf),
                         }
                     ),
-                    "source": row.contact_type or "Telefone",
+                    "source": normalize_query(row.contact_type) or "Telefone",
                 }
             )
             if len(phone_matches) >= limit:
@@ -648,18 +648,18 @@ def lookup_envelope_people_postgres(phone: str = "", address: str = "", limit: i
                 matched_value = person.primary_phone or person.primary_whatsapp or ""
                 phone_matches.append(
                     {
-                        "nome": person.name or "",
+                        "nome": normalize_query(person.name),
                         "sigla": status_sigla(person.status, True),
-                        "codigo": person.internal_code or "",
+                        "codigo": normalize_query(person.internal_code),
                         "cpf": format_cpf(person.cpf),
-                        "matched_value": matched_value,
-                        "label": f"{person.name} ({person.internal_code or person.legacy_id})",
+                        "matched_value": normalize_query(matched_value),
+                        "label": f"{normalize_query(person.name)} ({normalize_query(person.internal_code) or person.legacy_id})",
                         "participant_ref": _person_option_label(
                             {
                                 "id": person_id,
-                                "nome": person.name or "",
-                                "status": person.status or "",
-                                "codigo_interno": person.internal_code or "",
+                                "nome": normalize_query(person.name),
+                                "status": normalize_query(person.status),
+                                "codigo_interno": normalize_query(person.internal_code),
                                 "cpf": format_cpf(person.cpf),
                             }
                         ),
@@ -684,18 +684,18 @@ def lookup_envelope_people_postgres(phone: str = "", address: str = "", limit: i
             )
             address_matches.append(
                 {
-                    "nome": person.name or "",
+                    "nome": normalize_query(person.name),
                     "sigla": status_sigla(person.status, True),
-                    "codigo": person.internal_code or "",
+                    "codigo": normalize_query(person.internal_code),
                     "cpf": format_cpf(person.cpf),
-                    "matched_value": matched,
-                    "label": f"{person.name} ({person.internal_code or person.legacy_id})",
+                    "matched_value": normalize_query(matched),
+                    "label": f"{normalize_query(person.name)} ({normalize_query(person.internal_code) or person.legacy_id})",
                     "participant_ref": _person_option_label(
                         {
                             "id": person_id,
-                            "nome": person.name or "",
-                            "status": person.status or "",
-                            "codigo_interno": person.internal_code or "",
+                            "nome": normalize_query(person.name),
+                            "status": normalize_query(person.status),
+                            "codigo_interno": normalize_query(person.internal_code),
                             "cpf": format_cpf(person.cpf),
                         }
                     ),

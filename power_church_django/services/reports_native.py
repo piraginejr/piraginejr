@@ -15,10 +15,10 @@ from power_church_django.services.runtime_formatting import _money, format_statu
 def _person_status_index() -> dict[int, dict[str, str]]:
     return {
         int(row.legacy_id or 0): {
-            "name": row.name or "",
-            "status": row.status or "",
-            "code": row.internal_code or "",
-            "cpf": row.cpf or "",
+            "name": normalize_query(row.name),
+            "status": normalize_query(row.status),
+            "code": normalize_query(row.internal_code),
+            "cpf": normalize_query(row.cpf),
         }
         for row in PersonSnapshot.objects.filter(is_active=True).only("legacy_id", "name", "status", "internal_code", "cpf")
     }
@@ -209,14 +209,14 @@ def contribution_destination_report_postgres(
         bucket["total"] += float(row.amount or 0)
         bucket["total_fmt"] = _money(bucket["total"])
         bucket["contribuintes"].add(
-            (
-                int(row.person_legacy_id or 0),
-                int(row.contributor_legacy_id or 0),
-                int(row.native_aux_contributor_id or 0),
-                row.contributor_name or "",
-                row.contributor_document or "",
+                (
+                    int(row.person_legacy_id or 0),
+                    int(row.contributor_legacy_id or 0),
+                    int(row.native_aux_contributor_id or 0),
+                    normalize_query(row.contributor_name),
+                    normalize_query(row.contributor_document),
+                )
             )
-        )
     destination_options = []
     for item in grouped_options.values():
         item["contribuintes"] = len(item["contribuintes"])
@@ -281,7 +281,7 @@ def contribution_destination_report_postgres(
                 "detail_url": f"/contributions/{int(row.legacy_id or 0)}/",
                 "data": br_date(row.received_at_raw),
                 "competencia": row.competence or "",
-                "forma": row.receipt_method_name or "",
+                "forma": normalize_query(row.receipt_method_name),
                 "valor_fmt": _money(value),
             }
         )

@@ -27,6 +27,7 @@ from power_church_django.apps.contributions.models import (
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
 from power_church_django.services.contributions_native import person_statement_data_postgres
 from power_church_django.services.contributors_native import (
+    get_contributor_detail_postgres,
     link_contributor_to_person_by_id_postgres,
     lookup_envelope_people_postgres,
     repoint_contributor_to_person_by_id_postgres,
@@ -846,6 +847,44 @@ class EnvelopeOperationalFlowTests(TestCase):
         self.assertEqual(snapshot.person_id, target_person.id)
         self.assertEqual(envelope.person_legacy_id, target_person.legacy_id)
         self.assertEqual(item.person_legacy_id, target_person.legacy_id)
+
+    def test_get_contributor_detail_repairs_mojibake_names(self) -> None:
+        person = PersonSnapshot.objects.create(
+            legacy_id=777,
+            organization_id=1,
+            internal_code="100003",
+            name="Ade├¡za Souza dos Santos",
+            normalized_name="ADEIZA SOUZA DOS SANTOS",
+            social_name="",
+            cpf="11327464772",
+            primary_email="",
+            normalized_email="",
+            primary_phone="",
+            primary_whatsapp="",
+            status="membro_ativo",
+            is_active=True,
+            is_archived=False,
+            notes="",
+        )
+        aux = NativeAuxContributor.objects.create(
+            organization_id=1,
+            legacy_reference_id=977,
+            name="Ade├¡za Souza dos Santos",
+            normalized_name="ADEIZA SOUZA DOS SANTOS",
+            primary_document="11327464772",
+            document_type="cpf",
+            origin="extrato_santander",
+            person_legacy_id=person.legacy_id,
+            is_active=True,
+        )
+
+        detail = get_contributor_detail_postgres(aux.legacy_reference_id)
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail["contributor"]["nome"], "Adeíza Souza dos Santos")
+        self.assertEqual(detail["contributor"]["pessoa_nome"], "Adeíza Souza dos Santos")
+        self.assertEqual(detail["possible_people"][0]["nome"], "Adeíza Souza dos Santos")
 
 
 class PersonStatementDataPostgresTests(TestCase):

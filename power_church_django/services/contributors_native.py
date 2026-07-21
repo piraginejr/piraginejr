@@ -485,10 +485,12 @@ def contributor_possible_people_postgres(contributor_id: int, limit: int = 12) -
     if contributor is None:
         return []
     doc_digits = clean_digits(contributor.primary_document)
-    contributor_norm = normalize_match_name(contributor.name)
+    contributor_name = normalize_query(contributor.name)
+    contributor_norm = normalize_match_name(contributor_name)
     rows = []
     for person in PersonSnapshot.objects.filter(is_active=True).only("legacy_id", "name", "status", "internal_code", "cpf"):
-        person_norm = normalize_match_name(person.name)
+        person_name = normalize_query(person.name)
+        person_norm = normalize_match_name(person_name)
         exact_name = bool(contributor_norm and contributor_norm == person_norm)
         doc_match = bool(doc_digits and clean_digits(person.cpf) == doc_digits)
         ratio = SequenceMatcher(None, contributor_norm, person_norm).ratio() if contributor_norm and person_norm else 0.0
@@ -509,7 +511,7 @@ def contributor_possible_people_postgres(contributor_id: int, limit: int = 12) -
         rows.append(
             {
                 "id": int(person.legacy_id or 0),
-                "nome": person.name or "",
+                "nome": person_name,
                 "status": person.status or "",
                 "status_label": format_status(person.status),
                 "sigla": status_sigla(person.status, True),
@@ -527,6 +529,7 @@ def get_contributor_detail_postgres(contributor_id: int) -> dict[str, Any] | Non
     contributor = _resolve_aux_contributor(contributor_id)
     if contributor is None:
         return None
+    contributor_name = normalize_query(contributor.name)
     contributions = list(
         NativeContribution.objects.filter(
             is_active=True,
@@ -538,7 +541,7 @@ def get_contributor_detail_postgres(contributor_id: int) -> dict[str, Any] | Non
     summary_map: dict[str, dict[str, Any]] = {}
     total_value = 0.0
     person_name_index = {
-        int(row.legacy_id or 0): row.name or ""
+        int(row.legacy_id or 0): normalize_query(row.name)
         for row in PersonSnapshot.objects.filter(is_active=True).only("legacy_id", "name")
     }
     for row in contributions:
@@ -552,21 +555,21 @@ def get_contributor_detail_postgres(contributor_id: int) -> dict[str, Any] | Non
         "contributor": {
             "id": int(contributor.legacy_reference_id or contributor.id or 0),
             "person_id": int(contributor.person_legacy_id or 0),
-            "tipo": (contributor.contributor_type or "").upper(),
-            "nome": contributor.name or "",
-            "documento": contributor.primary_document or "",
-            "documento_tipo": contributor.document_type or "",
-            "origem": contributor.origin or "",
-            "qualidade": contributor.quality or "",
-            "status": contributor.status or "",
-            "observacoes": contributor.notes or "",
+            "tipo": normalize_query(contributor.contributor_type).upper(),
+            "nome": contributor_name,
+            "documento": normalize_query(contributor.primary_document),
+            "documento_tipo": normalize_query(contributor.document_type),
+            "origem": normalize_query(contributor.origin),
+            "qualidade": normalize_query(contributor.quality),
+            "status": normalize_query(contributor.status),
+            "observacoes": normalize_query(contributor.notes),
             "criado_em": timezone.localtime(contributor.created_at).strftime("%d/%m/%Y %H:%M") if contributor.created_at else "",
             "atualizado_em": timezone.localtime(contributor.updated_at).strftime("%d/%m/%Y %H:%M") if contributor.updated_at else "",
-            "pessoa_nome": person.name if person else "",
+            "pessoa_nome": normalize_query(person.name) if person else "",
             "pessoa_sigla": status_sigla(person.status if person else "", bool(person)),
             "pessoa_cpf": person.cpf if person else "",
         },
-        "identifiers": [{"tipo": contributor.document_type or "documento", "valor": contributor.primary_document or "", "principal": True, "observacoes": ""}] if contributor.primary_document else [],
+        "identifiers": [{"tipo": normalize_query(contributor.document_type) or "documento", "valor": normalize_query(contributor.primary_document), "principal": True, "observacoes": ""}] if contributor.primary_document else [],
         "possible_people": contributor_possible_people_postgres(contributor_id),
         "contributions": [
             _format_contribution_row(

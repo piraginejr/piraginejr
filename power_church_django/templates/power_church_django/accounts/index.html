@@ -63,7 +63,7 @@
       <h2>Usuarios</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Usuario</th><th>Ativo</th><th>Staff</th><th>Grupos</th></tr></thead>
+          <thead><tr><th>Usuario</th><th>Ativo</th><th>Staff</th><th>Grupos</th><th>Operacoes</th></tr></thead>
           <tbody>
             {% for user in access.users %}
               <tr>
@@ -77,9 +77,33 @@
                     <span class="muted">Sem grupo.</span>
                   {% endfor %}
                 </td>
+                <td>
+                  <div class="actions" style="margin-top:0">
+                    <form method="post">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="reset_password">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <label class="small">
+                        Nova senha
+                        <input name="new_password" type="password" autocomplete="new-password" minlength="8">
+                      </label>
+                      <label class="small">
+                        Confirmar
+                        <input name="new_password_confirm" type="password" autocomplete="new-password" minlength="8">
+                      </label>
+                      <button type="submit" class="secondary compact-button">Trocar senha</button>
+                    </form>
+                    <form method="post" onsubmit="return confirm('Excluir o usuario {{ user.username }}? Esta acao nao pode ser desfeita.');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="delete_user">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <button type="submit" class="secondary compact-button">Excluir usuario</button>
+                    </form>
+                  </div>
+                </td>
               </tr>
             {% empty %}
-              <tr><td colspan="4">Nenhum usuario criado ainda.</td></tr>
+              <tr><td colspan="5">Nenhum usuario criado ainda.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -87,13 +111,14 @@
     </div>
     <div class="panel" id="criar-usuario">
       <h2>{% if access.has_superuser %}Criar usuario{% else %}Criar primeiro administrador{% endif %}</h2>
-      {% if access.has_superuser and not request.user.is_superuser %}
-        <p class="alert">Ja existe um administrador. Para criar usuarios, entre com um superusuario e volte a esta tela.</p>
+      {% if access.has_superuser and not can_manage_users %}
+        <p class="alert">Ja existe um administrador. Entre com um usuario autorizado para gerenciar contas e volte a esta tela.</p>
         <a class="button secondary" href="/accounts/login/">Entrar como administrador</a>
       {% else %}
         <p>{% if access.has_superuser %}Crie o usuario e selecione o grupo de privilegios adequado.{% else %}Como ainda nao existe administrador, este primeiro usuario sera superusuario do sistema.{% endif %}</p>
         <form method="post" class="toolbar">
           {% csrf_token %}
+          <input type="hidden" name="action" value="create_user">
           <label>
             Usuario
             <input name="username" autocomplete="username" placeholder="admin">

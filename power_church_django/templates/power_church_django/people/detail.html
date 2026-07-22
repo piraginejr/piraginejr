@@ -321,17 +321,30 @@
         <h2>Contribuintes vinculados</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Nome financeiro</th><th>Tipo</th><th>Documento</th><th>Origem</th></tr></thead>
+            <thead><tr><th>Nome financeiro</th><th>Tipo</th><th>Documento</th><th>Origem</th><th>Acao</th></tr></thead>
             <tbody>
               {% for contributor in detail.contributors %}
                 <tr>
                   <td><a href="/contributors/{{ contributor.id }}/">{{ contributor.nome }}</a></td>
                   <td><span class="badge">{{ contributor.tipo }}</span></td>
-                  <td>{{ contributor.documento }}</td>
+                  <td>{{ contributor.documento|default:contributor.documento_principal }}</td>
                   <td>{{ contributor.origem }} · {{ contributor.qualidade }}</td>
+                  <td>
+                    <div class="actions" style="margin-top:0">
+                      <a class="button secondary compact-button" href="/contributors/{{ contributor.id }}/">Abrir identidade</a>
+                      {% if can_manage_finance %}
+                        <form method="post">
+                          {% csrf_token %}
+                          <input type="hidden" name="action" value="unlink_financial_identity">
+                          <input type="hidden" name="contributor_id" value="{{ contributor.id }}">
+                          <button type="submit" class="secondary compact-button">Desvincular</button>
+                        </form>
+                      {% endif %}
+                    </div>
+                  </td>
                 </tr>
               {% empty %}
-                <tr><td colspan="4">Nenhum contribuinte auxiliar vinculado.</td></tr>
+                <tr><td colspan="5">Nenhum contribuinte auxiliar vinculado.</td></tr>
               {% endfor %}
             </tbody>
           </table>

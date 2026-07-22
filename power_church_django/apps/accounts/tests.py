@@ -246,3 +246,100 @@ class ReceiptOperationalButtonsTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/audit/?modo=emails")
         mocked.assert_called_once()
+
+
+class AccountManagementActionsTests(TestCase):
+    def setUp(self) -> None:
+        ensure_access_control()
+        self.admin = User.objects.create_superuser(
+            username="admin_accounts",
+            email="admin_accounts@example.com",
+            password="teste12345",
+        )
+        self.client.force_login(self.admin)
+
+    def test_accounts_page_shows_password_and_delete_actions(self) -> None:
+        target = User.objects.create_user(username="colaborador", password="teste12345", is_active=True)
+
+        response = self.client.get("/accounts/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Trocar senha")
+        self.assertContains(response, "Excluir usuario")
+        self.assertContains(response, f'name="user_id" value="{target.id}"', html=False)
+
+    def test_superuser_can_reset_user_password(self) -> None:
+        target = User.objects.create_user(username="trocar_senha", password="senha_antiga_123", is_active=True)
+
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "reset_password",
+                "user_id": str(target.id),
+                "new_password": "nova_senha_456",
+                "new_password_confirm": "nova_senha_456",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        target.refresh_from_db()
+        self.assertTrue(target.check_password("nova_senha_456"))
+
+    def test_superuser_can_delete_departed_user(self) -> None:
+        target = User.objects.create_user(username="ex_colaborador", password="senha12345", is_active=True)
+
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "delete_user",
+                "user_id": str(target.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(User.objects.filter(pk=target.pk).exists())
+
+    def test_cannot_delete_own_logged_user(self) -> None:
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "delete_user",
+                "user_id": str(self.admin.id),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(User.objects.filter(pk=self.admin.pk).exists())
+
+    def test_group_admin_can_manage_users_without_superuser_flag(self) -> None:
+        self.client.logout()
+        group_admin = User.objects.create_user(
+            username="admin_grupo",
+            password="teste12345",
+            is_active=True,
+        )
+        group_admin.groups.add(Group.objects.get(name="Administrador do Sistema"))
+        self.client.force_login(group_admin)
+        target = User.objects.create_user(username="usuario_alvo", password="senha_antiga_123", is_active=True)
+
+        response = self.client.get("/accounts/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Criar usuario")
+        self.assertContains(response, "Trocar senha")
+        self.assertContains(response, "Excluir usuario")
+        self.assertNotContains(response, "entre com um superusuario")
+
+        post_response = self.client.post(
+            "/accounts/",
+            {
+                "action": "reset_password",
+                "user_id": str(target.id),
+                "new_password": "senha_nova_456",
+                "new_password_confirm": "senha_nova_456",
+            },
+        )
+
+        self.assertEqual(post_response.status_code, 302)
+        target.refresh_from_db()
+        self.assertTrue(target.check_password("senha_nova_456"))

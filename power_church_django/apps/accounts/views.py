@@ -19,11 +19,20 @@ from power_church_django.services.access_control import (
 def index(request: HttpRequest) -> HttpResponse:
     ensure_access_control()
     if request.method == "POST":
-        _handle_user_creation(request)
+        action = str(request.POST.get("action") or "create_user").strip()
+        if action == "create_user":
+            _handle_user_creation(request)
+        elif action == "reset_password":
+            _handle_password_reset(request)
+        elif action == "delete_user":
+            _handle_user_deletion(request)
+        else:
+            messages.error(request, "Acao de usuario nao reconhecida.")
         return redirect("/accounts/")
     context = {
         "title": "Usuarios e privilegios",
         "access": access_control_snapshot(),
+        "can_manage_users": _can_manage_users(request),
     }
     return render(request, "power_church_django/accounts/index.html", context)
 
@@ -38,7 +47,7 @@ def relogin(request: HttpRequest) -> HttpResponse:
 
 def _handle_user_creation(request: HttpRequest) -> None:
     has_superuser = User.objects.filter(is_superuser=True).exists()
-    if has_superuser and not request.user.is_superuser:
+    if has_superuser and not _can_manage_users(request):
         messages.error(request, "Apenas um administrador logado pode criar ou alterar usuarios.")
         return
     username = str(request.POST.get("username") or "").strip()
@@ -74,3 +83,49 @@ def _handle_user_creation(request: HttpRequest) -> None:
         if group:
             user.groups.add(group)
     messages.success(request, f"Usuario {user.username} criado/atualizado com sucesso.")
+
+
+def _can_manage_users(request: HttpRequest) -> bool:
+    return bool(request.user.is_superuser or request.user.has_perm("power_church.manage_accounts"))
+
+
+def _handle_password_reset(request: HttpRequest) -> None:
+    if not _can_manage_users(request):
+        messages.error(request, "Apenas um administrador logado pode redefinir senhas.")
+        return
+    user_id = int(request.POST.get("user_id") or 0)
+    password = str(request.POST.get("new_password") or "")
+    password_confirm = str(request.POST.get("new_password_confirm") or "")
+    target = User.objects.filter(pk=user_id).first()
+    if target is None:
+        messages.error(request, "Usuario nao encontrado para redefinicao de senha.")
+        return
+    if len(password) < 8:
+        messages.error(request, "A nova senha precisa ter pelo menos 8 caracteres.")
+        return
+    if password != password_confirm:
+        messages.error(request, "A confirmacao da nova senha nao confere.")
+        return
+    target.set_password(password)
+    target.save(update_fields=["password"])
+    messages.success(request, f"Senha do usuario {target.username} atualizada com sucesso.")
+
+
+def _handle_user_deletion(request: HttpRequest) -> None:
+    if not _can_manage_users(request):
+        messages.error(request, "Apenas um administrador logado pode excluir usuarios.")
+        return
+    user_id = int(request.POST.get("user_id") or 0)
+    target = User.objects.filter(pk=user_id).first()
+    if target is None:
+        messages.error(request, "Usuario nao encontrado para exclusao.")
+        return
+    if int(target.pk or 0) == int(request.user.pk or 0):
+        messages.error(request, "Nao e permitido excluir o proprio usuario logado.")
+        return
+    if target.is_superuser and User.objects.filter(is_superuser=True).exclude(pk=target.pk).count() == 0:
+        messages.error(request, "Nao e permitido excluir o ultimo superusuario do sistema.")
+        return
+    username = target.username
+    target.delete()
+    messages.success(request, f"Usuario {username} removido com sucesso.")

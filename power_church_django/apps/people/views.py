@@ -15,6 +15,7 @@ from power_church_django.services.data_exchange import (
 from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
 from power_church_django.services.family_profiles import update_household_profile
+from power_church_django.services.contributors_native import unlink_contributor_from_person_by_id_postgres
 from power_church_django.services.people_read_native import (
     family_registry_dashboard,
     get_person_detail,
@@ -352,16 +353,20 @@ def photo(request: HttpRequest, person_id: int) -> HttpResponse:
     return FileResponse(path.open("rb"), content_type=photo_content_type(path))
 
 
-@module_permission_required("view_people", "manage_people")
+@module_permission_required("view_people", ("manage_people", "manage_contributions"))
 def detail(request: HttpRequest, person_id: int) -> HttpResponse:
     if request.method == "POST":
         action = request.POST.get("action", "")
         success_message = "Relacao familiar registrada com trilha de auditoria."
         try:
             if action == "create_family_relationship":
+                if not _local_or_has_permission(request, "manage_people"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar relacoes familiares.")
                 create_person_relationship_postgres(person_id, request.POST, actor=_actor_label(request))
                 success_message = "Relacao familiar registrada com trilha de auditoria."
             elif action == "suppress_family_suggestion":
+                if not _local_or_has_permission(request, "manage_people"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar relacoes familiares.")
                 suppress_family_suggestion_postgres(
                     person_id,
                     int(request.POST.get("related_person_id") or 0),
@@ -369,6 +374,8 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 )
                 success_message = "Sugestao familiar ignorada e retirada da fila por endereco."
             elif action == "update_family_relationship":
+                if not _local_or_has_permission(request, "manage_people"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar relacoes familiares.")
                 update_person_relationship_postgres(
                     person_id,
                     int(request.POST.get("relationship_id") or 0),
@@ -377,6 +384,8 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 )
                 success_message = "Relacao familiar atualizada com trilha de auditoria."
             elif action == "deactivate_family_relationship":
+                if not _local_or_has_permission(request, "manage_people"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar relacoes familiares.")
                 deactivate_person_relationship_postgres(
                     person_id,
                     int(request.POST.get("relationship_id") or 0),
@@ -384,6 +393,8 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                 )
                 success_message = "Relacao familiar removida e protegida contra recriacao automatica."
             elif action == "sync_family_relationships":
+                if not _local_or_has_permission(request, "manage_people"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar relacoes familiares.")
                 summary = sync_person_household_relationships_postgres(person_id, actor=_actor_label(request))
                 messages.success(
                     request,
@@ -392,6 +403,15 @@ def detail(request: HttpRequest, person_id: int) -> HttpResponse:
                     f"{summary['deactivated']} relacao(oes) automatica(s) removida(s).",
                 )
                 return redirect(f"/people/{person_id}/")
+            elif action == "unlink_financial_identity":
+                if not _local_or_has_permission(request, "manage_contributions"):
+                    raise LegacyWriteError("Entre com um usuario autorizado para ajustar identidades financeiras.")
+                contributor_id = int(request.POST.get("contributor_id") or 0)
+                if not contributor_id:
+                    raise LegacyWriteError("Contribuinte auxiliar nao informado para desvinculo.")
+                if not unlink_contributor_from_person_by_id_postgres(contributor_id, actor=_actor_label(request)):
+                    raise LegacyWriteError("Contribuinte auxiliar nao encontrado para desvinculo.")
+                success_message = "Identidade financeira desvinculada e devolvida para revisao controlada."
             else:
                 raise LegacyWriteError("Acao de ficha nao reconhecida.")
         except LegacyWriteError as exc:

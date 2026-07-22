@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from django.contrib.auth.models import Group
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -147,3 +149,60 @@ class PeopleImportLotPrintTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Adélia Lassé da Cruz Araújo")
         self.assertNotContains(response, "Ad├®lia Lass├® da Cruz Ara├║jo")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"])
+class PersonDetailContributorActionsTests(TestCase):
+    def setUp(self) -> None:
+        ensure_access_control()
+        self.user = get_user_model().objects.create_user(username="financeiro", password="senha123")
+        self.user.groups.add(Group.objects.get(name="Operador de Recebimentos"))
+        self.user.groups.add(Group.objects.get(name="Consulta"))
+        self.client.force_login(self.user)
+
+    @patch("power_church_django.apps.people.views.get_person_detail")
+    def test_person_detail_shows_unlink_button_for_linked_contributor(self, mocked_detail) -> None:
+        mocked_detail.return_value = {
+            "person": {"id": 501, "nome": "Pessoa Teste"},
+            "contributors": [
+                {
+                    "id": 77,
+                    "nome": "Identidade Financeira",
+                    "tipo": "pf",
+                    "documento_principal": "12345678901",
+                    "origem": "extrato",
+                    "qualidade": "documento",
+                }
+            ],
+            "contribution_summary": [],
+            "contributions": [],
+            "addresses": [],
+            "family_relationships": [],
+            "family_suggestions": [],
+            "family_people_options": [],
+            "family_relationship_type_options": [],
+            "history": [],
+            "identifiers": [],
+        }
+
+        response = self.client.get("/people/501/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Desvincular")
+        self.assertContains(response, 'name="contributor_id" value="77"', html=False)
+
+    @patch("power_church_django.apps.people.views.unlink_contributor_from_person_by_id_postgres")
+    def test_person_detail_post_unlinks_financial_identity(self, mocked_unlink) -> None:
+        mocked_unlink.return_value = True
+
+        response = self.client.post(
+            "/people/501/",
+            {
+                "action": "unlink_financial_identity",
+                "contributor_id": "77",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/people/501/")
+        mocked_unlink.assert_called_once_with(77, actor="django:financeiro")

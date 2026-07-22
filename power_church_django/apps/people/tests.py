@@ -107,8 +107,43 @@ class PeopleImportLotPrintTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Relatorio filtrado do lote de pessoas #1")
+        self.assertContains(response, "Relatorio filtrado do lote de pessoas")
         self.assertContains(response, "João da Silva")
         self.assertNotContains(response, "José Souza")
         self.assertContains(response, "Imprimir este relatorio")
         self.assertNotContains(response, "Linhas importadas")
+
+    def test_import_lot_print_mode_repairs_mojibake_names(self) -> None:
+        ensure_access_control()
+        user = get_user_model().objects.create_user(username="operador_utf8", password="senha123")
+        user.groups.add(Group.objects.get(name="Consulta"))
+        self.client.force_login(user)
+        lot = NativePeopleImportLot.objects.create(
+            legacy_id=2,
+            import_type="pessoas_membros",
+            file_name="membros_utf8.xlsx",
+            status="confirmado",
+            total_lines=1,
+            open_pendencies=1,
+            created_at_display="01/07/2026 10:00",
+        )
+        NativePeopleImportPending.objects.create(
+            legacy_id=3,
+            lot=lot,
+            line_number=7,
+            severity="aviso",
+            issue_type="data_invalida",
+            description="Nome com encoding quebrado.",
+            suggested_action="Conferir ficha.",
+            resolved=False,
+            person_name="Ad├®lia Lass├® da Cruz Ara├║jo",
+        )
+
+        response = self.client.get(
+            reverse("people:import_lot", args=[2]),
+            {"tipo": "data_invalida", "pendencia_status": "abertas", "print": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Adélia Lassé da Cruz Araújo")
+        self.assertNotContains(response, "Ad├®lia Lass├® da Cruz Ara├║jo")

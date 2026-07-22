@@ -79,6 +79,40 @@ class ReportEncodingTests(TestCase):
         for value in ["João", "José", "Ângela", "Conceição", "São Gonçalo", "Niterói"]:
             self.assertIn(value.encode("cp1252"), payload)
 
+    def test_contribution_period_pdf_repairs_mojibake_input(self) -> None:
+        report = {
+            "competencia": "",
+            "q": "Ad├®lia Lass├® da Cruz Ara├║jo",
+            "date_start": "",
+            "date_end": "",
+            "items": [
+                {
+                    "group_label": "Contribuintes com nome",
+                    "nome": "Ad├®lia Lass├® da Cruz Ara├║jo",
+                    "documento": "123.456.789-10",
+                    "remessas": [{"data": "01/07/2026", "valor_fmt": "R$ 10,00"}],
+                    "total_fmt": "R$ 10,00",
+                    "sigla": "SA",
+                },
+            ],
+            "summary": {
+                "total_fmt": "R$ 10,00",
+                "contribuintes": 1,
+                "remessas": 1,
+                "sa": 1,
+                "si": 0,
+                "nf": 0,
+                "nv": 0,
+                "nm": 0,
+                "nr": 0,
+                "somente_documento": 0,
+            },
+        }
+
+        payload = contribution_period_pdf(report)
+
+        self.assertIn("Adélia Lassé da Cruz Araújo".encode("cp1252"), payload)
+
     @patch("power_church_django.apps.reports.views.contribution_report_postgres")
     def test_report_index_html_explicitly_uses_utf8(self, report_mock) -> None:
         report_mock.return_value = {

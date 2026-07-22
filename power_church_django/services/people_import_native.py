@@ -23,7 +23,7 @@ from scripts.importar_membros_xlsx import (
     valid_cpf,
     yes_no,
 )
-from power_church_core.normalization import clean_cpf, normalize_match_name, normalize_query
+from power_church_core.normalization import clean_cpf, normalize_display_payload, normalize_match_name, normalize_query
 from power_church_django.apps.people.models import (
     NativePeopleImportLine,
     NativePeopleImportLot,
@@ -695,7 +695,7 @@ def get_people_import_lot_detail_postgres(
         )
     pending_name_lists.sort(key=lambda item: (0 if item["tipo"] == pending_issue else 1, item["tipo"]))
     line_rows = list(lot.lines.order_by("line_number", "legacy_id")[:line_limit]) if int(line_limit or 0) > 0 else []
-    return {
+    return normalize_display_payload({
         "lot": {
             "id": int(lot.legacy_id or 0),
             "label": lot_public_label(
@@ -798,4 +798,4 @@ def get_people_import_lot_detail_postgres(
             for row in line_rows
         ],
         "line_limit": line_limit,
-    }
+    })

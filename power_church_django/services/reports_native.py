@@ -6,7 +6,7 @@ from typing import Any
 from django.db.models import Q
 
 from power_church_core.formatting import br_date
-from power_church_core.normalization import contribution_report_identity, normalize_query
+from power_church_core.normalization import contribution_report_identity, normalize_display_payload, normalize_query
 from power_church_django.apps.contributions.models import NativeContribution
 from power_church_django.apps.people.models import PersonSnapshot
 from power_church_django.services.runtime_formatting import _money, format_status, status_sigla
@@ -110,7 +110,7 @@ def contribution_report_postgres(
         sigla_counts[item["sigla"]] += 1
     named_items = [item for item in items if item["group_kind"] == "nome"]
     document_items = [item for item in items if item["group_kind"] == "documento"]
-    return {
+    return normalize_display_payload({
         "items": items,
         "named_items": named_items,
         "document_items": document_items,
@@ -132,7 +132,7 @@ def contribution_report_postgres(
             "somente_documento": len(document_items),
         },
         "truncated": len(rows) >= limit_rows,
-    }
+    })
 
 
 def _destination_from_native_row(row: NativeContribution) -> dict[str, Any]:
@@ -300,7 +300,7 @@ def contribution_destination_report_postgres(
         destinations.append(group)
     destinations.sort(key=lambda item: (0 if item["key"] == "tipo:1" else 1, str(item["label"]).casefold()))
     total_value = sum(float(item["total"] or 0) for item in destinations)
-    return {
+    return normalize_display_payload({
         "competencia": competencia,
         "q": q,
         "date_start": date_start,
@@ -323,4 +323,4 @@ def contribution_destination_report_postgres(
             "nr": sigla_counts["NR"],
         },
         "truncated": len(rows) >= limit_rows,
-    }
+    })

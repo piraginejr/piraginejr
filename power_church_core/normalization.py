@@ -39,6 +39,22 @@ def normalize_query(value: object) -> str:
     return repair_mojibake_text(value)
 
 
+def normalize_display_text(value: object) -> str:
+    return repair_mojibake_text(value)
+
+
+def normalize_display_payload(value: object):
+    if isinstance(value, dict):
+        return {key: normalize_display_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_display_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(normalize_display_payload(item) for item in value)
+    if isinstance(value, str):
+        return normalize_display_text(value)
+    return value
+
+
 def normalize_match_name(value: object) -> str:
     raw = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
     normalized = re.sub(r"[^A-Za-z0-9 ]+", " ", raw).upper()

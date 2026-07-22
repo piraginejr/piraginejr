@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 from power_church_core.formatting import br_date
-from power_church_core.normalization import normalize_query
+from power_church_core.normalization import normalize_display_payload, normalize_query
 from power_church_django.services.branding import brand_logo_available, brand_logo_path
 
 PDF_TEXT_ENCODING = "cp1252"
@@ -157,6 +157,7 @@ def _build_pdf(pages: list[list[str]]) -> bytes:
 
 
 def contribution_period_pdf(report: dict[str, Any]) -> bytes:
+    report = normalize_display_payload(report or {})
     pages: list[list[str]] = []
     current: list[str] = []
     y = 800
@@ -342,6 +343,7 @@ def contribution_period_pdf_filename(report: dict[str, Any]) -> str:
 
 
 def contribution_destination_pdf(report: dict[str, Any]) -> bytes:
+    report = normalize_display_payload(report or {})
     pages: list[list[str]] = []
     current: list[str] = []
     y = 800
@@ -534,6 +536,7 @@ def contribution_destination_pdf_filename(report: dict[str, Any]) -> str:
 
 
 def person_statement_pdf(statement: dict[str, Any]) -> bytes:
+    statement = normalize_display_payload(statement or {})
     pages: list[list[str]] = []
     current: list[str] = []
     y = 800
@@ -728,6 +731,7 @@ def person_statement_pdf_filename(statement: dict[str, Any]) -> str:
 
 
 def receipt_pdf(detail: dict[str, Any]) -> bytes:
+    detail = normalize_display_payload(detail or {})
     receipt = detail.get("receipt") or {}
     person = detail.get("person") or {}
     items = list(detail.get("items") or [])

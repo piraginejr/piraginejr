@@ -22,6 +22,7 @@ from power_church_django.apps.contributions.models import (
     NativeEnvelopeLot,
     NativeEnvelopeProfileUpdate,
     ReceiptDispatch,
+    ReceiptItemSnapshot,
     ReceiptSnapshot,
 )
 from power_church_django.apps.people.models import PersonContributionSnapshot, PersonSnapshot
@@ -32,6 +33,12 @@ from power_church_django.services.contributors_native import (
     lookup_envelope_people_postgres,
     repoint_contributor_to_person_by_id_postgres,
     unlink_contributor_from_person_by_id_postgres,
+)
+from power_church_django.services.pdf_reports import receipt_pdf
+from power_church_django.services.receipt_delivery import (
+    get_receipt_detail_snapshot,
+    list_receipts_postgres,
+    receipt_dispatch_history,
 )
 from power_church_django.services.envelopes_native import (
     ENVELOPE_IN_PROGRESS_STATUS,
@@ -885,6 +892,80 @@ class EnvelopeOperationalFlowTests(TestCase):
         self.assertEqual(detail["contributor"]["nome"], "Adeíza Souza dos Santos")
         self.assertEqual(detail["contributor"]["pessoa_nome"], "Adeíza Souza dos Santos")
         self.assertEqual(detail["possible_people"][0]["nome"], "Adeíza Souza dos Santos")
+
+
+class ReceiptDisplayNormalizationTests(TestCase):
+    def setUp(self) -> None:
+        self.receipt = ReceiptSnapshot.objects.create(
+            legacy_id=6101,
+            organization_id=1,
+            person_legacy_id=777,
+            receipt_number="REC-202607-0021",
+            status="emitido",
+            organization_name="Primeira Igreja Batista de Niterói",
+            person_name="C├®lia de Fatima Vieira",
+            person_code="100061",
+            person_cpf="47590602787",
+            person_email="celia@example.com",
+            person_phone="21999998888",
+            emission_date_raw="2026-07-21",
+            period_start_raw="2026-04-01",
+            period_end_raw="2026-04-01",
+            total_value=Decimal("400.00"),
+            notes="Recibo da C├®lia",
+            is_cancelled=False,
+        )
+        ReceiptItemSnapshot.objects.create(
+            legacy_id=6102,
+            receipt=self.receipt,
+            contribution_legacy_id=6103,
+            received_at_raw="2026-04-01",
+            competence="abril/2026",
+            contribution_type_name="D├¡zimo",
+            receipt_method_name="Envelop├®",
+            notes="Oferta da C├®lia",
+            amount=Decimal("400.00"),
+        )
+        ReceiptDispatch.objects.create(
+            legacy_person_id=777,
+            legacy_receipt_id=self.receipt.legacy_id,
+            legacy_receipt_number=self.receipt.receipt_number,
+            person_name="C├®lia de Fatima Vieira",
+            person_email="celia@example.com",
+            period_label="Abril/2026 - C├®lia",
+            email_to="celia@example.com",
+            last_error="Falha na C├®lia",
+        )
+
+    def test_receipt_list_repairs_mojibake_person_fields(self) -> None:
+        payload = list_receipts_postgres()
+
+        self.assertEqual(payload["items"][0]["person_name"], "Célia de Fatima Vieira")
+        self.assertEqual(payload["items"][0]["person_code"], "100061")
+        self.assertEqual(payload["items"][0]["status"], "emitido")
+
+    def test_receipt_detail_and_pdf_repair_mojibake_fields(self) -> None:
+        detail = get_receipt_detail_snapshot(self.receipt.legacy_id)
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail["receipt"]["person_name"], "Célia de Fatima Vieira")
+        self.assertEqual(detail["receipt"]["observacoes"], "Recibo da Célia")
+        self.assertEqual(detail["person"]["nome"], "Célia de Fatima Vieira")
+        self.assertEqual(detail["items"][0]["tipo"], "Dízimo")
+        self.assertEqual(detail["items"][0]["forma"], "Envelopé")
+        self.assertEqual(detail["items"][0]["observacoes"], "Oferta da Célia")
+
+        pdf_payload = receipt_pdf(detail).decode("cp1252", errors="ignore")
+
+        self.assertIn("Célia de Fatima Vieira", pdf_payload)
+        self.assertIn("Dízimo", pdf_payload)
+
+    def test_receipt_dispatch_history_repairs_mojibake_fields(self) -> None:
+        history = receipt_dispatch_history(777)
+
+        self.assertEqual(history[0]["period_label"], "Abril/2026 - Célia")
+        self.assertEqual(history[0]["last_error"], "Falha na Célia")
 
 
 class PersonStatementDataPostgresTests(TestCase):

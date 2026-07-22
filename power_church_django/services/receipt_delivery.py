@@ -12,7 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from power_church_core.formatting import br_date
-from power_church_core.normalization import normalize_query
+from power_church_core.normalization import normalize_display_payload, normalize_query
 from power_church_django.apps.contributions.models import (
     ReceiptDispatch,
     ReceiptEmailTemplate,
@@ -107,7 +107,7 @@ def get_receipt_detail_snapshot(receipt_id: int) -> dict[str, Any] | None:
     )
     if snapshot is None:
         return None
-    return {
+    return normalize_display_payload({
         "receipt": {
             "id": int(snapshot.legacy_id or 0),
             "numero": snapshot.receipt_number or "",
@@ -150,7 +150,7 @@ def get_receipt_detail_snapshot(receipt_id: int) -> dict[str, Any] | None:
             }
             for item in snapshot.items.all().order_by("received_at", "legacy_id")
         ],
-    }
+    })
 
 
 def get_receipt_detail_cached(receipt_id: int) -> dict[str, Any] | None:
@@ -318,7 +318,7 @@ def receipt_period_options(person_id: int) -> list[dict[str, Any]]:
 
 def receipt_dispatch_history(person_id: int, limit: int = 20) -> list[dict[str, Any]]:
     history = ReceiptDispatch.objects.filter(legacy_person_id=int(person_id or 0)).order_by("-created_at", "-id")[:limit]
-    return [
+    return normalize_display_payload([
         {
             "id": int(item.pk or 0),
             "period_label": item.period_label,
@@ -331,7 +331,7 @@ def receipt_dispatch_history(person_id: int, limit: int = 20) -> list[dict[str, 
             "last_error": item.last_error,
         }
         for item in history
-    ]
+    ])
 
 
 def receipt_person_snapshot(person_id: int) -> dict[str, Any] | None:
@@ -341,7 +341,7 @@ def receipt_person_snapshot(person_id: int) -> dict[str, Any] | None:
     snapshot = PersonSnapshot.objects.filter(legacy_id=person_id, is_active=True).first()
     if snapshot is None:
         return None
-    return {
+    return normalize_display_payload({
         "id": int(snapshot.legacy_id or 0),
         "nome": snapshot.name or "",
         "codigo": snapshot.internal_code or "",
@@ -350,7 +350,7 @@ def receipt_person_snapshot(person_id: int) -> dict[str, Any] | None:
         "sigla": status_sigla(snapshot.status, True),
         "email": preferred_delivery_email(snapshot.primary_email, snapshot.name),
         "telefone": snapshot.primary_phone or "",
-    }
+    })
 
 
 def enrich_receipt_form(form_data: dict[str, Any] | None, *, selected_competences: list[str] | None = None) -> dict[str, Any] | None:
@@ -1229,7 +1229,7 @@ def list_receipts_postgres(q: str = "", person_id: int = 0, date_start: str = ""
         pessoas=models.Count("person_legacy_id", distinct=True),
         ultima_data=models.Max("emission_date_raw"),
     )
-    return {
+    return normalize_display_payload({
         "items": [
             {
                 "id": int(row.legacy_id or 0),
@@ -1253,7 +1253,7 @@ def list_receipts_postgres(q: str = "", person_id: int = 0, date_start: str = ""
             "ultima_data": br_date(summary.get("ultima_data") or ""),
         },
         "filters": {"q": q, "person_id": person_id, "date_start": date_start, "date_end": date_end},
-    }
+    })
 
 
 def refresh_receipt_dispatch_destination(dispatch: ReceiptDispatch | int, *, actor: str = "") -> ReceiptDispatch:

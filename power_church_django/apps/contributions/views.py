@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from power_church_django.apps.contributions.models import ReceiptDispatch
-from power_church_core.normalization import normalize_query
+from power_church_core.normalization import normalize_display_payload, normalize_query
 from power_church_django.services.access_control import module_permission_required, user_has_module_permission
 from power_church_django.services.audit_native import search_receipt_people_postgres
 from power_church_django.services.django_audit import record_django_audit_event
@@ -366,7 +366,7 @@ def _receipt_queue_snapshot(*, campaign_key: str = "", status: str = "", limit: 
                 "receipt_url": f"/receipts/{int(item.legacy_receipt_id or 0)}/" if int(item.legacy_receipt_id or 0) else "",
             }
         )
-    return {
+    return normalize_display_payload({
         "campaign_key": selected_campaign,
         "status": selected_status,
         "counts": counts,
@@ -376,7 +376,7 @@ def _receipt_queue_snapshot(*, campaign_key: str = "", status: str = "", limit: 
         "latest_sent": timezone.localtime(latest_sent.sent_at).strftime("%d/%m/%Y %H:%M") if latest_sent and latest_sent.sent_at else "",
         "items": items,
         "campaigns": _receipt_queue_campaigns(),
-    }
+    })
 
 
 def _receipt_queue_filtered_queryset(*, campaign_key: str = "", status: str = ""):

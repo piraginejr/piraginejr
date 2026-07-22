@@ -322,18 +322,30 @@
       border-radius: 999px;
       white-space: nowrap;
     }
-    .accounts-users-table th:nth-child(1),
-    .accounts-users-table td:nth-child(1) { width: 28%; }
-    .accounts-users-table th:nth-child(2),
-    .accounts-users-table td:nth-child(2) { width: 8%; }
-    .accounts-users-table th:nth-child(3),
-    .accounts-users-table td:nth-child(3) { width: 9%; }
-    .accounts-users-table th:nth-child(4),
-    .accounts-users-table td:nth-child(4) { width: 18%; }
-    .accounts-users-table th:nth-child(5),
-    .accounts-users-table td:nth-child(5) { width: 37%; }
-    .users-ops-cell {
-      min-width: 280px;
+    .user-admin-list {
+      display: grid;
+      gap: 14px;
+    }
+    .user-admin-card {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: white;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: minmax(240px, .9fr) minmax(320px, 1.1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .user-admin-summary h3 {
+      font-size: 22px;
+      margin: 0 0 6px;
+    }
+    .user-admin-summary .legend {
+      margin-top: 10px;
+    }
+    .user-admin-actions {
+      display: grid;
+      gap: 12px;
     }
     .users-ops {
       display: grid;
@@ -342,7 +354,12 @@
     .user-credential-form {
       display: grid;
       gap: 8px;
-      margin-top: 10px;
+      margin: 0;
+    }
+    .user-credential-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     }
     .user-credential-form .compact-button {
       justify-content: center;
@@ -878,11 +895,12 @@
       .form-person-photo { width: 112px; height: 112px; border-radius: 24px; }
       table { min-width: 640px; }
       .fit-table { min-width: 0; }
-      .accounts-users-table { min-width: 760px; }
       .report-table { min-width: 720px; }
       .imports-table th:nth-child(n),
       .imports-table td:nth-child(n) { width: auto; }
+      .user-admin-card { grid-template-columns: 1fr; }
       .user-credential-form { grid-template-columns: 1fr; }
+      .user-credential-grid { grid-template-columns: 1fr; }
       .users-op-form-password { grid-template-columns: 1fr; }
       th, td { padding: 10px; }
       .compact-marker-grid { grid-template-columns: 1fr; }

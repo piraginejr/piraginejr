@@ -74,85 +74,92 @@
   <section class="split">
     <div class="panel">
       <h2>Usuarios</h2>
-      <div class="table-wrap">
-        <table class="fit-table accounts-users-table">
-          <thead><tr><th>Usuario</th><th>Ativo</th><th>Staff</th><th>Grupos</th><th>Operacoes</th></tr></thead>
-          <tbody>
-            {% for user in access.users %}
-              <tr>
-                <td>{{ user.username }}<div class="muted small">{{ user.email }}</div></td>
-                <td>{% if user.is_active %}Sim{% else %}Nao{% endif %}</td>
-                <td>{% if user.is_staff %}Sim{% else %}Nao{% endif %}</td>
-                <td>
-                  {% for group in user.groups.all %}
-                    <span class="badge">{{ group.name }}</span>
-                  {% empty %}
-                    <span class="muted">Sem grupo.</span>
-                  {% endfor %}
-                  {% if can_manage_users %}
-                    <form method="post" class="user-credential-form">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="update_user_credentials">
-                      <input type="hidden" name="user_id" value="{{ user.id }}">
+      <div class="user-admin-list">
+        {% for user in access.users %}
+          <article class="user-admin-card">
+            <div class="user-admin-summary">
+              <div>
+                <h3>{{ user.username }}</h3>
+                <div class="muted small">{{ user.email|default:"Sem e-mail cadastrado" }}</div>
+              </div>
+              <div class="legend">
+                <span class="badge">{% if user.is_active %}Ativo{% else %}Inativo{% endif %}</span>
+                <span class="badge">{% if user.is_staff %}Staff{% else %}Sem staff{% endif %}</span>
+                {% if user.is_superuser %}
+                  <span class="badge warn">Superusuario</span>
+                {% endif %}
+              </div>
+              <div class="legend">
+                {% for group in user.groups.all %}
+                  <span class="badge">{{ group.name }}</span>
+                {% empty %}
+                  <span class="muted">Sem grupo.</span>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="user-admin-actions">
+              {% if can_manage_users %}
+                <form method="post" class="user-credential-form">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="update_user_credentials">
+                  <input type="hidden" name="user_id" value="{{ user.id }}">
+                  <div class="user-credential-grid">
+                    <label class="small">
+                      Credencial
+                      <select name="group">
+                        <option value="">Sem grupo</option>
+                        {% for group in access.groups %}
+                          <option value="{{ group.name }}"{% if group.name == user.primary_group_name %} selected{% endif %}>{{ group.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                    <label class="small">
+                      Ativo
+                      <select name="is_active">
+                        <option value="1"{% if user.is_active %} selected{% endif %}>Sim</option>
+                        <option value="0"{% if not user.is_active %} selected{% endif %}>Nao</option>
+                      </select>
+                    </label>
+                    {% if request.user.is_superuser %}
                       <label class="small">
-                        Credencial
-                        <select name="group">
-                          <option value="">Sem grupo</option>
-                          {% for group in access.groups %}
-                            <option value="{{ group.name }}"{% if group.name == user.primary_group_name %} selected{% endif %}>{{ group.name }}</option>
-                          {% endfor %}
+                        Superusuario
+                        <select name="is_superuser">
+                          <option value="0"{% if not user.is_superuser %} selected{% endif %}>Nao</option>
+                          <option value="1"{% if user.is_superuser %} selected{% endif %}>Sim</option>
                         </select>
                       </label>
-                      <label class="small">
-                        Ativo
-                        <select name="is_active">
-                          <option value="1"{% if user.is_active %} selected{% endif %}>Sim</option>
-                          <option value="0"{% if not user.is_active %} selected{% endif %}>Nao</option>
-                        </select>
-                      </label>
-                      {% if request.user.is_superuser %}
-                        <label class="small">
-                          Superusuario
-                          <select name="is_superuser">
-                            <option value="0"{% if not user.is_superuser %} selected{% endif %}>Nao</option>
-                            <option value="1"{% if user.is_superuser %} selected{% endif %}>Sim</option>
-                          </select>
-                        </label>
-                      {% endif %}
-                      <button type="submit" class="secondary compact-button">Salvar credenciais</button>
-                    </form>
-                  {% endif %}
-                </td>
-                <td class="users-ops-cell">
-                  <div class="users-ops">
-                    <form method="post" class="users-op-form users-op-form-password">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="reset_password">
-                      <input type="hidden" name="user_id" value="{{ user.id }}">
-                      <label class="small">
-                        Nova senha
-                        <input name="new_password" type="password" autocomplete="new-password" minlength="8">
-                      </label>
-                      <label class="small">
-                        Confirmar
-                        <input name="new_password_confirm" type="password" autocomplete="new-password" minlength="8">
-                      </label>
-                      <button type="submit" class="secondary compact-button">Trocar senha</button>
-                    </form>
-                    <form method="post" class="users-op-form users-op-form-delete" onsubmit="return confirm('Excluir o usuario {{ user.username }}? Esta acao nao pode ser desfeita.');">
-                      {% csrf_token %}
-                      <input type="hidden" name="action" value="delete_user">
-                      <input type="hidden" name="user_id" value="{{ user.id }}">
-                      <button type="submit" class="secondary compact-button">Excluir usuario</button>
-                    </form>
+                    {% endif %}
                   </div>
-                </td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="5">Nenhum usuario criado ainda.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+                  <button type="submit" class="secondary compact-button">Salvar credenciais</button>
+                </form>
+              {% endif %}
+              <div class="users-ops">
+                <form method="post" class="users-op-form users-op-form-password">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="reset_password">
+                  <input type="hidden" name="user_id" value="{{ user.id }}">
+                  <label class="small">
+                    Nova senha
+                    <input name="new_password" type="password" autocomplete="new-password" minlength="8">
+                  </label>
+                  <label class="small">
+                    Confirmar
+                    <input name="new_password_confirm" type="password" autocomplete="new-password" minlength="8">
+                  </label>
+                  <button type="submit" class="secondary compact-button">Trocar senha</button>
+                </form>
+                <form method="post" class="users-op-form users-op-form-delete" onsubmit="return confirm('Excluir o usuario {{ user.username }}? Esta acao nao pode ser desfeita.');">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="delete_user">
+                  <input type="hidden" name="user_id" value="{{ user.id }}">
+                  <button type="submit" class="secondary compact-button">Excluir usuario</button>
+                </form>
+              </div>
+            </div>
+          </article>
+        {% empty %}
+          <p class="muted">Nenhum usuario criado ainda.</p>
+        {% endfor %}
       </div>
     </div>
     <div class="panel" id="criar-usuario">

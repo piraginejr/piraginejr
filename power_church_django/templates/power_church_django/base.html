@@ -322,6 +322,66 @@
       border-radius: 999px;
       white-space: nowrap;
     }
+    .accounts-users-table th:nth-child(1),
+    .accounts-users-table td:nth-child(1) { width: 28%; }
+    .accounts-users-table th:nth-child(2),
+    .accounts-users-table td:nth-child(2) { width: 8%; }
+    .accounts-users-table th:nth-child(3),
+    .accounts-users-table td:nth-child(3) { width: 9%; }
+    .accounts-users-table th:nth-child(4),
+    .accounts-users-table td:nth-child(4) { width: 18%; }
+    .accounts-users-table th:nth-child(5),
+    .accounts-users-table td:nth-child(5) { width: 37%; }
+    .users-ops-cell {
+      min-width: 280px;
+    }
+    .users-ops {
+      display: grid;
+      gap: 10px;
+    }
+    .user-credential-form {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .user-credential-form .compact-button {
+      justify-content: center;
+      width: 100%;
+    }
+    .users-op-form {
+      margin: 0;
+    }
+    .users-op-form-password {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: end;
+    }
+    .users-op-form-password button {
+      grid-column: 1 / -1;
+      justify-content: center;
+    }
+    .users-op-form-password label,
+    .users-op-form-delete button {
+      width: 100%;
+    }
+    .users-op-form-delete button {
+      justify-content: center;
+    }
+    .credential-module-grid {
+      display: grid;
+      gap: 14px;
+    }
+    .credential-module-card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #fffaf1;
+      padding: 14px;
+    }
+    .credential-module-card strong {
+      display: block;
+      margin-bottom: 10px;
+    }
     .table-wrap {
       border: 1px solid var(--line);
       border-radius: 20px;
@@ -818,9 +878,12 @@
       .form-person-photo { width: 112px; height: 112px; border-radius: 24px; }
       table { min-width: 640px; }
       .fit-table { min-width: 0; }
+      .accounts-users-table { min-width: 760px; }
       .report-table { min-width: 720px; }
       .imports-table th:nth-child(n),
       .imports-table td:nth-child(n) { width: auto; }
+      .user-credential-form { grid-template-columns: 1fr; }
+      .users-op-form-password { grid-template-columns: 1fr; }
       th, td { padding: 10px; }
       .compact-marker-grid { grid-template-columns: 1fr; }
     }

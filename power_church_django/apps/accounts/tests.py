@@ -266,6 +266,8 @@ class AccountManagementActionsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Trocar senha")
         self.assertContains(response, "Excluir usuario")
+        self.assertContains(response, "Salvar credenciais")
+        self.assertContains(response, "Criar novo tipo de credencial")
         self.assertContains(response, f'name="user_id" value="{target.id}"', html=False)
 
     def test_superuser_can_reset_user_password(self) -> None:
@@ -343,3 +345,67 @@ class AccountManagementActionsTests(TestCase):
         self.assertEqual(post_response.status_code, 302)
         target.refresh_from_db()
         self.assertTrue(target.check_password("senha_nova_456"))
+
+    def test_superuser_can_update_user_credentials(self) -> None:
+        target = User.objects.create_user(username="ajustar_credenciais", password="senha_antiga_123", is_active=True)
+
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "update_user_credentials",
+                "user_id": str(target.id),
+                "group": "Operador de Recebimentos",
+                "is_active": "0",
+                "is_superuser": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        target.refresh_from_db()
+        self.assertFalse(target.is_active)
+        self.assertTrue(target.is_superuser)
+        self.assertTrue(target.groups.filter(name="Operador de Recebimentos").exists())
+
+    def test_group_admin_cannot_escalate_superuser_credential(self) -> None:
+        self.client.logout()
+        group_admin = User.objects.create_user(
+            username="gestor_contas",
+            password="teste12345",
+            is_active=True,
+        )
+        group_admin.groups.add(Group.objects.get(name="Administrador do Sistema"))
+        self.client.force_login(group_admin)
+        target = User.objects.create_user(username="sem_escalacao", password="senha_antiga_123", is_active=True)
+
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "update_user_credentials",
+                "user_id": str(target.id),
+                "group": "Consulta",
+                "is_active": "1",
+                "is_superuser": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        target.refresh_from_db()
+        self.assertFalse(target.is_superuser)
+        self.assertTrue(target.groups.filter(name="Consulta").exists())
+
+    def test_superuser_can_create_custom_credential_type(self) -> None:
+        response = self.client.post(
+            "/accounts/",
+            {
+                "action": "create_credential_type",
+                "credential_name": "Operador Financeiro Senior",
+                "permission_codes": ["view_dashboard", "view_contributions", "manage_contributions"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        group = Group.objects.get(name="Operador Financeiro Senior")
+        self.assertEqual(
+            list(group.permissions.order_by("codename").values_list("codename", flat=True)),
+            ["manage_contributions", "view_contributions", "view_dashboard"],
+        )

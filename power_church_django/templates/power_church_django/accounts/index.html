@@ -33,14 +33,27 @@
   {% endif %}
 
   <section class="panel">
-    <h2>Grupos padrao</h2>
+    <div class="section-head">
+      <h2>Credenciais e grupos</h2>
+      <div class="legend">
+        <span class="badge">Padrao do sistema</span>
+        <span class="badge warn">Customizado</span>
+      </div>
+    </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Grupo</th><th class="num">Permissoes</th><th>Codigos</th></tr></thead>
+        <thead><tr><th>Grupo</th><th>Tipo</th><th class="num">Permissoes</th><th>Codigos</th></tr></thead>
         <tbody>
           {% for group in access.groups %}
             <tr>
               <td><strong>{{ group.name }}</strong></td>
+              <td>
+                {% if group.is_default %}
+                  <span class="badge">Padrao</span>
+                {% else %}
+                  <span class="badge warn">Customizado</span>
+                {% endif %}
+              </td>
               <td class="num">{{ group.count }}</td>
               <td>
                 {% for permission in group.permissions %}
@@ -51,7 +64,7 @@
               </td>
             </tr>
           {% empty %}
-            <tr><td colspan="3">Nenhum grupo criado ainda.</td></tr>
+            <tr><td colspan="4">Nenhum grupo criado ainda.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -62,7 +75,7 @@
     <div class="panel">
       <h2>Usuarios</h2>
       <div class="table-wrap">
-        <table>
+        <table class="fit-table accounts-users-table">
           <thead><tr><th>Usuario</th><th>Ativo</th><th>Staff</th><th>Grupos</th><th>Operacoes</th></tr></thead>
           <tbody>
             {% for user in access.users %}
@@ -76,10 +89,43 @@
                   {% empty %}
                     <span class="muted">Sem grupo.</span>
                   {% endfor %}
+                  {% if can_manage_users %}
+                    <form method="post" class="user-credential-form">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="update_user_credentials">
+                      <input type="hidden" name="user_id" value="{{ user.id }}">
+                      <label class="small">
+                        Credencial
+                        <select name="group">
+                          <option value="">Sem grupo</option>
+                          {% for group in access.groups %}
+                            <option value="{{ group.name }}"{% if group.name == user.primary_group_name %} selected{% endif %}>{{ group.name }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      <label class="small">
+                        Ativo
+                        <select name="is_active">
+                          <option value="1"{% if user.is_active %} selected{% endif %}>Sim</option>
+                          <option value="0"{% if not user.is_active %} selected{% endif %}>Nao</option>
+                        </select>
+                      </label>
+                      {% if request.user.is_superuser %}
+                        <label class="small">
+                          Superusuario
+                          <select name="is_superuser">
+                            <option value="0"{% if not user.is_superuser %} selected{% endif %}>Nao</option>
+                            <option value="1"{% if user.is_superuser %} selected{% endif %}>Sim</option>
+                          </select>
+                        </label>
+                      {% endif %}
+                      <button type="submit" class="secondary compact-button">Salvar credenciais</button>
+                    </form>
+                  {% endif %}
                 </td>
-                <td>
-                  <div class="actions" style="margin-top:0">
-                    <form method="post">
+                <td class="users-ops-cell">
+                  <div class="users-ops">
+                    <form method="post" class="users-op-form users-op-form-password">
                       {% csrf_token %}
                       <input type="hidden" name="action" value="reset_password">
                       <input type="hidden" name="user_id" value="{{ user.id }}">
@@ -93,7 +139,7 @@
                       </label>
                       <button type="submit" class="secondary compact-button">Trocar senha</button>
                     </form>
-                    <form method="post" onsubmit="return confirm('Excluir o usuario {{ user.username }}? Esta acao nao pode ser desfeita.');">
+                    <form method="post" class="users-op-form users-op-form-delete" onsubmit="return confirm('Excluir o usuario {{ user.username }}? Esta acao nao pode ser desfeita.');">
                       {% csrf_token %}
                       <input type="hidden" name="action" value="delete_user">
                       <input type="hidden" name="user_id" value="{{ user.id }}">
@@ -159,4 +205,35 @@
       {% endif %}
     </div>
   </section>
+
+  {% if can_manage_users %}
+    <section class="panel">
+      <h2>Criar novo tipo de credencial</h2>
+      <p>Use esta area para montar um perfil novo de acesso sem depender apenas dos grupos padrao.</p>
+      <form method="post" class="toolbar">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="create_credential_type">
+        <label class="wide">
+          Nome da credencial
+          <input name="credential_name" placeholder="Ex.: Operador de Secretaria Junior">
+        </label>
+        <div class="wide credential-module-grid">
+          {% for module in permission_catalog %}
+            <section class="credential-module-card">
+              <strong>{{ module.module }}</strong>
+              <div class="compact-marker-grid">
+                {% for permission in module.permissions %}
+                  <label class="compact-check">
+                    <input type="checkbox" name="permission_codes" value="{{ permission.codename }}">
+                    <span>{{ permission.name }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+            </section>
+          {% endfor %}
+        </div>
+        <button type="submit">Salvar tipo de credencial</button>
+      </form>
+    </section>
+  {% endif %}
 {% endblock %}

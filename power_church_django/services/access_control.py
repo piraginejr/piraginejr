@@ -154,13 +154,24 @@ def access_control_snapshot() -> dict[str, Any]:
             permission.codename
             for permission in group.permissions.filter(content_type=content_type).order_by("codename")
         ] if content_type else []
-        groups.append({"name": group.name, "permissions": group_permissions, "count": len(group_permissions)})
+        groups.append(
+            {
+                "name": group.name,
+                "permissions": group_permissions,
+                "count": len(group_permissions),
+                "is_default": group.name in DEFAULT_GROUPS,
+            }
+        )
+    users = list(User.objects.order_by("username").prefetch_related("groups"))
+    for user in users:
+        current_groups = list(user.groups.all())
+        user.primary_group_name = current_groups[0].name if current_groups else ""
     return {
         "installed": not (expected_permissions - installed_permissions),
         "missing_permissions": sorted(expected_permissions - installed_permissions),
         "permissions": MODULE_PERMISSIONS,
         "groups": groups,
-        "users": User.objects.order_by("username").prefetch_related("groups"),
+        "users": users,
         "user_count": User.objects.count(),
         "has_superuser": User.objects.filter(is_superuser=True).exists(),
         "group_count": Group.objects.count(),

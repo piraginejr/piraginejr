@@ -2,7 +2,7 @@
 
 ## Documento Mestre
 
-Versão 1.0
+Versão 1.1
 
 ## 1. Finalidade
 Este documento estabelece a arquitetura da Engenharia Homilética. Seu propósito é definir como o conhecimento produzido durante o desenvolvimento dos sermões será organizado, preservado, validado, reutilizado e continuamente aperfeiçoado. Este documento não contém normas homiléticas, técnicas exegéticas ou padrões de pregação. Sua função é exclusivamente arquitetural. Toda regra permanente deverá ser registrada em documentos próprios, organizados segundo esta arquitetura.
@@ -33,3 +33,12 @@ Todos os documentos devem possuir identificação, numeração, versão, linguag
 
 ## 10. Dependências Documentais
 Cada documento deverá informar dependências, documentos relacionados, complementares e substituições quando existirem.
+
+### 10.1 Rotina obrigatória de consulta
+Todo trabalho de criação, revisão, ampliação ou conclusão de sermões deverá começar pela consulta efetiva ao Documento Mestre da Engenharia Homilética e aos documentos normativos, processuais e bibliotecas aplicáveis ao trabalho.
+
+A consulta não poderá ser presumida com base apenas na memória de conversas anteriores. Antes de iniciar o desenvolvimento, deverão ser verificados os documentos vigentes no repositório.
+
+No início do trabalho, deverá ser informado de forma breve quais documentos foram consultados e quais deles governarão a execução.
+
+Se durante o trabalho surgir uma descoberta com potencial permanente, ela deverá ser classificada segundo esta arquitetura e registrada no documento apropriado, em vez de permanecer apenas na conversa ou no projeto temporário.

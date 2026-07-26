@@ -3,7 +3,7 @@
 **Coleção:** *Full Gospel Business Men's Voice*  
 **Status:** Em construção  
 **Escopo:** Somente edições digitalizadas  
-**Função:** Índice produtivo de edições, personagens, assuntos e decisões potenciais
+**Função:** Índice produtivo de edições, personagens, assuntos, decisões potenciais e resumos narrativos
 
 ---
 
@@ -148,7 +148,48 @@
 
 ---
 
-## 5. Próximas edições a popular
+## 5. Resumos narrativos preliminares
+
+> **Critério:** estes textos registram somente o que o título ou o resumo oficial da ORU permite afirmar. Não são ainda ilustrações prontas. Quando o artigo integral for lido, o resumo deverá ser ampliado e marcado como **validado no artigo**.
+
+### Lois Nason — Maio–junho de 1953
+
+A edição anuncia o testemunho de Lois Nason com o título **“Raised from Deathbed by Power of God”**. O núcleo narrativo disponível é o de uma mulher que se encontrava em condição descrita pela revista como um “leito de morte” e cuja recuperação foi interpretada pelo relato como ação do poder de Deus. O sumário não informa a enfermidade, a duração da crise, as pessoas envolvidas nem a sequência dos acontecimentos. Esses elementos precisam ser obtidos na leitura integral antes de qualquer uso homilético.
+
+- **Conflito:** enfermidade extrema e proximidade da morte.
+- **Virada:** recuperação atribuída ao poder de Deus.
+- **Possível decisão:** confiar em Deus quando os recursos humanos parecem esgotados.
+- **Estado:** resumo preliminar baseado exclusivamente no título oficial.
+
+### Paul B. Fisher — Maio–junho de 1953
+
+Paul B. Fisher aparece ligado ao artigo **“Plan Global Gospel Broadcast Ship”**. O título indica um projeto missionário incomum: utilizar um navio equipado para transmissões com o propósito de levar a mensagem cristã a uma audiência mundial. O valor narrativo está na união entre visão missionária, tecnologia e iniciativa prática. O sumário não permite afirmar se o navio chegou a ser construído, financiado ou colocado em operação.
+
+- **Conflito:** como ultrapassar fronteiras geográficas e limitações dos meios tradicionais.
+- **Visão:** transformar um navio em plataforma de transmissão mundial do evangelho.
+- **Possível decisão:** colocar criatividade, recursos e tecnologia a serviço da missão.
+- **Estado:** resumo preliminar baseado exclusivamente no título oficial.
+
+### Jubileu de Ouro da Missão da Rua Azusa — Outubro de 1956
+
+A edição especial registra o Jubileu de Ouro da Missão da Rua Azusa e anuncia entre os participantes Ralph McPherson, William Branham, Samuel M. Crouch, Tommy Hicks, Gordon Lindsay e David Nunn. O material confirmado até aqui sustenta uma narrativa coletiva, não histórias individuais: cinquenta anos depois dos acontecimentos associados à Rua Azusa, líderes pentecostais reuniram-se para recordar esse legado e reafirmar sua continuidade. A função exata de cada participante e o conteúdo de cada mensagem dependem da leitura da revista.
+
+- **Personagens confirmados:** Ralph McPherson; William Branham; Samuel M. Crouch; Tommy Hicks; Gordon Lindsay; David Nunn.
+- **Conflito:** como preservar um legado espiritual sem transformá-lo apenas em memória do passado.
+- **Possível decisão:** honrar as raízes e assumir responsabilidade pela continuidade da missão.
+- **Estado:** resumo coletivo preliminar baseado no resumo oficial da edição.
+
+### Oral Roberts — Novembro de 1956
+
+O resumo oficial informa apenas que a edição apresenta uma mensagem de Oral Roberts. Isso confirma sua participação destacada, mas ainda não revela o tema, a argumentação nem qualquer episódio biográfico. Portanto, não há base suficiente para produzir uma narrativa individual sem consultar o texto integral.
+
+- **Potencial:** fé pública, evangelização e comunicação de massa.
+- **Lacuna:** tema e conteúdo da mensagem ainda não identificados.
+- **Estado:** personagem confirmado; história ainda não recuperada.
+
+---
+
+## 6. Próximas edições a popular
 
 - Julho–agosto de 1953
 - Setembro de 1953
@@ -159,9 +200,16 @@
 
 ---
 
-## 6. Regra de validação
+## 7. Regra de validação
 
-Os registros acima são um índice inicial de mineração. Antes de usar qualquer personagem ou episódio como ilustração em sermão, será necessário abrir a edição correspondente, ler o artigo e validar:
+Cada novo registro deverá receber um destes estados:
+
+1. **Personagem identificado:** apenas o nome foi localizado.
+2. **Resumo preliminar pelo sumário:** título ou resumo oficial permite descrever o núcleo da história.
+3. **Validado no artigo:** texto integral lido, com fatos, contexto e páginas registrados.
+4. **Ilustração curada:** história revisada, documentada e pronta para possível uso homilético.
+
+Antes de usar qualquer episódio em sermão, será necessário validar:
 
 - identidade do personagem;
 - fatos narrados;
@@ -170,7 +218,7 @@ Os registros acima são um índice inicial de mineração. Antes de usar qualque
 - fonte e página;
 - adequação homilética.
 
-## 7. Fontes desta rodada
+## 8. Fontes desta rodada
 
 - Oral Roberts University, *Voice - FGBMFI - 1.4 (May–June 1953)*.
 - Oral Roberts University, *Voice - FGBMFI - 4.9 (October 1956)*.

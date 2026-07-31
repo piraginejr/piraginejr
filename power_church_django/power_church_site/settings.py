@@ -166,7 +166,7 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 POWER_CHURCH_SESSION_IDLE_SECONDS = int(os.environ.get("POWER_CHURCH_SESSION_IDLE_SECONDS", "300"))
 
 AUTHENTICATION_BACKENDS = [
-    "django.contrib.auth.backends.ModelBackend",
+    "power_church_django.apps.accounts.backends.CaseInsensitiveUsernameBackend",
     "guardian.backends.ObjectPermissionBackend",
 ]
 ANONYMOUS_USER_NAME = "power_church_anonimo"

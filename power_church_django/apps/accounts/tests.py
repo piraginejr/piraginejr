@@ -409,3 +409,25 @@ class AccountManagementActionsTests(TestCase):
             list(group.permissions.order_by("codename").values_list("codename", flat=True)),
             ["manage_contributions", "view_contributions", "view_dashboard"],
         )
+
+
+class LoginBehaviorTests(TestCase):
+    def test_login_accepts_username_with_different_case(self) -> None:
+        user = User.objects.create_user(
+            username="Paschoal",
+            email="piraginejr@gmail.com",
+            password="Cofre448060",
+            is_active=True,
+        )
+
+        response = self.client.post(
+            "/accounts/login/",
+            {
+                "username": "paschoal",
+                "password": "Cofre448060",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+        self.assertEqual(int(self.client.session.get("_auth_user_id", "0")), user.id)

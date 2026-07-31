@@ -1,8 +1,16 @@
 #!/bin/sh
 set -eu
 
+is_truthy() {
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 enabled="${POWER_CHURCH_TEMP_RECEIPT_RECOVERY_ENABLED:-false}"
-if [ "$enabled" != "true" ]; then
+if ! is_truthy "$enabled"; then
   exit 0
 fi
 
@@ -31,7 +39,7 @@ echo "Stamp: $stamp_name" >> "$log_file"
 python manage.py backfill_automatic_event_receipts >> "$log_file" 2>&1
 
 drain_queue="${POWER_CHURCH_TEMP_RECEIPT_RECOVERY_DRAIN_QUEUE:-true}"
-if [ "$drain_queue" = "true" ]; then
+if is_truthy "$drain_queue"; then
   python manage.py process_receipt_dispatch_queue \
     --drain \
     --limit "${POWER_CHURCH_TEMP_RECEIPT_RECOVERY_LIMIT:-40}" \

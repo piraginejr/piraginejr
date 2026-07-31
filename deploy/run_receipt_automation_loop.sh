@@ -1,8 +1,16 @@
 #!/bin/sh
 set -eu
 
+is_truthy() {
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 enabled="${POWER_CHURCH_RECEIPT_AUTOMATION_ENABLED:-true}"
-if [ "$enabled" != "true" ]; then
+if ! is_truthy "$enabled"; then
   exit 0
 fi
 
@@ -10,7 +18,7 @@ auto_email="${POWER_CHURCH_RECEIPT_AUTO_EMAIL_ENABLED:-false}"
 auto_send="${POWER_CHURCH_RECEIPT_AUTO_SEND_ENABLED:-false}"
 force_run="${POWER_CHURCH_RECEIPT_AUTOMATION_FORCE:-false}"
 
-if [ "$force_run" != "true" ] && [ "$auto_email" != "true" ] && [ "$auto_send" != "true" ]; then
+if ! is_truthy "$force_run" && ! is_truthy "$auto_email" && ! is_truthy "$auto_send"; then
   echo "Rotina automatica de recibos ignorada: auto_email e auto_send desabilitados." >&2
   exit 0
 fi
@@ -57,7 +65,7 @@ run_cycle() {
     log "Falha ao reenfileirar recibos automaticos pendentes."
   fi
 
-  if [ "$drain_queue" = "true" ] && [ "$auto_send" = "true" ]; then
+  if is_truthy "$drain_queue" && is_truthy "$auto_send"; then
     if ! python manage.py process_receipt_dispatch_queue \
       --pending-only \
       --drain \

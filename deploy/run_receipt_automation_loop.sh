@@ -33,6 +33,11 @@ state_dir="${POWER_CHURCH_RECEIPT_AUTOMATION_STATE_DIR:-/app/data/runtime_flags}
 log_file="${POWER_CHURCH_RECEIPT_AUTOMATION_LOG_FILE:-/app/logs/receipt_automation.log}"
 pid_file="$state_dir/receipt_automation.pid"
 lock_dir="$state_dir/receipt_automation.lock"
+pending_watchdog_minutes=$(( (interval_seconds * 2 + 59) / 60 ))
+if [ "$pending_watchdog_minutes" -lt 10 ]; then
+  pending_watchdog_minutes=10
+fi
+failed_watchdog_minutes=$(( pending_watchdog_minutes * 6 ))
 
 mkdir -p "$state_dir" /app/logs
 cd /app/power_church_django
@@ -78,6 +83,18 @@ run_cycle() {
     fi
   else
     log "Drenagem automatica nao executada nesta rodada."
+  fi
+
+  if ! python manage.py check_receipt_queue_health \
+    --max-pending-age-minutes "$pending_watchdog_minutes" \
+    --max-failed-age-minutes "$failed_watchdog_minutes" \
+    --recover \
+    --limit "$limit" \
+    --sleep-seconds "$sleep_seconds" \
+    --pause-every "$pause_every" \
+    --pause-seconds "$pause_seconds" \
+    >> "$log_file" 2>&1; then
+    log "Watchdog detectou fila de recibos com pendencia envelhecida ou falha antiga."
   fi
 
   rmdir "$lock_dir" 2>/dev/null || true

@@ -75,6 +75,7 @@ from power_church_django.services.receipt_delivery import (
     issue_and_optionally_send_receipts,
     update_receipt_email_template,
 )
+from power_church_django.services.receipt_queue_health import receipt_queue_health_snapshot
 from power_church_django.services.mail_dispatch import MailAttachment, send_email_message
 
 
@@ -1167,6 +1168,7 @@ def receipt_queue_monitor(request: HttpRequest) -> HttpResponse:
     context = {
         "title": "Monitor de fila de recibos",
         "monitor": snapshot,
+        "queue_health": receipt_queue_health_snapshot(),
         "auto_refresh": auto_refresh,
         "email_runtime": email_runtime_snapshot(),
         "can_manage_receipts": user_has_module_permission(request.user, "manage_contributions"),

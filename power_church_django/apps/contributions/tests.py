@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from datetime import timedelta
 from io import BytesIO
+from io import StringIO
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import zipfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -56,6 +58,7 @@ from power_church_django.services.envelopes_native import (
     update_launched_envelope_postgres,
 )
 from power_church_django.services.receipt_delivery import backfill_native_event_receipts
+from power_church_django.services.receipt_queue_health import receipt_queue_health_snapshot
 from power_church_django.services.runtime_errors import LegacyWriteError
 
 
@@ -120,7 +123,6 @@ class EnvelopeDigitizationLockTests(TestCase):
         NativeEnvelope.objects.filter(pk=stale.pk).update(
             updated_at=timezone.now() - ENVELOPE_IN_PROGRESS_TIMEOUT - timedelta(minutes=1)
         )
-
         context = pending_envelope_contribution_context_postgres(51, actor="operador_b")
 
         self.assertIsNotNone(context)
@@ -150,6 +152,159 @@ class EnvelopeDigitizationLockTests(TestCase):
             updated_by=updated_by,
         )
 
+
+class ReceiptQueueHealthTests(TestCase):
+    def test_health_snapshot_flags_stale_pending_queue_without_recent_activity(self) -> None:
+        ReceiptDispatch.objects.create(
+            organization_id=1,
+            legacy_person_id=101,
+            legacy_receipt_number="REC-OLD-1",
+            person_name="Pessoa Antiga",
+            person_email="antiga@example.com",
+            competence="jul/2026",
+            period_label="Julho/2026",
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            status=ReceiptDispatch.Status.PENDING,
+            auto_created=True,
+            email_to="antiga@example.com",
+        )
+        ReceiptDispatch.objects.update(
+            created_at=timezone.now() - timedelta(minutes=45),
+            updated_at=timezone.now() - timedelta(minutes=45),
+        )
+
+        snapshot = receipt_queue_health_snapshot(max_pending_age_minutes=20, max_failed_age_minutes=120)
+
+        self.assertEqual(snapshot["severity"], "critical")
+        self.assertTrue(snapshot["stale_pending"])
+        self.assertEqual(snapshot["pending_without_attempts_count"], 1)
+
+    def test_health_snapshot_keeps_recently_active_queue_out_of_critical_state(self) -> None:
+        pending = ReceiptDispatch.objects.create(
+            organization_id=1,
+            legacy_person_id=102,
+            legacy_receipt_number="REC-PENDING-1",
+            person_name="Pessoa Em Fila",
+            person_email="fila@example.com",
+            competence="jul/2026",
+            period_label="Julho/2026",
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            status=ReceiptDispatch.Status.PENDING,
+            auto_created=True,
+            email_to="fila@example.com",
+        )
+        sent = ReceiptDispatch.objects.create(
+            organization_id=1,
+            legacy_person_id=103,
+            legacy_receipt_number="REC-SENT-1",
+            person_name="Pessoa Enviada",
+            person_email="enviado@example.com",
+            competence="jul/2026",
+            period_label="Julho/2026",
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            status=ReceiptDispatch.Status.SENT,
+            auto_created=True,
+            email_to="enviado@example.com",
+            sent_at=timezone.now() - timedelta(minutes=5),
+        )
+        ReceiptDispatch.objects.filter(pk=pending.pk).update(
+            created_at=timezone.now() - timedelta(minutes=45),
+            updated_at=timezone.now() - timedelta(minutes=45),
+        )
+        ReceiptDispatch.objects.filter(pk=sent.pk).update(
+            created_at=timezone.now() - timedelta(minutes=6),
+            updated_at=timezone.now() - timedelta(minutes=5),
+            sent_at=timezone.now() - timedelta(minutes=5),
+        )
+
+        snapshot = receipt_queue_health_snapshot(max_pending_age_minutes=20, max_failed_age_minutes=120)
+
+        self.assertEqual(snapshot["severity"], "warn")
+        self.assertFalse(snapshot["stale_pending"])
+        self.assertTrue(snapshot["recent_activity"])
+
+    def test_management_command_returns_nonzero_for_critical_queue(self) -> None:
+        dispatch = ReceiptDispatch.objects.create(
+            organization_id=1,
+            legacy_person_id=104,
+            legacy_receipt_number="REC-CMD-1",
+            person_name="Pessoa Critica",
+            person_email="critica@example.com",
+            competence="jul/2026",
+            period_label="Julho/2026",
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            status=ReceiptDispatch.Status.PENDING,
+            auto_created=True,
+            email_to="critica@example.com",
+        )
+        ReceiptDispatch.objects.filter(pk=dispatch.pk).update(
+            created_at=timezone.now() - timedelta(minutes=45),
+            updated_at=timezone.now() - timedelta(minutes=45),
+        )
+
+        stdout = StringIO()
+        with self.assertRaises(SystemExit) as exc:
+            call_command(
+                "check_receipt_queue_health",
+                max_pending_age_minutes=20,
+                max_failed_age_minutes=120,
+                stdout=stdout,
+            )
+
+        self.assertEqual(exc.exception.code, 2)
+        self.assertIn("Severidade: critical", stdout.getvalue())
+
+    def test_management_command_recover_attempts_automatic_recovery_before_alerting(self) -> None:
+        dispatch = ReceiptDispatch.objects.create(
+            organization_id=1,
+            legacy_person_id=105,
+            legacy_receipt_number="REC-RECOVER-1",
+            person_name="Pessoa Recuperada",
+            person_email="recuperada@example.com",
+            competence="jul/2026",
+            period_label="Julho/2026",
+            trigger=ReceiptDispatch.Trigger.AUTOMATIC,
+            status=ReceiptDispatch.Status.PENDING,
+            auto_created=True,
+            email_to="recuperada@example.com",
+        )
+        ReceiptDispatch.objects.filter(pk=dispatch.pk).update(
+            created_at=timezone.now() - timedelta(minutes=45),
+            updated_at=timezone.now() - timedelta(minutes=45),
+        )
+
+        def _drain_side_effect(**kwargs):
+            now = timezone.now()
+            ReceiptDispatch.objects.filter(pk=dispatch.pk).update(
+                status=ReceiptDispatch.Status.SENT,
+                send_attempts=1,
+                last_attempt_at=now,
+                sent_at=now,
+                updated_at=now,
+            )
+            return {"sent": 1, "failed": 0, "selected": 1}
+
+        stdout = StringIO()
+        with patch(
+            "power_church_django.apps.contributions.management.commands.check_receipt_queue_health.backfill_native_event_receipts",
+            return_value={"queued": 0},
+        ) as mocked_backfill, patch(
+            "power_church_django.apps.contributions.management.commands.check_receipt_queue_health.drain_receipt_dispatch_queue",
+            side_effect=_drain_side_effect,
+        ) as mocked_drain:
+            call_command(
+                "check_receipt_queue_health",
+                max_pending_age_minutes=20,
+                max_failed_age_minutes=120,
+                recover=True,
+                stdout=stdout,
+            )
+
+        mocked_backfill.assert_called_once()
+        mocked_drain.assert_called_once()
+        self.assertIn("Recuperacao automatica", stdout.getvalue())
+        dispatch.refresh_from_db()
+        self.assertEqual(dispatch.status, ReceiptDispatch.Status.SENT)
 
 class EnvelopeLinePayloadTests(TestCase):
     def setUp(self) -> None:

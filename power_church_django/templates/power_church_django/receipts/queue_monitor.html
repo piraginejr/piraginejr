@@ -24,6 +24,33 @@
     <div class="card"><span class="label">Ultimo envio</span><strong style="font-size:20px">{{ monitor.latest_sent|default:"-" }}</strong></div>
   </section>
 
+  <section class="panel">
+    <div class="section-head">
+      <div>
+        <h2>Saude automatica da fila</h2>
+        <p class="muted">Este watchdog avisa quando a fila envelhece sem atividade recente. Antes de escalar, ele tenta uma recuperacao automatica da fila.</p>
+      </div>
+      <span class="badge {% if queue_health.severity == 'critical' %}danger{% elif queue_health.severity == 'warn' %}warn{% else %}ok{% endif %}">
+        {{ queue_health.severity|upper }}
+      </span>
+    </div>
+    <p class="{% if queue_health.severity == 'critical' %}alert{% else %}muted{% endif %}">{{ queue_health.summary }}</p>
+    <div class="grid">
+      <div class="card"><span class="label">Pendentes</span><strong>{{ queue_health.pending_count }}</strong><span class="muted small">{{ queue_health.automatic_pending_count }} automaticos</span></div>
+      <div class="card"><span class="label">Falhas</span><strong>{{ queue_health.failed_count }}</strong><span class="muted small">{{ queue_health.pending_without_attempts_count }} sem tentativa</span></div>
+      <div class="card"><span class="label">Ultima tentativa</span><strong style="font-size:20px">{{ queue_health.latest_attempt_at|default:"-" }}</strong></div>
+      <div class="card"><span class="label">Checado em</span><strong style="font-size:20px">{{ queue_health.checked_at }}</strong></div>
+    </div>
+    {% if queue_health.issues %}
+      <div class="legend">
+        {% for issue in queue_health.issues %}
+          <span class="badge {% if queue_health.severity == 'critical' %}danger{% elif queue_health.severity == 'warn' %}warn{% else %}ok{% endif %}">{{ issue }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+    <p class="muted small">{{ queue_health.delivery_note }}</p>
+  </section>
+
   <section class="panel no-print">
     <div class="section-head">
       <div>

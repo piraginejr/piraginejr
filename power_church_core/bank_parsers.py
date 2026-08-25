@@ -846,6 +846,77 @@ def sicoob_receiving_display_label(history: str, source_name: str, detail_text: 
     return normalize_query(history) or "Credito Sicoob"
 
 
+def _sicoob_current_account_pages_from_positioned_lines(pdf_path: Path) -> list[str]:
+    positioned_pages = extract_pdf_line_selections(pdf_path)
+    date_re = re.compile(r"^\d{2}/\d{2}$")
+    money_re = re.compile(r"^R\s*\$", flags=re.IGNORECASE)
+    header_values = {"Data", "Documento", "Histórico", "Historico", "Valor", "Sicoob | Internet Banking"}
+
+    def text_of(row: Mapping[str, object]) -> str:
+        return normalize_query(row.get("text"))
+
+    def x_of(row: Mapping[str, object]) -> float:
+        return float(row.get("x") or 0.0)
+
+    def y_of(row: Mapping[str, object]) -> float:
+        return float(row.get("y") or 0.0)
+
+    def is_noise(text: str) -> bool:
+        if not text or text in header_values:
+            return True
+        if text.startswith("https://"):
+            return True
+        if re.match(r"^\d{2}/\d{2}/\d{4},\s+\d{2}:\d{2}$", text):
+            return True
+        return False
+
+    pages: list[str] = []
+    for rows in positioned_pages:
+        page_rows = [row for row in rows if not is_noise(text_of(row))]
+        date_rows = [row for row in page_rows if date_re.match(text_of(row)) and x_of(row) < 60.0]
+        date_rows.sort(key=y_of, reverse=True)
+        if not date_rows:
+            lines = [text_of(row) for row in sorted(page_rows, key=lambda row: (-y_of(row), x_of(row)))]
+            pages.append("\n".join(line for line in lines if line))
+            continue
+
+        page_lines: list[str] = []
+        for index, date_row in enumerate(date_rows):
+            date_y = y_of(date_row)
+            upper_y = date_y + 3.0
+            lower_y = y_of(date_rows[index + 1]) if index + 1 < len(date_rows) else 0.0
+            band = [
+                row
+                for row in page_rows
+                if lower_y < y_of(row) < upper_y and row is not date_row and not is_noise(text_of(row))
+            ]
+            same_baseline = [row for row in band if abs(y_of(row) - date_y) <= 2.5]
+            document_parts = [text_of(row) for row in sorted(same_baseline, key=x_of) if 55.0 <= x_of(row) < 125.0]
+            history_parts = [text_of(row) for row in sorted(same_baseline, key=x_of) if 125.0 <= x_of(row) < 475.0]
+            value_candidates = [row for row in band if money_re.match(text_of(row)) and x_of(row) >= 450.0]
+            value_text = ""
+            if value_candidates:
+                value_text = text_of(sorted(value_candidates, key=lambda row: abs(y_of(row) - date_y))[0])
+            detail_rows = [
+                row
+                for row in band
+                if x_of(row) >= 95.0
+                and row not in same_baseline
+                and row not in value_candidates
+                and not money_re.match(text_of(row))
+            ]
+            history_text = normalize_query(" ".join(part for part in history_parts if part))
+            document_text = normalize_query(" ".join(part for part in document_parts if part))
+            if history_text or value_text:
+                page_lines.append(normalize_query(" ".join([text_of(date_row), document_text, history_text, value_text])))
+            for detail_row in sorted(detail_rows, key=y_of, reverse=True):
+                detail_text = text_of(detail_row)
+                if detail_text:
+                    page_lines.append(detail_text)
+        pages.append("\n".join(line for line in page_lines if line))
+    return pages
+
+
 def statement_display_label(layout_code: object, prefix: str, source_name: str, detail_text: str) -> str:
     normalized_layout = normalize_query(layout_code).upper()
     if normalized_layout in {"SICOOB_RECEBIMENTOS", "SICOOB_CONTA_CORRENTE"}:
@@ -873,6 +944,8 @@ def parse_sicoob_receipts_pdf(
     range_match = re.search(r"PER[ÍI]ODO:\s*(\d{2}/\d{2}/\d{4})\s*-\s*(\d{2}/\d{2}/\d{4})", full_text, flags=re.IGNORECASE)
     if not range_match:
         raise ValueError("Nao foi possivel identificar o periodo do extrato Sicoob.")
+    if include_current_account_lines:
+        pages = _sicoob_current_account_pages_from_positioned_lines(pdf_path)
     period_start_br, period_end_br = range_match.groups()
     period_start = br_to_iso(period_start_br)
     period_end = br_to_iso(period_end_br)

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 
+from power_church_core.bank_parsers import parse_statement_pdf_by_layout
 from power_church_core.normalization import normalize_match_name
 from power_church_django.apps.contributions.models import (
     ContributionTypeSnapshot,
@@ -245,6 +248,44 @@ class NativeStatementImportWorkflowTests(TestCase):
         dispatch = ReceiptDispatch.objects.get(legacy_receipt_id=receipt.legacy_id)
         self.assertEqual(dispatch.status, ReceiptDispatch.Status.PENDING)
         self.assertEqual(dispatch.trigger, ReceiptDispatch.Trigger.AUTOMATIC)
+
+    def test_sicoob_current_account_parser_keeps_value_with_visual_detail_line(self) -> None:
+        page_rows = [
+            {"text": "Data", "x": 37.5, "y": 800.3},
+            {"text": "Documento", "x": 69.1, "y": 800.3},
+            {"text": "Histórico", "x": 132.4, "y": 800.3},
+            {"text": "Valor", "x": 536.7, "y": 800.3},
+            {"text": "11/06", "x": 37.5, "y": 690.0},
+            {"text": "Pix", "x": 69.1, "y": 690.0},
+            {"text": "PIX RECEBIDO - OUTRA IF", "x": 145.9, "y": 690.0},
+            {"text": "Recebimento Pix Patricia Gomes de Andrade Brandao ***.574.697-** dizimo restante", "x": 132.4, "y": 681.3},
+            {"text": "R$ 60,00C", "x": 508.5, "y": 688.2},
+            {"text": "11/06", "x": 37.5, "y": 665.3},
+            {"text": "Pix", "x": 69.1, "y": 665.3},
+            {"text": "PIX RECEBIDO - OUTRA IF", "x": 145.9, "y": 665.3},
+            {"text": "Recebimento Pix ODILON GUIMARAES JUNIOR ***.481.357-**", "x": 132.4, "y": 656.6},
+            {"text": "R$ 1.020,00C", "x": 493.9, "y": 663.4},
+            {"text": "11/06", "x": 37.5, "y": 640.5},
+            {"text": "Pix", "x": 69.1, "y": 640.5},
+            {"text": "PIX RECEBIDO - OUTRA IF", "x": 145.9, "y": 640.5},
+            {"text": "Recebimento Pix MARIA JOSE DE SOUZA PONCE RIBEIRO ***.969.047-**", "x": 132.4, "y": 631.8},
+            {"text": "R$ 200,00C", "x": 502.7, "y": 638.7},
+        ]
+
+        with NamedTemporaryFile(suffix=".pdf") as tmp:
+            tmp.write(b"fake-sicoob-pdf")
+            tmp.flush()
+            with patch(
+                "power_church_core.bank_parsers.extract_pdf_pages",
+                return_value=["PERÍODO: 01/06/2026 - 30/06/2026"],
+            ):
+                with patch("power_church_core.bank_parsers.extract_pdf_line_selections", return_value=[page_rows]):
+                    parsed = parse_statement_pdf_by_layout("SICOOB_CONTA_CORRENTE", Path(tmp.name))
+
+        by_name = {entry["source_name"]: entry for entry in parsed["entries"]}
+        self.assertEqual(by_name["Patricia Gomes de Andrade Brandao"]["amount"], 60.0)
+        self.assertEqual(by_name["ODILON GUIMARAES JUNIOR"]["amount"], 1020.0)
+        self.assertEqual(by_name["MARIA JOSE DE SOUZA PONCE RIBEIRO"]["amount"], 200.0)
 
     def test_backfill_native_event_receipts_requeues_existing_statement_receipt_without_dispatch(self) -> None:
         self._type()

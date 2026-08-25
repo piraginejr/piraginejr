@@ -11,6 +11,7 @@ from power_church_django.services.statement_lot_saneamento import (
     DEFAULT_CORRECTION_SUBJECT,
     analyze_statement_lot_against_pdf,
     apply_statement_lot_saneamento,
+    rebuild_missing_statement_lot_from_native_contributions,
     write_statement_saneamento_report,
 )
 
@@ -28,6 +29,11 @@ class Command(BaseCommand):
         parser.add_argument("--confirm", default="", help="Para aplicar, informe exatamente APPLICAR_SANEAMENTO.")
         parser.add_argument("--subject", default=DEFAULT_CORRECTION_SUBJECT, help="Assunto do e-mail de correção.")
         parser.add_argument("--body", default=DEFAULT_CORRECTION_BODY, help="Corpo do e-mail de correção.")
+        parser.add_argument(
+            "--rebuild-missing-from-notes",
+            action="store_true",
+            help="Se o lote sumiu da tabela de lotes, reconstrói movimentos a partir das contribuições nativas com a nota do lote.",
+        )
         parser.add_argument("--json", action="store_true", help="Mostra resumo em JSON.")
 
     def handle(self, *args, **options):
@@ -41,6 +47,13 @@ class Command(BaseCommand):
             raise CommandError("Para aplicar, rode tambem: --confirm APLICAR_SANEAMENTO")
         if bool(options["send_now"]) and not apply:
             raise CommandError("--send-now so pode ser usado junto com --apply.")
+        if bool(options["rebuild_missing_from_notes"]):
+            rebuild_missing_statement_lot_from_native_contributions(
+                lot_id=lot_id,
+                pdf_path=pdf_path,
+                layout_code=str(options.get("layout") or ""),
+                pdf_provider=str(options.get("pdf_provider") or "pymupdf"),
+            )
 
         if apply:
             result = apply_statement_lot_saneamento(

@@ -1928,21 +1928,28 @@ def backfill_native_event_receipts(*, actor: str = "") -> dict[str, int]:
         for movement_id, lot_id in StatementImportPilotMovement.objects.values_list("id", "lot_id")
     }
     statement_groups: dict[int, list[int]] = {}
+    statement_pending_groups: dict[int, list[int]] = {}
     for contribution in NativeContribution.objects.filter(
         is_active=True,
         statement_movement_legacy_id__isnull=False,
     ).exclude(person_legacy_id__isnull=True).exclude(person_legacy_id=0).order_by("statement_movement_legacy_id", "legacy_id"):
         contribution_id = int(contribution.legacy_id or 0)
-        if not contribution_id or contribution_id in covered_contribution_ids:
+        if not contribution_id:
             continue
         lot_id = int(movement_lot_map.get(int(contribution.statement_movement_legacy_id or 0)) or 0)
         if not lot_id:
             continue
         statement_groups.setdefault(lot_id, []).append(contribution_id)
+        if contribution_id not in covered_contribution_ids:
+            statement_pending_groups.setdefault(lot_id, []).append(contribution_id)
 
     for lot_id in sorted(statement_groups):
         statement_groups_scanned += 1
-        pending_ids = [int(value or 0) for value in statement_groups.get(lot_id, []) if int(value or 0) and int(value or 0) not in covered_contribution_ids]
+        pending_ids = [
+            int(value or 0)
+            for value in statement_pending_groups.get(lot_id, [])
+            if int(value or 0) and int(value or 0) not in covered_contribution_ids
+        ]
         if pending_ids:
             outcomes = schedule_automatic_receipts_for_events(
                 pending_ids,

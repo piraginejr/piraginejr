@@ -34,6 +34,7 @@ from power_church_django.services.receipt_delivery import (
     issue_receipts_for_event_contributions,
     queue_receipt_dispatches,
 )
+from power_church_django.services.contributions_native import _sync_person_contribution_snapshot
 
 
 DEFAULT_CORRECTION_SUBJECT = "Correção de recibo de contribuição - {receipt_number}"
@@ -264,12 +265,18 @@ def apply_statement_lot_saneamento(
             expected = expected_by_order.get(int(movement.order_in_lot or 0))
             if expected is None:
                 continue
+            target_contribution_id = _saneamento_target_contribution_id(
+                movement,
+                fallback=diff.imported_contribution_id,
+            )
             _apply_expected_entry_to_movement(movement, expected, actor=actor)
             _apply_native_statement_resolution(
                 movement,
                 preserve_manual_selection=False,
                 matching_cache=matching_cache,
             )
+            if target_contribution_id:
+                movement.imported_contribution_legacy_id = target_contribution_id
             movement.save()
             contribution_id = _statement_sync_native_contribution_for_movement(movement, actor=actor)
             if contribution_id:
@@ -325,6 +332,120 @@ def apply_statement_lot_saneamento(
     }
 
 
+def recover_partial_statement_lot_saneamento(
+    *,
+    lot_id: int,
+    actor: str = "saneamento_extrato",
+    send_now: bool = False,
+    subject: str = DEFAULT_CORRECTION_SUBJECT,
+    body: str = DEFAULT_CORRECTION_BODY,
+) -> dict[str, Any]:
+    lot = StatementImportPilotLot.objects.get(id=int(lot_id or 0))
+    movements = list(lot.movements.order_by("order_in_lot", "id"))
+    pairs: list[tuple[StatementImportPilotMovement, int, int]] = []
+    for movement in movements:
+        target_id = _saneamento_target_contribution_id(movement)
+        current_id = int(movement.imported_contribution_legacy_id or 0)
+        if target_id and current_id and current_id != target_id:
+            pairs.append((movement, current_id, target_id))
+    duplicate_ids = sorted({current_id for _, current_id, _ in pairs})
+    target_ids = sorted({target_id for _, _, target_id in pairs})
+    reason = (
+        "Recibo/contribuicao cancelado por recuperacao de rodada parcial de saneamento. "
+        f"Lote de extrato #{lot.id} sera reemitido com as contribuicoes originais corrigidas."
+    )
+    impacted_old_receipt_pks = list(
+        ReceiptItemSnapshot.objects.filter(
+            contribution_legacy_id__in=target_ids,
+            receipt__is_cancelled=True,
+            receipt__notes__icontains="saneamento de parser bancario",
+        )
+        .values_list("receipt_id", flat=True)
+        .distinct()
+    )
+    reissue_ids = sorted(
+        {
+            int(value or 0)
+            for value in ReceiptItemSnapshot.objects.filter(receipt_id__in=impacted_old_receipt_pks)
+            .exclude(contribution_legacy_id__isnull=True)
+            .values_list("contribution_legacy_id", flat=True)
+            if int(value or 0)
+        }
+        | set(target_ids)
+    )
+    with transaction.atomic():
+        partial_receipt_ids = cancel_receipts_for_contribution_ids(
+            duplicate_ids,
+            actor=actor,
+            reason=reason,
+        )
+        for duplicate in NativeContribution.objects.filter(legacy_id__in=duplicate_ids, is_active=True):
+            duplicate.is_active = False
+            duplicate.operational_status = "ignorado"
+            duplicate.notes = _append_note(duplicate.notes, reason)
+            duplicate.updated_by = actor or "django"
+            duplicate.save(update_fields=["is_active", "operational_status", "notes", "updated_by", "updated_at"])
+            _sync_person_contribution_snapshot(duplicate)
+        updated_ids: list[int] = []
+        for movement, _, target_id in pairs:
+            movement.imported_contribution_legacy_id = int(target_id or 0)
+            movement.save(update_fields=["imported_contribution_legacy_id", "updated_at"])
+            contribution_id = _statement_sync_native_contribution_for_movement(movement, actor=actor)
+            if contribution_id:
+                updated_ids.append(int(contribution_id))
+        _refresh_native_statement_lot_metadata(lot)
+    eligible_ids = _statement_receipt_eligible_native_contribution_ids(
+        contribution_ids=sorted(set(reissue_ids + updated_ids))
+    )
+    new_receipt_ids = issue_receipts_for_event_contributions(
+        eligible_ids,
+        emission_date=date.today().isoformat(),
+        notes="Recibo corrigido por saneamento de importacao de extrato bancario.",
+        actor=actor,
+        replace_existing=True,
+    )
+    queued_dispatch_ids: list[int] = []
+    without_email = 0
+    for receipt_id in new_receipt_ids:
+        detail = get_receipt_detail_cached(receipt_id)
+        person_email = normalize_query((detail.get("person") or {}).get("email") if detail else "")
+        if not person_email:
+            without_email += 1
+            continue
+        dispatches = queue_receipt_dispatches(
+            [receipt_id],
+            email_to=person_email,
+            subject=subject,
+            body=body,
+            actor=actor,
+            trigger=ReceiptDispatch.Trigger.RETROACTIVE,
+            auto_created=True,
+            send_now=send_now,
+            metadata_extra={
+                "campaign_key": f"saneamento_extrato:{lot.id}:{timezone.localtime().strftime('%Y%m%d')}:recuperacao",
+                "campaign_mode": "saneamento_parser_bancario",
+                "campaign_recovery": True,
+                "source_lot_id": int(lot.id or 0),
+                "partial_receipt_ids_cancelled": partial_receipt_ids,
+                "duplicate_contribution_ids_deactivated": duplicate_ids,
+                "corrected_contribution_ids": updated_ids,
+                "reissued_contribution_ids": eligible_ids,
+            },
+        )
+        queued_dispatch_ids.extend(int(dispatch.pk or 0) for dispatch in dispatches)
+    return {
+        "lot_id": int(lot.id or 0),
+        "partial_receipt_ids_cancelled": partial_receipt_ids,
+        "duplicate_contribution_ids_deactivated": duplicate_ids,
+        "updated_contribution_ids": sorted(set(updated_ids)),
+        "reissued_contribution_ids": eligible_ids,
+        "new_receipt_ids": new_receipt_ids,
+        "queued_dispatch_ids": queued_dispatch_ids,
+        "sent_now": len(queued_dispatch_ids) if send_now else 0,
+        "without_email": without_email,
+    }
+
+
 def _contribution_ids_to_reissue_after_receipt_cancellation(contribution_ids: list[int]) -> list[int]:
     if not contribution_ids:
         return []
@@ -344,6 +465,19 @@ def _contribution_ids_to_reissue_after_receipt_cancellation(contribution_ids: li
         .values_list("contribution_legacy_id", flat=True)
     )
     return sorted({int(value) for value in [*contribution_ids, *receipt_item_ids] if int(value or 0)})
+
+
+def _saneamento_target_contribution_id(
+    movement: StatementImportPilotMovement,
+    *,
+    fallback: int = 0,
+) -> int:
+    metadata = dict(movement.metadata or {})
+    return int(metadata.get("reconstructed_from_contribution_id") or fallback or 0)
+
+
+def _append_note(current: str, note: str) -> str:
+    return "\n".join(part for part in [normalize_query(current), normalize_query(note)] if part)
 
 
 def statement_saneamento_receipt_impact(analysis: StatementSaneamentoAnalysis) -> dict[str, Any]:

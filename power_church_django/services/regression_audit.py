@@ -46,6 +46,7 @@ from power_church_django.apps.people.models import (
     PersonSnapshot,
 )
 from power_church_django.services.access_control import access_control_snapshot, user_has_module_permission
+from power_church_django.services.bank_parser_regression import run_bank_parser_regression_checks
 from power_church_django.services.mail_dispatch import MailAttachment, graph_config_snapshot, send_email_message
 from power_church_django.services.pdf_reports import contribution_period_pdf, receipt_pdf
 from power_church_django.services.photos import photo_dir
@@ -140,6 +141,7 @@ def run_regression_audit(*, stdout: Any | None = None) -> tuple[Path, list[Audit
             authenticated_client.force_login(user)
 
         _record_runtime_checks(results, samples=samples)
+        _record_bank_parser_regression_checks(results, samples=samples)
         _record_totals_and_consistency_checks(results, samples=samples)
         _record_file_and_attachment_checks(results, samples=samples)
         _record_email_checks(results, samples=samples)
@@ -293,6 +295,31 @@ def _collect_samples() -> EntitySamples:
     if not sample.years:
         sample.years = [""]
     return sample
+
+
+def _record_bank_parser_regression_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:
+    for check in run_bank_parser_regression_checks():
+        if check.ok:
+            result = "OK"
+        elif check.severity == "WARN":
+            result = "WARN"
+        else:
+            result = "FAIL"
+        results.append(
+            AuditResult(
+                item=f"Parser bancario - {check.name}",
+                result=result,
+                probable_area="Imports / parsers bancarios",
+                details=check.detail,
+                probable_postgres=False,
+                probable_encoding=False,
+                probable_missing_attr=False,
+                user_label=samples.user_label,
+                app_name="imports",
+                view_name="bank_parser",
+                target=f"{check.bank} {check.layout}",
+            )
+        )
 
 
 def _record_runtime_checks(results: list[AuditResult], *, samples: EntitySamples) -> None:

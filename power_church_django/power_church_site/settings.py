@@ -142,6 +142,7 @@ POWER_CHURCH_BRAND_LOGO_PATH = os.environ.get(
     "POWER_CHURCH_BRAND_LOGO_PATH",
     str(REPO_ROOT / "data" / "branding" / "power_church_logo.jpg"),
 )
+POWER_CHURCH_BANK_PARSER_AUDIT_SICOOB_JUNE_PDF = os.environ.get("POWER_CHURCH_BANK_PARSER_AUDIT_SICOOB_JUNE_PDF", "")
 
 LANGUAGE_CODE = "pt-br"
 TIME_ZONE = "America/Sao_Paulo"

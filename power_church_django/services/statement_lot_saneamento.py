@@ -39,16 +39,19 @@ from power_church_django.services.receipt_delivery import (
 DEFAULT_CORRECTION_SUBJECT = "Correção de recibo de contribuição - {receipt_number}"
 DEFAULT_CORRECTION_BODY = """Prezado(a) {person_name},
 
-Identificamos uma divergência no processamento automático de um extrato bancário e, por isso, o recibo enviado anteriormente pode ter apresentado valor incorreto.
+Identificamos uma falha no processamento automático de um extrato bancário referente às contribuições de junho/2026. Por esse motivo, o recibo enviado anteriormente pode ter apresentado valor ou composição divergente do lançamento realizado.
 
-Pedimos desculpas pelo transtorno. A contribuição foi conferida novamente no extrato original e segue em anexo o recibo corrigido, referente a {period_label}, no valor total de {total_fmt}.
+Pedimos sinceras desculpas pelo transtorno.
+
+A contribuição foi conferida novamente com base no extrato original, e estamos encaminhando em anexo o recibo corrigido, no valor total de {total_fmt}, referente ao período {period_label}.
 
 Por gentileza, desconsidere o recibo anterior relacionado a esse lançamento. Esta correção não altera a sua contribuição; ela apenas ajusta o registro e o recibo emitido pelo sistema.
 
 Seguimos à disposição para qualquer conferência adicional.
 
 Atenciosamente,
-Tesouraria / Primeira Igreja Batista de Niterói
+Tesouraria
+Primeira Igreja Batista de Niterói
 """
 
 
